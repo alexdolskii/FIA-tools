@@ -2,7 +2,6 @@ import imagej
 import os
 from pathlib import Path
 from scyjava import jimport
-from datetime import datetime
 
 # Initialize ImageJ
 print("Initializing ImageJ...")
