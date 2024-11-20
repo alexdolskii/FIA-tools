@@ -19,8 +19,7 @@ input_txt_path = input("Enter the full path to the .txt file containing a list o
 
 # Check if the file exists
 if not os.path.exists(input_txt_path):
-    print(f"File '{input_txt_path}' does not exist. Please try again.")
-    exit()
+    ValueError(f"File '{input_txt_path}' does not exist. Please try again.")
 
 # Read folder paths from file
 with open(input_txt_path, 'r') as file:
@@ -38,13 +37,12 @@ for folder_path in folder_paths:
         if num_files > 0:
             valid_folders.append(folder_path)
     else:
-        print(f"Folder '{folder_path}' does not exist.")
+        ValueError(f"Folder '{folder_path}' does not exist.")
 
 # Ask user if analysis should start
 start_analysis = input("Start analyzing files in the specified folders? (yes/no): ").strip().lower()
 if start_analysis != 'yes':
-    print("Analysis canceled by user.")
-    exit()
+    ValueError("Analysis canceled by user")
 
 # Request channel numbers from user
 try:
@@ -150,4 +148,4 @@ for input_folder in valid_folders:
         # Close all windows
         IJ.run("Close All")
 
-    print("\nPart 1 successfully completed.")
+        print("\nPart 1 successfully completed.")
