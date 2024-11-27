@@ -36,7 +36,10 @@ def validate_path_files(input_json_path: str) -> list:
             files = [f for f in os.listdir(folder_path) if f.lower().endswith('.nd2')]
             num_files = len(files)
             file_formats = set(os.path.splitext(f)[1] for f in files)
-            print(f"Folder: {folder_path}, Number of files: {num_files}, File formats: {', '.join(file_formats) if file_formats else 'no .nd2 files'}")
+            print(f"Folder: {folder_path}, "
+                  f"Number of files: {num_files}, "
+                  f"File formats: "
+                  f"{', '.join(file_formats) if file_formats else 'no .nd2 files'}")
             if num_files > 0:
                 valid_folders.append(folder_path)
         else:
@@ -81,6 +84,11 @@ def process_image(valid_folders: list) -> None:
     for input_folder in valid_folders:
         # Create a new folder 'foci_assay' for processed images
         processed_folder = os.path.join(input_folder, 'foci_assay')
+        if os.path.exists(processed_folder):
+            response = input(f"The path {input_folder} has already contained results. "
+                             f"Do you want to rewrite them? (yes/no):").strip().lower()
+            if response == 'no':
+                ValueError("Analysis canceled by user")
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
         print(f"\nProcessed images will be saved in a new folder: {processed_folder}")
 
@@ -191,6 +199,7 @@ def main_merge_images(input_json_path: str) -> None:
     # Ask user if analysis should start
     start_analysis = input("Start analyzing files in "
                            "the specified folders? (yes/no): ").strip().lower()
+    print(start_analysis == 'no')
     if start_analysis != 'yes':
         ValueError("Analysis canceled by user")
     process_image(valid_folders)
