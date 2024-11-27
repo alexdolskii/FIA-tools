@@ -21,7 +21,7 @@ def validate_path_files(input_json_path: str) -> list:
     """
     # Check if the file exists
     if not os.path.exists(input_json_path):
-        ValueError(f"File '{input_json_path}' does not exist. Please try again.")
+        raise ValueError(f"File '{input_json_path}' does not exist. Please try again.")
 
     # Read folder paths from file
     with open(input_json_path, 'r') as file:
@@ -43,7 +43,7 @@ def validate_path_files(input_json_path: str) -> list:
             if num_files > 0:
                 valid_folders.append(folder_path)
         else:
-            ValueError(f"Folder '{folder_path}' does not exist.")
+            raise ValueError(f"Folder '{folder_path}' does not exist.")
     return valid_folders
 
 
@@ -77,7 +77,7 @@ def process_image(valid_folders: list) -> None:
                              "foci staining (starting from 1): "))
     if (nuclei_channel not in range(1, 13) or
             foci_channel not in range(1, 13)):
-        ValueError("Invalid channel number input. "
+        raise ValueError("Invalid channel number input. "
                    "Zero channel should be used as first")
 
     # Process images in each folder
@@ -88,7 +88,7 @@ def process_image(valid_folders: list) -> None:
             response = input(f"The path {input_folder} has already contained results. "
                              f"Do you want to rewrite them? (yes/no):").strip().lower()
             if response == 'no':
-                ValueError("Analysis canceled by user")
+                raise ValueError("Analysis canceled by user")
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
         print(f"\nProcessed images will be saved in a new folder: {processed_folder}")
 
@@ -116,7 +116,7 @@ def process_image(valid_folders: list) -> None:
             # Open the image in ImageJ using Bio-Formats
             imp = IJ.openImage(file_path)
             if imp is None:
-                ValueError(f"Failed to open image: {file_path}. "
+                raise ValueError(f"Failed to open image: {file_path}. "
                            f"Check Bio-Formats plugin")
 
             # Get image dimensions
@@ -199,9 +199,8 @@ def main_merge_images(input_json_path: str) -> None:
     # Ask user if analysis should start
     start_analysis = input("Start analyzing files in "
                            "the specified folders? (yes/no): ").strip().lower()
-    print(start_analysis == 'no')
-    if start_analysis != 'yes':
-        ValueError("Analysis canceled by user")
+    if start_analysis == 'no':
+        raise ValueError("Analysis canceled by user")
     process_image(valid_folders)
     print("\nPart 1 successfully completed.")
 
