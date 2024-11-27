@@ -1,6 +1,9 @@
+#!/usr/bin/env python3
+
 import imagej
 import os
 import json
+import argparse
 
 from pathlib import Path
 from scyjava import jimport
@@ -204,3 +207,14 @@ def main_merge_images(input_json_path: str) -> None:
         ValueError("Analysis canceled by user")
     process_image(valid_folders)
     print("\nPart 1 successfully completed.")
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-i',
+                        '--input',
+                        type=str,
+                        help="JSON file with all paths of directories",
+                        required=True)
+    args = parser.parse_args()
+    main_merge_images(args.input)
