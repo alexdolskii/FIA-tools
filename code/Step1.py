@@ -19,10 +19,6 @@ def validate_path_files(input_json_path: str) -> list:
     Returns:
         Collection with validated files
     """
-
-    # Step 1: Request file with folder paths
-    # input_txt_path = input("Enter the full path to the .txt file containing a list of folder paths: ")
-
     # Check if the file exists
     if not os.path.exists(input_json_path):
         ValueError(f"File '{input_json_path}' does not exist. Please try again.")
@@ -109,19 +105,11 @@ def process_image(valid_folders: list) -> None:
             # Close all windows before starting processing
             IJ.run("Close All")
 
-            # Attempt to open the image in ImageJ using Bio-Formats
-            try:
-                # Use Bio-Formats to open .nd2 files
-                options = {"open": "Composite"}
-                imp = IJ.openImage(file_path)
-                if imp is None:
-                    print(f"Failed to open image: {file_path}")
-                    continue
-                else:
-                    print(f"Image '{filename}' successfully opened.")
-            except Exception as e:
-                print(f"Error opening image '{filename}': {e}")
-                continue
+            # Open the image in ImageJ using Bio-Formats
+            imp = IJ.openImage(file_path)
+            if imp is None:
+                ValueError(f"Failed to open image: {file_path}. "
+                           f"Check Bio-Formats plugin")
 
             # Get image dimensions
             width, height, channels, slices, frames = imp.getDimensions()
