@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 
-import imagej
-import os
-import json
 import argparse
-
+import json
+import os
 from pathlib import Path
+
+import imagej
 from scyjava import jimport
 
 
@@ -21,7 +21,8 @@ def validate_path_files(input_json_path: str) -> list:
     """
     # Check if the file exists
     if not os.path.exists(input_json_path):
-        raise ValueError(f"File '{input_json_path}' does not exist. Please try again.")
+        raise ValueError(f"File '{input_json_path}' does not exist. "
+                         f"Please try again.")
 
     # Read folder paths from file
     with open(input_json_path, 'r') as file:
@@ -33,13 +34,17 @@ def validate_path_files(input_json_path: str) -> list:
     valid_folders = []
     for folder_path in folder_paths:
         if os.path.exists(folder_path):
-            files = [f for f in os.listdir(folder_path) if f.lower().endswith('.nd2')]
+            files = [f for f in os.listdir(folder_path)
+                     if f.lower().endswith('.nd2')]
             num_files = len(files)
             file_formats = set(os.path.splitext(f)[1] for f in files)
+            message = (', '.join(file_formats)
+                       if file_formats
+                       else 'no .nd2 files')
             print(f"Folder: {folder_path}, "
                   f"Number of files: {num_files}, "
                   f"File formats: "
-                  f"{', '.join(file_formats) if file_formats else 'no .nd2 files'}")
+                  f"{message}")
             if num_files > 0:
                 valid_folders.append(folder_path)
         else:
@@ -78,19 +83,22 @@ def process_image(valid_folders: list) -> None:
     if (nuclei_channel not in range(1, 13) or
             foci_channel not in range(1, 13)):
         raise ValueError("Invalid channel number input. "
-                   "Zero channel should be used as first")
+                         "Zero channel should be used as first")
 
     # Process images in each folder
     for input_folder in valid_folders:
         # Create a new folder 'foci_assay' for processed images
         processed_folder = os.path.join(input_folder, 'foci_assay')
         if os.path.exists(processed_folder):
-            response = input(f"The path {input_folder} has already contained results. "
-                             f"Do you want to rewrite them? (yes/no):").strip().lower()
+            response = input(f"The path {input_folder} has "
+                             f"already contained results. "
+                             f"Do you want to rewrite them? "
+                             f"(yes/no):").strip().lower()
             if response == 'no':
                 raise ValueError("Analysis canceled by user")
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
-        print(f"\nProcessed images will be saved in a new folder: {processed_folder}")
+        print(f"\nProcessed images "
+              f"will be saved in a new folder: {processed_folder}")
 
         # Create output folders for images
         nuclei_folder = os.path.join(processed_folder, "Nuclei")
@@ -104,7 +112,8 @@ def process_image(valid_folders: list) -> None:
 
         for filename in os.listdir(input_folder):
             if not filename.lower().endswith('.nd2'):
-                print(f"Skipping file '{filename}', as it is not an .nd2 file.")
+                print(f"Skipping file '{filename}',"
+                      f" as it is not an .nd2 file.")
                 continue
 
             file_path = os.path.join(input_folder, filename)
@@ -117,7 +126,7 @@ def process_image(valid_folders: list) -> None:
             imp = IJ.openImage(file_path)
             if imp is None:
                 raise ValueError(f"Failed to open image: {file_path}. "
-                           f"Check Bio-Formats plugin")
+                                 f"Check Bio-Formats plugin")
 
             # Get image dimensions
             width, height, channels, slices, frames = imp.getDimensions()
@@ -133,7 +142,8 @@ def process_image(valid_folders: list) -> None:
                 continue
 
             # Process nuclei channel
-            print(f"Processing nuclei channel ({nuclei_channel}) in '{filename}'.")
+            print(f"Processing nuclei "
+                  f"channel ({nuclei_channel}) in '{filename}'.")
             imp.setC(nuclei_channel)
             IJ.run(imp, "Duplicate...",
                    f"title=imp_nuclei duplicate channels={nuclei_channel}")
@@ -146,8 +156,9 @@ def process_image(valid_folders: list) -> None:
             nuclei_proj = zp_nuclei.getProjection()
             nuclei_proj = nuclei_proj.resize(1024, 1024, 1, "bilinear")
             IJ.run(nuclei_proj, "8-bit", "")  # Convert to grayscale
+            message_fn = os.path.splitext(filename)[0]
             nuclei_output_path = os.path.join(nuclei_folder,
-                                              f"{os.path.splitext(filename)[0]}"
+                                              f"{message_fn}"
                                               f"_nuclei_projection.tif")
             IJ.saveAs(nuclei_proj, "Tiff", nuclei_output_path)
             print(f"Nuclei projection saved to '{nuclei_output_path}'.")
