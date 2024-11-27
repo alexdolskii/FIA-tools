@@ -5,7 +5,7 @@ from scyjava import jimport
 
 # Initialize ImageJ
 print("Initializing ImageJ...")
-ij = imagej.init()
+ij = imagej.init('sc.fiji:fiji', mode='headless')
 print("ImageJ initialization completed.")
 
 # Import Java classes
