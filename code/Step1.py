@@ -194,9 +194,10 @@ def process_image(valid_folders: list) -> None:
             IJ.run("Close All")
 
 
-def main_merge_images(input_json_path: str) -> None:
+def select_channel_name(input_json_path: str) -> None:
     """
-    Main function that check all provided paths to files and
+    Main function that check all pro
+    vided paths to files and
     merge the collection of images in a single one.
     Args:
         input_json_path: json file with all paths to directories
@@ -224,4 +225,4 @@ if __name__ == '__main__':
                         help="JSON file with all paths of directories",
                         required=True)
     args = parser.parse_args()
-    main_merge_images(args.input)
+    select_channel_name(args.input)
