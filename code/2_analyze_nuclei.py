@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+
+import argparse
+
 import os
 
 from pathlib import Path
@@ -124,3 +128,14 @@ def main_analyze_nuclei(input_json_path: str) -> None:
         raise ValueError("Analysis canceled by user.")
     find_nuclei(nuclei_folders)
     print("Analysis of all Nuclei folders completed.")
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-i',
+                        '--input',
+                        type=str,
+                        help="JSON file with all paths of directories",
+                        required=True)
+    args = parser.parse_args()
+    main_analyze_nuclei(args.input)
