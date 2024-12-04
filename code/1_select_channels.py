@@ -1,55 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
-import json
 import os
 from pathlib import Path
 
 import imagej
 from scyjava import jimport
 
-
-def validate_path_files(input_json_path: str) -> list:
-    """
-    Function validate_path_files read json file with the path
-    to files and check if they all exist
-    Args:
-        input_json_path: json with paths to directories with files
-
-    Returns:
-        Collection with validated files
-    """
-    # Check if the file exists
-    if not os.path.exists(input_json_path):
-        raise ValueError(f"File '{input_json_path}' does not exist. "
-                         f"Please try again.")
-
-    # Read folder paths from file
-    with open(input_json_path, 'r') as file:
-        paths_dict = json.load(file)
-        folder_paths = paths_dict["paths_to_files"]
-
-    # Check existence of folders and count the number of files in each
-    print(f"Found {len(folder_paths)} folders for verification.")
-    valid_folders = []
-    for folder_path in folder_paths:
-        if os.path.exists(folder_path):
-            files = [f for f in os.listdir(folder_path)
-                     if f.lower().endswith('.nd2')]
-            num_files = len(files)
-            file_formats = set(os.path.splitext(f)[1] for f in files)
-            message = (', '.join(file_formats)
-                       if file_formats
-                       else 'no .nd2 files')
-            print(f"Folder: {folder_path}, "
-                  f"Number of files: {num_files}, "
-                  f"File formats: "
-                  f"{message}")
-            if num_files > 0:
-                valid_folders.append(folder_path)
-        else:
-            raise ValueError(f"Folder '{folder_path}' does not exist.")
-    return valid_folders
+from validate_folders import validate_path_files
 
 
 def process_image(valid_folders: list) -> None:
@@ -196,8 +154,7 @@ def process_image(valid_folders: list) -> None:
 
 def select_channel_name(input_json_path: str) -> None:
     """
-    Main function that check all pro
-    vided paths to files and
+    Main function that check all provided paths to files and
     merge the collection of images in a single one.
     Args:
         input_json_path: json file with all paths to directories
@@ -206,7 +163,7 @@ def select_channel_name(input_json_path: str) -> None:
         Processed in new directory "foci_assay" that is created
         in each provided path
     """
-    valid_folders = validate_path_files(input_json_path)
+    valid_folders = validate_path_files(input_json_path, 1)
 
     # Ask user if analysis should start
     start_analysis = input("Start analyzing files in "
