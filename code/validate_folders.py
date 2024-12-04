@@ -52,8 +52,6 @@ def validate_path_files(input_json_path: str, step: int) -> list:
     if step == 1:
         result = valid_folders
     elif step == 2:
-        print(f"Found {len(valid_folders)} folders for verification.")
-
         # Search for Nuclei folder in each folder and determine file types
         nuclei_folders = []
         for folder in valid_folders:
