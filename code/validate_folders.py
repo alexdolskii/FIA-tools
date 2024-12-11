@@ -1,5 +1,6 @@
 import json
 import os
+from datetime import datetime
 
 def validate_path_files(input_json_path: str, step: int) -> list:
     """
@@ -25,6 +26,9 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             folder_paths = [path.strip().replace('C:\\', '/mnt/c/')
                             .replace('\\', '/') for path in folder_paths]
 
+    if not folder_paths:
+        ValueError("The file does not contain folder paths. Please check the file content.")
+
 
     # Check existence of folders and count the number of files in each
     print(f"Found {len(folder_paths)} folders for verification.")
@@ -45,7 +49,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                       f"{message}")
                 if num_files > 0:
                     valid_folders.append(folder_path)
-            elif step == 2:
+            elif step == 2 or step == 3:
                 valid_folders.append(folder_path)
         else:
             raise ValueError(f"Folder '{folder_path}' does not exist.")
@@ -64,4 +68,74 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             else:
                 raise ValueError(f"Nuclei folder not found in '{folder}/foci_assay'.")
         result = nuclei_folders
+    elif step == 3:
+        result = {}
+        for folder in valid_folders:
+            result[folder] = {}
+            foci_assay_folder = os.path.join(folder, 'foci_assay')
+            if not os.path.exists(foci_assay_folder):
+                ValueError(f"Subfolder 'foci_assay' not found "
+                           f"in folder '{folder}'. Skipping this folder.")
+            else:
+                result[folder]["foci_assay_folder"] = foci_assay_folder
+
+            # Check for 'Foci' subfolder inside 'foci_assay'
+            foci_folder = os.path.join(foci_assay_folder, 'Foci')
+            if not os.path.exists(foci_folder):
+                ValueError(f"Subfolder 'Foci' not found "
+                           f"in folder '{foci_assay_folder}'. "
+                           f"Skipping this folder.")
+            else:
+                result[folder]["foci_folder"] = foci_folder
+
+            # Find the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>' inside 'foci_assay'
+            processed_folders = []
+            for name in os.listdir(foci_assay_folder):
+                if name.startswith('Nuclei_StarDist_mask_processed_'):
+                    timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
+                    timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
+                    processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
+                else:
+                    ValueError(f"Invalid folder name format: {name}. Skipping this folder.")
+
+            if not processed_folders:
+                ValueError(f"No folders found starting with "
+                           f"'Nuclei_StarDist_mask_processed_' "
+                           f"in '{foci_assay_folder}'. Skipping this folder.")
+
+            # Select the latest folder
+            # ES Что тут происходит?
+            latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
+            print(f"Found latest folder "
+                  f"'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
+            result[folder]["nuclei_folder"] = latest_processed_folder
+
+            # Check for files in 'Foci'
+            foci_files = [f for f in os.listdir(foci_folder)
+                          if f.lower().endswith('.tif')]
+            if not foci_files:
+                ValueError(f"No files with '.tif' "
+                           f"extension found in folder 'Foci'. Skipping this folder.")
+            else:
+                result[folder]["foci_files"] = foci_files
+
+            # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
+            nuclei_files = [f for f in os.listdir(latest_processed_folder)
+                            if f.lower().endswith('.tif')]
+            if not nuclei_files:
+                ValueError(f"No files with '.tif' extension "
+                           f"found in folder '{latest_processed_folder}'. "
+                           f"Skipping this folder.")
+            else:
+                result[folder]["nuclei_files"] = nuclei_files
+
+            # Information about found files
+            print(f"\n--- File information in folder '{foci_assay_folder}' ---")
+            print(
+                f"Number of files found in 'Foci': {len(foci_files)}. "
+                f"Data types: {set(os.path.splitext(f)[-1] for f in foci_files)}")
+            print(
+                f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. "
+                f"Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
+
     return result
