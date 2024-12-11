@@ -10,16 +10,12 @@ print("Initializing ImageJ...")
 ij = imagej.init(r"C:\Users\dolsk\Desktop\Orientation_assay_script\Fiji.app", mode='interactive')
 print("ImageJ successfully initialized.")
 
-
 # Import Java classes
-try:
-    IJ = jimport('ij.IJ')
-    Prefs = jimport('ij.Prefs')
-    WindowManager = jimport('ij.WindowManager')
-    print("Java classes successfully imported.")
-except Exception as e:
-    print(f"Error importing Java classes: {e}")
-    exit(1)
+IJ = jimport('ij.IJ')
+Prefs = jimport('ij.Prefs')
+WindowManager = jimport('ij.WindowManager')
+print("Java classes successfully imported.")
+
 
 # Main process
 def process_folders():
