@@ -1,25 +1,16 @@
+#!/usr/bin/env python3
 import imagej
 import os
 from pathlib import Path
 from scyjava import jimport
 from datetime import datetime
 
+
+import argparse
+
 from validate_folders import validate_path_files
 
-# Initialize ImageJ
-print("Initializing ImageJ...")
 
-ij = imagej.init('sc.fiji:fiji', mode='headless')
-print("ImageJ successfully initialized.")
-
-# Import Java classes
-IJ = jimport('ij.IJ')
-Prefs = jimport('ij.Prefs')
-WindowManager = jimport('ij.WindowManager')
-print("Java classes successfully imported.")
-
-
-# Main process
 def process_folders():
     print("\n--- Start of folder processing ---")
 
@@ -136,14 +127,13 @@ def process_folders():
     print("\n--- All processing tasks completed ---")
 
 
-def process_images(folder):
+def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
     # Removed 'global ij' declaration as 'ij' is not modified within the function
     foci_folder = folder['foci_folder']
     nuclei_folder = folder['nuclei_folder']
     foci_files = folder['foci_files']
     nuclei_files = folder['nuclei_files']
-    particle_size = folder['particle_size']
-    foci_threshold = folder['foci_threshold']
+
 
     # Create folders for saving results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -263,6 +253,18 @@ def main_filter_imgs(input_json_path: str):
 
     folders = validate_path_files(input_json_path, step=3)
 
+    # Initialize ImageJ
+    print("Initializing ImageJ...")
+
+    ij = imagej.init('sc.fiji:fiji', mode='headless')
+    print("ImageJ successfully initialized.")
+
+    # Import Java classes
+    IJ = jimport('ij.IJ')
+    Prefs = jimport('ij.Prefs')
+    WindowManager = jimport('ij.WindowManager')
+    print("Java classes successfully imported.")
+
     # Request particle size for nuclear analysis
     particle_size_input = input("Enter particle size for 'Analyze Particles...' for nuclear images (default is 2500): ").strip()
     if particle_size_input == '':
@@ -293,16 +295,15 @@ def main_filter_imgs(input_json_path: str):
 
     # Process files in valid folders
     for folder in folders:
-        process_images(folder)
+        filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager)
 
 
-
-# -------------------- Run the main function --------------------
-
-if __name__ == "__main__":
-    try:
-        process_folders()
-    except Exception as e:
-        print(f"Error during program execution: {e}")
-
-    print("\n--- All processing tasks completed ---")
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-i',
+                        '--input',
+                        type=str,
+                        help="JSON file with all paths of directories",
+                        required=True)
+    args = parser.parse_args()
+    main_filter_imgs(args.input)
