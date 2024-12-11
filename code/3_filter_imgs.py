@@ -4,6 +4,8 @@ from pathlib import Path
 from scyjava import jimport
 from datetime import datetime
 
+from validate_folders import validate_path_files
+
 # Initialize ImageJ
 print("Initializing ImageJ...")
 
@@ -22,161 +24,131 @@ def process_folders():
     print("\n--- Start of folder processing ---")
 
     # Step 1: Request path to .txt file containing folder paths
-    txt_file_path = input("Enter the full path to the .txt file containing the list of folder paths for processing: ").strip()
+    # txt_file_path = input("Enter the full path to the .txt file containing the list of folder paths for processing: ").strip()
 
     # Check if the file exists
-    if not os.path.isfile(txt_file_path):
-        print(f"File '{txt_file_path}' does not exist. Please try again.")
-        return
+    # if not os.path.isfile(txt_file_path):
+    #     print(f"File '{txt_file_path}' does not exist. Please try again.")
+    #     return
 
-    print(f"File found: {txt_file_path}")
+    # print(f"File found: {txt_file_path}")
 
     # Read folder paths from file
-    try:
-        with open(txt_file_path, 'r', encoding='utf-8') as f:
-            folder_paths = [line.strip() for line in f if line.strip()]
-        print(f"Number of folder paths read: {folder_paths}")
-    except Exception as e:
-        print(f"Error reading file: {e}")
-        return
+    # try:
+    #     with open(txt_file_path, 'r', encoding='utf-8') as f:
+    #         folder_paths = [line.strip() for line in f if line.strip()]
+    #     print(f"Number of folder paths read: {folder_paths}")
+    # except Exception as e:
+    #     print(f"Error reading file: {e}")
+    #     return
 
     # Check if paths are present
-    if not folder_paths:
-        print("The file does not contain folder paths. Please check the file content.")
-        return
+    # if not folder_paths:
+    #     print("The file does not contain folder paths. Please check the file content.")
+    #     return
 
-    print(f"\nFound {len(folder_paths)} paths in the file.")
+    # print(f"\nFound {len(folder_paths)} paths in the file.")
 
-    # Request particle size for nuclear analysis
-    particle_size_input = input("Enter particle size for 'Analyze Particles...' for nuclear images (default is 2500): ").strip()
-    if particle_size_input == '':
-        particle_size = 2500
-    else:
-        try:
-            particle_size = float(particle_size_input)
-        except ValueError:
-            print("Invalid input. Using default particle size of 2500.")
-            particle_size = 2500
 
-    # Request threshold value for foci analysis
-    foci_threshold_input = input("Enter threshold value for 'Foci' images (default is 150): ").strip()
-    if foci_threshold_input == '':
-        foci_threshold = 150
-    else:
-        try:
-            foci_threshold = float(foci_threshold_input)
-        except ValueError:
-            print("Invalid input. Using default threshold value of 150.")
-            foci_threshold = 150
 
-    # Check folders and prepare information
-    print("\nChecking folders and files...")
+    # # Check folders and prepare information
+    # print("\nChecking folders and files...")
 
-    valid_folders = []
+    # valid_folders = []
 
-    for idx, base_folder in enumerate(folder_paths, start=1):
-        print(f"\nChecking base folder {idx}: {base_folder}")
-        if not os.path.exists(base_folder):
-            print(f"Folder '{base_folder}' does not exist. Skipping this folder.")
-            continue
+    # for idx, base_folder in enumerate(folder_paths, start=1):
+    #     # print(f"\nChecking base folder {idx}: {base_folder}")
+    #     if not os.path.exists(base_folder):
+    #         print(f"Folder '{base_folder}' does not exist. Skipping this folder.")
+    #         continue
 
         # Check for 'foci_assay' subfolder
-        foci_assay_folder = os.path.join(base_folder, 'foci_assay')
-        if not os.path.exists(foci_assay_folder):
-            print(f"Subfolder 'foci_assay' not found in folder '{base_folder}'. Skipping this folder.")
-            continue
+    #     foci_assay_folder = os.path.join(base_folder, 'foci_assay')
+    #     if not os.path.exists(foci_assay_folder):
+    #         print(f"Subfolder 'foci_assay' not found in folder '{base_folder}'. Skipping this folder.")
+    #         continue
+    #
+    #     # Check for 'Foci' subfolder inside 'foci_assay'
+    #     foci_folder = os.path.join(foci_assay_folder, 'Foci')
+    #     if not os.path.exists(foci_folder):
+    #         print(f"Subfolder 'Foci' not found in folder '{foci_assay_folder}'. Skipping this folder.")
+    #         continue
+    #
+    #     # Find the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>' inside 'foci_assay'
+    #     processed_folders = []
+    #     for name in os.listdir(foci_assay_folder):
+    #         if name.startswith('Nuclei_StarDist_mask_processed_'):
+    #             try:
+    #                 timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
+    #                 timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
+    #                 processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
+    #             except ValueError:
+    #                 print(f"Invalid folder name format: {name}. Skipping this folder.")
+    #                 continue
+    #
+    #     if not processed_folders:
+    #         print(f"No folders found starting with 'Nuclei_StarDist_mask_processed_' in '{foci_assay_folder}'. Skipping this folder.")
+    #         continue
+    #
+    #     # Select the latest folder
+    #     latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
+    #     print(f"Found latest folder 'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
+    #
+    #     # Check for files in 'Foci'
+    #     foci_files = [f for f in os.listdir(foci_folder) if f.lower().endswith('.tif')]
+    #     if not foci_files:
+    #         print(f"No files with '.tif' extension found in folder 'Foci'. Skipping this folder.")
+    #         continue
+    #
+    #     # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
+    #     nuclei_files = [f for f in os.listdir(latest_processed_folder) if f.lower().endswith('.tif')]
+    #     if not nuclei_files:
+    #         print(f"No files with '.tif' extension found in folder '{latest_processed_folder}'. Skipping this folder.")
+    #         continue
+    #
+    #     # Information about found files
+    #     print(f"\n--- File information in folder '{foci_assay_folder}' ---")
+    #     print(f"Number of files found in 'Foci': {len(foci_files)}. Data types: {set(os.path.splitext(f)[-1] for f in foci_files)}")
+    #     print(f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
+    #
+    #     # Add folder to the list of valid folders for processing
+    #     valid_folders.append({
+    #         'base_folder': base_folder,
+    #         'foci_assay_folder': foci_assay_folder,
+    #         'foci_folder': foci_folder,
+    #         'foci_files': foci_files,
+    #         'nuclei_folder': latest_processed_folder,
+    #         'nuclei_files': nuclei_files,
+    #         'particle_size': particle_size,
+    #         'foci_threshold': foci_threshold
+    #     })
+    #
+    # # Check if there are valid folders to process
+    # if not valid_folders:
+    #     print("\nNo folders found with necessary files for processing.")
+    #     return
+    #
+    # print("\nFound 'Foci' and 'Nuclei_StarDist_mask_processed_' folders ready for analysis.")
 
-        # Check for 'Foci' subfolder inside 'foci_assay'
-        foci_folder = os.path.join(foci_assay_folder, 'Foci')
-        if not os.path.exists(foci_folder):
-            print(f"Subfolder 'Foci' not found in folder '{foci_assay_folder}'. Skipping this folder.")
-            continue
 
-        # Find the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>' inside 'foci_assay'
-        processed_folders = []
-        for name in os.listdir(foci_assay_folder):
-            if name.startswith('Nuclei_StarDist_mask_processed_'):
-                try:
-                    timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
-                    timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
-                    processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
-                except ValueError:
-                    print(f"Invalid folder name format: {name}. Skipping this folder.")
-                    continue
 
-        if not processed_folders:
-            print(f"No folders found starting with 'Nuclei_StarDist_mask_processed_' in '{foci_assay_folder}'. Skipping this folder.")
-            continue
-
-        # Select the latest folder
-        latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
-        print(f"Found latest folder 'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
-
-        # Check for files in 'Foci'
-        foci_files = [f for f in os.listdir(foci_folder) if f.lower().endswith('.tif')]
-        if not foci_files:
-            print(f"No files with '.tif' extension found in folder 'Foci'. Skipping this folder.")
-            continue
-
-        # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
-        nuclei_files = [f for f in os.listdir(latest_processed_folder) if f.lower().endswith('.tif')]
-        if not nuclei_files:
-            print(f"No files with '.tif' extension found in folder '{latest_processed_folder}'. Skipping this folder.")
-            continue
-
-        # Information about found files
-        print(f"\n--- File information in folder '{foci_assay_folder}' ---")
-        print(f"Number of files found in 'Foci': {len(foci_files)}. Data types: {set(os.path.splitext(f)[-1] for f in foci_files)}")
-        print(f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
-
-        # Add folder to the list of valid folders for processing
-        valid_folders.append({
-            'base_folder': base_folder,
-            'foci_assay_folder': foci_assay_folder,
-            'foci_folder': foci_folder,
-            'foci_files': foci_files,
-            'nuclei_folder': latest_processed_folder,
-            'nuclei_files': nuclei_files,
-            'particle_size': particle_size,
-            'foci_threshold': foci_threshold
-        })
-
-    # Check if there are valid folders to process
-    if not valid_folders:
-        print("\nNo folders found with necessary files for processing.")
-        return
-
-    print("\nFound 'Foci' and 'Nuclei_StarDist_mask_processed_' folders ready for analysis.")
-
-    # Request to start processing
-    start_processing = input("\nStart processing the found folders? (yes/no): ").strip().lower()
-    if start_processing not in ('yes', 'y'):
-        print("File processing canceled by user.")
-        return
-
-    # Process files in valid folders
-    for folder_info in valid_folders:
-        process_images_in_folder(folder_info)
 
     print("\n--- All processing tasks completed ---")
 
 
-def process_images_in_folder(folder_info):
+def process_images(folder):
     # Removed 'global ij' declaration as 'ij' is not modified within the function
-
-    foci_folder = folder_info['foci_folder']
-    nuclei_folder = folder_info['nuclei_folder']
-    foci_files = folder_info['foci_files']
-    nuclei_files = folder_info['nuclei_files']
-    particle_size = folder_info['particle_size']
-    foci_threshold = folder_info['foci_threshold']
-
-    print(f"\n--- Processing images in folder: {folder_info['base_folder']} ---")
+    foci_folder = folder['foci_folder']
+    nuclei_folder = folder['nuclei_folder']
+    foci_files = folder['foci_files']
+    nuclei_files = folder['nuclei_files']
+    particle_size = folder['particle_size']
+    foci_threshold = folder['foci_threshold']
 
     # Create folders for saving results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    foci_mask_folder = os.path.join(folder_info['foci_assay_folder'], f"Foci_Mask_{timestamp}")
-    nuclei_mask_folder = os.path.join(folder_info['foci_assay_folder'], f"Final_Nuclei_Mask_{timestamp}")
+    foci_mask_folder = os.path.join(folder['foci_assay_folder'], f"Foci_Mask_{timestamp}")
+    nuclei_mask_folder = os.path.join(folder['foci_assay_folder'], f"Final_Nuclei_Mask_{timestamp}")
     os.makedirs(foci_mask_folder, exist_ok=True)
     os.makedirs(nuclei_mask_folder, exist_ok=True)
 
@@ -285,6 +257,44 @@ def process_images_in_folder(folder_info):
 
         except Exception as e:
             print(f"Error processing file '{file_path}': {e}")
+
+
+def main_filter_imgs(input_json_path: str):
+
+    folders = validate_path_files(input_json_path, step=3)
+
+    # Request particle size for nuclear analysis
+    particle_size_input = input("Enter particle size for 'Analyze Particles...' for nuclear images (default is 2500): ").strip()
+    if particle_size_input == '':
+        particle_size = 2500
+    else:
+        try:
+            particle_size = float(particle_size_input)
+        except ValueError:
+            print("Invalid input. Using default particle size of 2500.")
+            particle_size = 2500
+
+    # Request threshold value for foci analysis
+    foci_threshold_input = input("Enter threshold value for 'Foci' images (default is 150): ").strip()
+    if foci_threshold_input == '':
+        foci_threshold = 150
+    else:
+        try:
+            foci_threshold = float(foci_threshold_input)
+        except ValueError:
+            print("Invalid input. Using default threshold value of 150.")
+            foci_threshold = 150
+
+    # Request to start processing
+    start_processing = input("\nStart processing the "
+                             "found folders? (yes/no): ").strip().lower()
+    if start_processing not in ('yes', 'y'):
+        ValueError("File processing canceled by user.")
+
+    # Process files in valid folders
+    for folder in folders:
+        process_images(folder)
+
 
 
 # -------------------- Run the main function --------------------
