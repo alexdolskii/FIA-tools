@@ -6,12 +6,10 @@ from datetime import datetime
 
 # Initialize ImageJ
 print("Initializing ImageJ...")
-try:
-    ij = imagej.init(r"C:\Users\dolsk\Desktop\Orientation_assay_script\Fiji.app", mode='interactive')
-    print("ImageJ successfully initialized.")
-except Exception as e:
-    print(f"Error initializing ImageJ: {e}")
-    exit(1)
+
+ij = imagej.init(r"C:\Users\dolsk\Desktop\Orientation_assay_script\Fiji.app", mode='interactive')
+print("ImageJ successfully initialized.")
+
 
 # Import Java classes
 try:
