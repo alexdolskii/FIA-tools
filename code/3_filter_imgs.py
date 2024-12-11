@@ -7,7 +7,7 @@ from datetime import datetime
 # Initialize ImageJ
 print("Initializing ImageJ...")
 
-ij = imagej.init(r"C:\Users\dolsk\Desktop\Orientation_assay_script\Fiji.app", mode='interactive')
+ij = imagej.init('sc.fiji:fiji', mode='headless')
 print("ImageJ successfully initialized.")
 
 # Import Java classes
