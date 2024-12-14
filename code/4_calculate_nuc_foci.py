@@ -13,8 +13,8 @@ from validate_folders import validate_path_files
 def calculate_nuc_foci(folder: dict) -> None:
     # Initialize ImageJ in interactive mode
     print("Initializing ImageJ...")
-    ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print("ImageJ initialization completed.")
+    ij = imagej.init('1.53')
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
 
     # Import Java classes
     IJ = jimport('ij.IJ')
@@ -83,12 +83,15 @@ def calculate_nuc_foci(folder: dict) -> None:
             print("Mask created by Analyze Particles not found.")
 
         # Save results for each nucleus
-        results_filename = f"{os.path.splitext(filename)[0]}_Each_nucleus.csv"
-        results_file_path = os.path.join(results_folder, results_filename)
-        IJ.selectWindow("Results")
-        IJ.saveAs("Results", results_file_path)
-        print(f"Per nucleus results saved to '{results_file_path}'.")
-        IJ.run("Close")  # Close results window
+        if WindowManager.getWindow("Results") is not None:
+            results_filename = f"{os.path.splitext(filename)[0]}_Each_nucleus.csv"
+            results_file_path = os.path.join(results_folder, results_filename)
+            IJ.selectWindow("Results")
+            IJ.saveAs("Results", results_file_path)
+            print(f"Per nucleus results saved to '{results_file_path}'.")
+            IJ.run("Close")  # Close results window
+        else:
+            print("'Results' window not found. Skipping saving results table.")
 
         # Get data from summary table
         summary_window = WindowManager.getWindow("Summary")
@@ -257,14 +260,15 @@ def calculate_nuc_foci(folder: dict) -> None:
                "size=0-Infinity pixel display summarize")
 
         # Save analysis results
-        foci_analysis_filename = (f"{os.path.splitext(foci_filename)[0]}_"
-                                  f"foci_analysis.csv")
-        foci_analysis_file_path = os.path.join(foci_results_folder,
-                                               foci_analysis_filename)
-        IJ.selectWindow("Results")
-        IJ.saveAs("Results", foci_analysis_file_path)
-        print(f"Foci analysis results saved to '{foci_analysis_file_path}'.")
-        IJ.run("Close")  # Close results window
+        if WindowManager.getWindow("Results") is not None:
+            foci_analysis_filename = f"{os.path.splitext(foci_filename)[0]}_foci_analysis.csv"
+            foci_analysis_file_path = os.path.join(foci_results_folder, foci_analysis_filename)
+            IJ.selectWindow("Results")
+            IJ.saveAs("Results", foci_analysis_file_path)
+            print(f"Foci analysis results saved to '{foci_analysis_file_path}'.")
+            IJ.run("Close")  # Close results window
+        else:
+            print("'Results' window not found during foci analysis.")
 
         # Get data from summary table for foci analysis
         summary_window = WindowManager.getWindow("Summary")
