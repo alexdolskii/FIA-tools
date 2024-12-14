@@ -52,59 +52,55 @@ def filter_in_folder(folder: dict,
     for filename in foci_files:
         file_path = os.path.join(foci_folder, filename)
         print(f"\nProcessing Foci file: {file_path}")
-        try:
-            # Close all images before starting processing
-            IJ.run("Close All")
+        # Close all images before starting processing
+        IJ.run("Close All")
 
-            # Open image
-            imp = IJ.openImage(file_path)
-            if imp is None:
-                print(f"Failed to open image: {file_path}")
+        # Open image
+        imp = IJ.openImage(file_path)
+        if imp is None:
+            print(f"Failed to open image: {file_path}")
+            continue
+
+        # Convert image to 8-bit
+        IJ.run(imp, "8-bit", "")
+        # Set calibration
+        calibration = imp.getCalibration()
+        calibration.setXUnit("micron")
+        calibration.setYUnit("micron")
+        calibration.setZUnit("micron")
+        IJ.run(imp, "Properties...", "channels=1 "
+                                     "slices=1 frames=1 "
+                                     "pixel_width=0.2071602 "
+                                     "pixel_height=0.2071602 "
+                                     "voxel_depth=0.5")
+        # Set threshold for Foci
+        IJ.setThreshold(imp, foci_threshold, 255)
+        IJ.run(imp, "Convert to Mask", "")
+        IJ.run(imp, "Watershed", "")
+
+        # Analyze particles
+        IJ.run(imp, "Analyze Particles...",
+               "size=0-Infinity pixel show=Masks")
+
+        # Get processed image
+        mask_title = 'Mask of ' + filename
+        imp_mask = WindowManager.getImage(mask_title)
+        if imp_mask is None:
+            # If title differs, try to find the last opened image
+            imp_mask = WindowManager.getCurrentImage()
+            if imp_mask is None:
+                print(f"Failed to get mask for image: {file_path}")
                 continue
 
-            # Convert image to 8-bit
-            IJ.run(imp, "8-bit", "")
-            # Set calibration
-            calibration = imp.getCalibration()
-            calibration.setXUnit("micron")
-            calibration.setYUnit("micron")
-            calibration.setZUnit("micron")
-            IJ.run(imp, "Properties...", "channels=1 "
-                                         "slices=1 frames=1 "
-                                         "pixel_width=0.2071602 "
-                                         "pixel_height=0.2071602 "
-                                         "voxel_depth=0.5")
-            # Set threshold for Foci
-            IJ.setThreshold(imp, foci_threshold, 255)
-            IJ.run(imp, "Convert to Mask", "")
-            IJ.run(imp, "Watershed", "")
+        # Save processed image
+        output_path = os.path.join(foci_mask_folder,
+                                   f"processed_{filename}")
+        IJ.saveAs(imp_mask, "Tiff", output_path)
+        print(f"Processed image saved: {output_path}")
 
-            # Analyze particles
-            IJ.run(imp, "Analyze Particles...",
-                   "size=0-Infinity pixel show=Masks")
-
-            # Get processed image
-            mask_title = 'Mask of ' + filename
-            imp_mask = WindowManager.getImage(mask_title)
-            if imp_mask is None:
-                # If title differs, try to find the last opened image
-                imp_mask = WindowManager.getCurrentImage()
-                if imp_mask is None:
-                    print(f"Failed to get mask for image: {file_path}")
-                    continue
-
-            # Save processed image
-            output_path = os.path.join(foci_mask_folder,
-                                       f"processed_{filename}")
-            IJ.saveAs(imp_mask, "Tiff", output_path)
-            print(f"Processed image saved: {output_path}")
-
-            # Close images
-            imp.close()
-            imp_mask.close()
-
-        except Exception as e:
-            print(f"Error processing file '{file_path}': {e}")
+        # Close images
+        imp.close()
+        imp_mask.close()
 
     # Process images in the latest 'Nuclei' folder
     for filename in nuclei_files:
