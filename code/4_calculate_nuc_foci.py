@@ -1,28 +1,13 @@
 #!/usr/bin/env python3
-import imagej
-import os
-from pathlib import Path
-from scyjava import jimport
-from datetime import datetime
-import re
-
 import argparse
+import os
+import re
+from datetime import datetime
+from pathlib import Path
+
+import imagej
+from scyjava import jimport
 from validate_folders import validate_path_files
-
-
-# Function to extract the common part of the filename
-def extract_common_part(foci_filename):
-    """
-    Extracts the common part of the filename before the '_foci_projection.tif'.
-
-    Example:
-        'processed_CRT no gem cs1_001_foci_projection.tif' -> 'CRT no gem cs1_001'
-    """
-    match = re.match(r'processed_(.+?)_foci_projection\.tif', foci_filename)
-    if match:
-        return match.group(1)
-    else:
-        return None
 
 
 def calculate_nuc_foci(folder: dict):
@@ -33,7 +18,6 @@ def calculate_nuc_foci(folder: dict):
 
     # Import Java classes
     IJ = jimport('ij.IJ')
-    Prefs = jimport('ij.Prefs')
     WindowManager = jimport('ij.WindowManager')
     ImageCalculator = jimport('ij.plugin.ImageCalculator')
 
@@ -42,11 +26,15 @@ def calculate_nuc_foci(folder: dict):
     timestamp = now.strftime("%Y%m%d_%H%M%S")
 
     # Prepare paths for saving results
-    results_folder = os.path.join(folder['base_folder'], 'foci_analysis', f'Nuclei_count_results_{timestamp}')
+    results_folder = os.path.join(folder['base_folder'],
+                                  'foci_analysis',
+                                  f'Nuclei_count_results_{timestamp}')
     Path(results_folder).mkdir(parents=True, exist_ok=True)
 
     # Prepare folder for Foci_count_results
-    foci_results_folder = os.path.join(folder['base_folder'], 'foci_analysis', f'Foci_count_results_{timestamp}')
+    foci_results_folder = os.path.join(folder['base_folder'],
+                                       'foci_analysis',
+                                       f'Foci_count_results_{timestamp}')
     Path(foci_results_folder).mkdir(parents=True, exist_ok=True)
 
     final_nuclei_mask_folder = folder['final_nuclei_mask_folder']
@@ -83,7 +71,8 @@ def calculate_nuc_foci(folder: dict):
             print(f"Image '{filename}' successfully opened.")
 
         # Analyze Particles with fixed size=0-Infinity
-        IJ.run(imp, "Analyze Particles...", "size=0-Infinity pixel show=Masks display summarize")
+        IJ.run(imp, "Analyze Particles...",
+               "size=0-Infinity pixel show=Masks display summarize")
 
         # Find mask image created by Analyze Particles
         mask_imp = IJ.getImage()
@@ -94,15 +83,12 @@ def calculate_nuc_foci(folder: dict):
             print("Mask created by Analyze Particles not found.")
 
         # Save results for each nucleus
-        if WindowManager.getWindow("Results") is not None:
-            results_filename = f"{os.path.splitext(filename)[0]}_Each_nucleus.csv"
-            results_file_path = os.path.join(results_folder, results_filename)
-            IJ.selectWindow("Results")
-            IJ.saveAs("Results", results_file_path)
-            print(f"Per nucleus results saved to '{results_file_path}'.")
-            IJ.run("Close")  # Close results window
-        else:
-            print("'Results' window not found. Skipping saving results table.")
+        results_filename = f"{os.path.splitext(filename)[0]}_Each_nucleus.csv"
+        results_file_path = os.path.join(results_folder, results_filename)
+        IJ.selectWindow("Results")
+        IJ.saveAs("Results", results_file_path)
+        print(f"Per nucleus results saved to '{results_file_path}'.")
+        IJ.run("Close")  # Close results window
 
         # Get data from summary table
         summary_window = WindowManager.getWindow("Summary")
@@ -116,8 +102,10 @@ def calculate_nuc_foci(folder: dict):
                 # First line is header
                 # Second line is data
                 if not nuclei_summary_headers:
-                    nuclei_summary_headers = "Filename," + lines[0].replace('\t', ',')
-                summary_line = f"{filename}," + lines[1].replace('\t', ',')
+                    nuclei_summary_headers = ("Filename,"
+                                              + lines[0].replace('\t', ','))
+                summary_line = (f"{filename},"
+                                + lines[1].replace('\t', ','))
                 nuclei_summaries.append(summary_line)
             else:
                 print("No data in summary table for this image.")
@@ -132,16 +120,22 @@ def calculate_nuc_foci(folder: dict):
 
     # Save combined summary for nuclei
     if nuclei_summaries:
-        combined_summary_file = os.path.join(results_folder, f"{os.path.basename(folder['base_folder'])}_Combined_Summary_nuclei.csv")
-        with open(combined_summary_file, 'w', encoding='utf-8') as summary_file:
+        name_file = os.path.join(results_folder,
+                                 f"{os.path.basename(folder['base_folder'])}"
+                                 f"_Combined_Summary_nuclei.csv")
+        combined_summary_file = name_file
+        with open(combined_summary_file, 'w',
+                  encoding='utf-8') as summary_file:
             # Write headers
             summary_file.write(nuclei_summary_headers + '\n')
             # Write data
             for line in nuclei_summaries:
                 summary_file.write(line + '\n')
-        print(f"Combined summary for nuclei saved to '{combined_summary_file}'.")
+        print(f"Combined summary for nuclei "
+              f"saved to '{combined_summary_file}'.")
     else:
-        print(f"No nuclei summary data to save in folder '{folder['base_folder']}'.")
+        print(f"No nuclei summary data to "
+              f"save in folder '{folder['base_folder']}'.")
 
     # ----------------------------
     # Section 2: Processing Foci
@@ -149,9 +143,12 @@ def calculate_nuc_foci(folder: dict):
     print("\n--- Processing Foci Masks ---")
 
     # Prepare folder for saving combined foci masks inside 'foci_assay'
-    foci_in_nuclei_final_folder = os.path.join(foci_assay_folder, f'Foci_in_nuclei_final_{timestamp}')
+    name_file = os.path.join(foci_assay_folder,
+                             f'Foci_in_nuclei_final_{timestamp}')
+    foci_in_nuclei_final_folder = name_file
     Path(foci_in_nuclei_final_folder).mkdir(parents=True, exist_ok=True)
-    print(f"Created folder for combined foci masks: '{foci_in_nuclei_final_folder}'")
+    print(f"Created folder for combined "
+          f"foci masks: '{foci_in_nuclei_final_folder}'")
 
     for foci_filename in foci_projection_files:
         foci_file_path = os.path.join(foci_masks_folder, foci_filename)
@@ -163,21 +160,27 @@ def calculate_nuc_foci(folder: dict):
         print(f"\nProcessing foci file: {foci_file_path}")
 
         # Extract common part from foci filename
-        match = re.match(r'processed_(.+?)_foci_projection\.tif', foci_filename)
+        match = re.match(r'processed_(.+?)_foci_projection\.tif',
+                         foci_filename)
         if match is None:
-            print(f"Could not extract common part from filename '{foci_filename}'. Skipping.")
+            print(f"Could not extract common "
+                  f"part from filename '{foci_filename}'. Skipping.")
             continue
         common_part = match.group(1)
 
         # Find corresponding nuclei file
-        corresponding_nuclei_filename = f"processed_{common_part}_nuclei_projection_StarDist_processed.tif"
-        corresponding_nuclei_file_path = os.path.join(final_nuclei_mask_folder, corresponding_nuclei_filename)
+        corr_nuclei_filename = (f"processed_{common_part}_"
+                                f"nuclei_projection_StarDist_processed.tif")
+        corr_nuclei_file_path = os.path.join(final_nuclei_mask_folder,
+                                             corr_nuclei_filename)
 
-        if not os.path.isfile(corresponding_nuclei_file_path):
-            print(f"Corresponding nuclei file '{corresponding_nuclei_filename}' not found. Skipping.")
+        if not os.path.isfile(corr_nuclei_file_path):
+            print(f"Corresponding nuclei file '{corr_nuclei_filename}'"
+                  f" not found. Skipping.")
             continue
 
-        print(f"Found corresponding nuclei file: {corresponding_nuclei_file_path}")
+        print(f"Found corresponding nuclei file: "
+              f"{corr_nuclei_file_path}")
 
         # Close all open images before processing
         IJ.run("Close All")
@@ -185,18 +188,22 @@ def calculate_nuc_foci(folder: dict):
         # Open both foci and nuclei images
         imp_foci = IJ.openImage(foci_file_path)
         if imp_foci is None:
-            print(f"Failed to open foci image: {foci_file_path}. Skipping.")
+            print(f"Failed to open foci image: "
+                  f"{foci_file_path}. Skipping.")
             continue
         else:
-            print(f"Foci image '{foci_filename}' successfully opened.")
+            print(f"Foci image '{foci_filename}' "
+                  f"successfully opened.")
 
-        imp_nuclei = IJ.openImage(corresponding_nuclei_file_path)
+        imp_nuclei = IJ.openImage(corr_nuclei_file_path)
         if imp_nuclei is None:
-            print(f"Failed to open nuclei image: {corresponding_nuclei_file_path}. Skipping.")
+            print(f"Failed to open nuclei image: "
+                  f"{corr_nuclei_file_path}. Skipping.")
             imp_foci.close()
             continue
         else:
-            print(f"Nuclei image '{corresponding_nuclei_filename}' successfully opened.")
+            print(f"Nuclei image "
+                  f"'{corr_nuclei_filename}' successfully opened.")
 
         # Perform Image Calculator to add masks
         # Direct reference to the opened images
@@ -204,7 +211,8 @@ def calculate_nuc_foci(folder: dict):
         imp2 = imp_nuclei  # Reference to nuclei image
 
         if imp1 is None or imp2 is None:
-            print(f"One of the images '{foci_filename}' or '{corresponding_nuclei_filename}' is not open. Skipping.")
+            print(f"One of the images '{foci_filename}' or "
+                  f"'{corr_nuclei_filename}' is not open. Skipping.")
             imp_foci.close()
             imp_nuclei.close()
             continue
@@ -213,7 +221,8 @@ def calculate_nuc_foci(folder: dict):
         ic = ImageCalculator()
         imp3 = ic.run(imp1, imp2, "AND create")
         if imp3 is None:
-            print(f"Failed to create combined mask for '{foci_filename}'. Skipping.")
+            print(f"Failed to create combined mask "
+                  f"for '{foci_filename}'. Skipping.")
             imp_foci.close()
             imp_nuclei.close()
             continue
@@ -225,7 +234,8 @@ def calculate_nuc_foci(folder: dict):
         # Ensure imp3 is the active image
         active_imp = WindowManager.getCurrentImage()
         if active_imp != imp3:
-            print("Failed to set the combined mask as the active image.")
+            print("Failed to set the combined "
+                  "mask as the active image.")
             imp3.close()
             imp_foci.close()
             imp_nuclei.close()
@@ -235,25 +245,26 @@ def calculate_nuc_foci(folder: dict):
 
         # Prepare filename for the new mask
         result_mask_filename = f"Result of {foci_filename}"
-        result_mask_file_path = os.path.join(foci_in_nuclei_final_folder, result_mask_filename)
+        result_mask_file_path = os.path.join(foci_in_nuclei_final_folder,
+                                             result_mask_filename)
 
         # Save the new mask
         IJ.saveAs("Tiff", result_mask_file_path)
         print(f"Combined mask saved to '{result_mask_file_path}'.")
 
         # Analyze Particles on the new mask
-        IJ.run("Analyze Particles...", "size=0-Infinity pixel display summarize")
+        IJ.run("Analyze Particles...",
+               "size=0-Infinity pixel display summarize")
 
         # Save analysis results
-        if WindowManager.getWindow("Results") is not None:
-            foci_analysis_filename = f"{os.path.splitext(foci_filename)[0]}_foci_analysis.csv"
-            foci_analysis_file_path = os.path.join(foci_results_folder, foci_analysis_filename)
-            IJ.selectWindow("Results")
-            IJ.saveAs("Results", foci_analysis_file_path)
-            print(f"Foci analysis results saved to '{foci_analysis_file_path}'.")
-            IJ.run("Close")  # Close results window
-        else:
-            print("'Results' window not found during foci analysis.")
+        foci_analysis_filename = (f"{os.path.splitext(foci_filename)[0]}_"
+                                  f"foci_analysis.csv")
+        foci_analysis_file_path = os.path.join(foci_results_folder,
+                                               foci_analysis_filename)
+        IJ.selectWindow("Results")
+        IJ.saveAs("Results", foci_analysis_file_path)
+        print(f"Foci analysis results saved to '{foci_analysis_file_path}'.")
+        IJ.run("Close")  # Close results window
 
         # Get data from summary table for foci analysis
         summary_window = WindowManager.getWindow("Summary")
@@ -267,15 +278,19 @@ def calculate_nuc_foci(folder: dict):
                 # First line is header
                 # Second line is data
                 if not foci_summary_headers:
-                    foci_summary_headers = "Filename," + lines[0].replace('\t', ',')
-                summary_line = f"{result_mask_filename}," + lines[1].replace('\t', ',')
+                    foci_summary_headers = ("Filename," +
+                                            lines[0].replace('\t', ','))
+                summary_line = (f"{result_mask_filename}," +
+                                lines[1].replace('\t', ','))
                 foci_summaries.append(summary_line)
             else:
-                print("No data in summary table for foci analysis of this image.")
+                print("No data in summary table "
+                      "for foci analysis of this image.")
             # Close summary window
             summary_window.close()
         else:
-            print("'Summary' window not found during foci analysis.")
+            print("'Summary' window not found "
+                  "during foci analysis.")
 
         # Close all images
         imp_foci.close()
@@ -287,23 +302,30 @@ def calculate_nuc_foci(folder: dict):
 
     # Save combined summary for foci
     if foci_summaries:
-        combined_foci_summary_file = os.path.join(foci_results_folder, f"{os.path.basename(folder['base_folder'])}_Combined_Summary_foci.csv")
-        with open(combined_foci_summary_file, 'w', encoding='utf-8') as summary_file:
+        name_file = os.path.join(foci_results_folder,
+                                 f"{os.path.basename(folder['base_folder'])}_"
+                                 f"Combined_Summary_foci.csv")
+        combined_foci_summary_file = name_file
+        with open(combined_foci_summary_file, 'w',
+                  encoding='utf-8') as summary_file:
             # Write headers
             summary_file.write(foci_summary_headers + '\n')
             # Write data
             for line in foci_summaries:
                 summary_file.write(line + '\n')
-        print(f"Combined summary for foci saved to '{combined_foci_summary_file}'.")
+        print(f"Combined summary for foci saved "
+              f"to '{combined_foci_summary_file}'.")
     else:
-        print(f"No foci summary data to save in folder '{folder['base_folder']}'.")
+        print(f"No foci summary data to save "
+              f"in folder '{folder['base_folder']}'.")
 
 
 def main_summarize_res(input_json_path: str) -> None:
     folders = validate_path_files(input_json_path, step=4)
 
     # Ask if processing should start
-    start_processing = input("\nDo you want to start processing files? (yes/no): ").strip().lower()
+    start_processing = input("\nDo you want to start processing "
+                             "files? (yes/no): ").strip().lower()
     if start_processing not in ('yes', 'y'):
         raise ValueError("File processing canceled by user.")
 
