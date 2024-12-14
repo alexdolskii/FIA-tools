@@ -1,144 +1,50 @@
 #!/usr/bin/env python3
-import imagej
+import argparse
 import os
-from pathlib import Path
-from scyjava import jimport
 from datetime import datetime
 
-
-import argparse
-
+import imagej
+from scyjava import jimport
 from validate_folders import validate_path_files
 
 
-def process_folders():
-    print("\n--- Start of folder processing ---")
+def filter_in_folder(folder: dict,
+                     particle_size: int,
+                     foci_threshold: int) -> None:
+    """
+    The function to filter the results of machine
+    learning processing of images.
+    Args:
+        folder: the path to the folder that contain output of
+        main_analyze_nuclei function
+        particle_size: the threshold for size of nuclei
+        foci_threshold: threshold value for foci analysis
+    Returns:
+        Two directories: 'Final_Nuclei_Mask' and 'Foci_Mask'
 
-    # Step 1: Request path to .txt file containing folder paths
-    # txt_file_path = input("Enter the full path to the .txt file containing the list of folder paths for processing: ").strip()
+    """
+    # Initialize ImageJ
+    print("Initializing ImageJ...")
 
-    # Check if the file exists
-    # if not os.path.isfile(txt_file_path):
-    #     print(f"File '{txt_file_path}' does not exist. Please try again.")
-    #     return
+    ij = imagej.init('sc.fiji:fiji', mode='headless')
+    print("ImageJ successfully initialized.")
 
-    # print(f"File found: {txt_file_path}")
+    # Import Java classes
+    IJ = jimport('ij.IJ')
+    WindowManager = jimport('ij.WindowManager')
+    print("Java classes successfully imported.")
 
-    # Read folder paths from file
-    # try:
-    #     with open(txt_file_path, 'r', encoding='utf-8') as f:
-    #         folder_paths = [line.strip() for line in f if line.strip()]
-    #     print(f"Number of folder paths read: {folder_paths}")
-    # except Exception as e:
-    #     print(f"Error reading file: {e}")
-    #     return
-
-    # Check if paths are present
-    # if not folder_paths:
-    #     print("The file does not contain folder paths. Please check the file content.")
-    #     return
-
-    # print(f"\nFound {len(folder_paths)} paths in the file.")
-
-
-
-    # # Check folders and prepare information
-    # print("\nChecking folders and files...")
-
-    # valid_folders = []
-
-    # for idx, base_folder in enumerate(folder_paths, start=1):
-    #     # print(f"\nChecking base folder {idx}: {base_folder}")
-    #     if not os.path.exists(base_folder):
-    #         print(f"Folder '{base_folder}' does not exist. Skipping this folder.")
-    #         continue
-
-        # Check for 'foci_assay' subfolder
-    #     foci_assay_folder = os.path.join(base_folder, 'foci_assay')
-    #     if not os.path.exists(foci_assay_folder):
-    #         print(f"Subfolder 'foci_assay' not found in folder '{base_folder}'. Skipping this folder.")
-    #         continue
-    #
-    #     # Check for 'Foci' subfolder inside 'foci_assay'
-    #     foci_folder = os.path.join(foci_assay_folder, 'Foci')
-    #     if not os.path.exists(foci_folder):
-    #         print(f"Subfolder 'Foci' not found in folder '{foci_assay_folder}'. Skipping this folder.")
-    #         continue
-    #
-    #     # Find the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>' inside 'foci_assay'
-    #     processed_folders = []
-    #     for name in os.listdir(foci_assay_folder):
-    #         if name.startswith('Nuclei_StarDist_mask_processed_'):
-    #             try:
-    #                 timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
-    #                 timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
-    #                 processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
-    #             except ValueError:
-    #                 print(f"Invalid folder name format: {name}. Skipping this folder.")
-    #                 continue
-    #
-    #     if not processed_folders:
-    #         print(f"No folders found starting with 'Nuclei_StarDist_mask_processed_' in '{foci_assay_folder}'. Skipping this folder.")
-    #         continue
-    #
-    #     # Select the latest folder
-    #     latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
-    #     print(f"Found latest folder 'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
-    #
-    #     # Check for files in 'Foci'
-    #     foci_files = [f for f in os.listdir(foci_folder) if f.lower().endswith('.tif')]
-    #     if not foci_files:
-    #         print(f"No files with '.tif' extension found in folder 'Foci'. Skipping this folder.")
-    #         continue
-    #
-    #     # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
-    #     nuclei_files = [f for f in os.listdir(latest_processed_folder) if f.lower().endswith('.tif')]
-    #     if not nuclei_files:
-    #         print(f"No files with '.tif' extension found in folder '{latest_processed_folder}'. Skipping this folder.")
-    #         continue
-    #
-    #     # Information about found files
-    #     print(f"\n--- File information in folder '{foci_assay_folder}' ---")
-    #     print(f"Number of files found in 'Foci': {len(foci_files)}. Data types: {set(os.path.splitext(f)[-1] for f in foci_files)}")
-    #     print(f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
-    #
-    #     # Add folder to the list of valid folders for processing
-    #     valid_folders.append({
-    #         'base_folder': base_folder,
-    #         'foci_assay_folder': foci_assay_folder,
-    #         'foci_folder': foci_folder,
-    #         'foci_files': foci_files,
-    #         'nuclei_folder': latest_processed_folder,
-    #         'nuclei_files': nuclei_files,
-    #         'particle_size': particle_size,
-    #         'foci_threshold': foci_threshold
-    #     })
-    #
-    # # Check if there are valid folders to process
-    # if not valid_folders:
-    #     print("\nNo folders found with necessary files for processing.")
-    #     return
-    #
-    # print("\nFound 'Foci' and 'Nuclei_StarDist_mask_processed_' folders ready for analysis.")
-
-
-
-
-    print("\n--- All processing tasks completed ---")
-
-
-def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
-    # Removed 'global ij' declaration as 'ij' is not modified within the function
     foci_folder = folder['foci_folder']
     nuclei_folder = folder['nuclei_folder']
     foci_files = folder['foci_files']
     nuclei_files = folder['nuclei_files']
 
-
     # Create folders for saving results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    foci_mask_folder = os.path.join(folder['foci_assay_folder'], f"Foci_Mask_{timestamp}")
-    nuclei_mask_folder = os.path.join(folder['foci_assay_folder'], f"Final_Nuclei_Mask_{timestamp}")
+    foci_mask_folder = os.path.join(folder['foci_assay_folder'],
+                                    f"Foci_Mask_{timestamp}")
+    nuclei_mask_folder = os.path.join(folder['foci_assay_folder'],
+                                      f"Final_Nuclei_Mask_{timestamp}")
     os.makedirs(foci_mask_folder, exist_ok=True)
     os.makedirs(nuclei_mask_folder, exist_ok=True)
 
@@ -163,15 +69,19 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
             calibration.setXUnit("micron")
             calibration.setYUnit("micron")
             calibration.setZUnit("micron")
-            IJ.run(imp, "Properties...", "channels=1 slices=1 frames=1 pixel_width=0.2071602 pixel_height=0.2071602 voxel_depth=0.5")
-            
+            IJ.run(imp, "Properties...", "channels=1 "
+                                         "slices=1 frames=1 "
+                                         "pixel_width=0.2071602 "
+                                         "pixel_height=0.2071602 "
+                                         "voxel_depth=0.5")
             # Set threshold for Foci
             IJ.setThreshold(imp, foci_threshold, 255)
             IJ.run(imp, "Convert to Mask", "")
             IJ.run(imp, "Watershed", "")
 
             # Analyze particles
-            IJ.run(imp, "Analyze Particles...", "size=0-Infinity pixel show=Masks")
+            IJ.run(imp, "Analyze Particles...",
+                   "size=0-Infinity pixel show=Masks")
 
             # Get processed image
             mask_title = 'Mask of ' + filename
@@ -184,7 +94,8 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
                     continue
 
             # Save processed image
-            output_path = os.path.join(foci_mask_folder, f"processed_{filename}")
+            output_path = os.path.join(foci_mask_folder,
+                                       f"processed_{filename}")
             IJ.saveAs(imp_mask, "Tiff", output_path)
             print(f"Processed image saved: {output_path}")
 
@@ -216,15 +127,20 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
             calibration.setXUnit("micron")
             calibration.setYUnit("micron")
             calibration.setZUnit("micron")
-            IJ.run(imp, "Properties...", "channels=1 slices=1 frames=1 pixel_width=0.2071602 pixel_height=0.2071602 voxel_depth=0.5")
-            
+            IJ.run(imp, "Properties...", "channels=1 "
+                                         "slices=1 "
+                                         "frames=1 "
+                                         "pixel_width=0.2071602 "
+                                         "pixel_height=0.2071602 "
+                                         "voxel_depth=0.5")
             # Set threshold
             IJ.setThreshold(imp, 1, 255)
             IJ.run(imp, "Convert to Mask", "")
             IJ.run(imp, "Watershed", "")
 
             # Analyze particles with specified particle size
-            IJ.run(imp, "Analyze Particles...", f"size={particle_size}-Infinity pixel show=Masks")
+            IJ.run(imp, "Analyze Particles...",
+                   f"size={particle_size}-Infinity pixel show=Masks")
 
             # Get processed image
             mask_title = 'Mask of ' + filename
@@ -237,7 +153,8 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
                     continue
 
             # Save processed image
-            output_path = os.path.join(nuclei_mask_folder, f"processed_{filename}")
+            output_path = os.path.join(nuclei_mask_folder,
+                                       f"processed_{filename}")
             IJ.saveAs(imp_mask, "Tiff", output_path)
             print(f"Processed image saved: {output_path}")
 
@@ -249,7 +166,26 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
             print(f"Error processing file '{file_path}': {e}")
 
 
-def main_filter_imgs(input_json_path: str, particle_size=2500, foci_threshold=150):
+def main_filter_imgs(input_json_path: str,
+                     particle_size: int,
+                     foci_threshold: int) -> None:
+    """
+    The function to validate the output of the results
+    from main_analyze_nuclei from 2_analyze_nuclei.py
+    and filter the results of machine
+    learning processing of images.
+    Please use this function next to main_analyze_nuclei from
+    2_analyze_nuclei.py
+
+    Args:
+        input_json_path: input json file with all paths
+        to processed files
+        particle_size: the threshold for size of nuclei
+        foci_threshold: threshold value for foci analysis
+
+    Returns:
+        Two directories: 'Final_Nuclei_Mask' and 'Foci_Mask'
+    """
     if not isinstance(particle_size, int):
         raise ValueError('Particle size must be integer!')
 
@@ -258,18 +194,6 @@ def main_filter_imgs(input_json_path: str, particle_size=2500, foci_threshold=15
 
     folders = validate_path_files(input_json_path, step=3)
 
-    # Initialize ImageJ
-    print("Initializing ImageJ...")
-
-    ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print("ImageJ successfully initialized.")
-
-    # Import Java classes
-    IJ = jimport('ij.IJ')
-    Prefs = jimport('ij.Prefs')
-    WindowManager = jimport('ij.WindowManager')
-    print("Java classes successfully imported.")
-
     # Request to start processing
     start_processing = input("\nStart processing the "
                              "found folders? (yes/no): ").strip().lower()
@@ -277,8 +201,10 @@ def main_filter_imgs(input_json_path: str, particle_size=2500, foci_threshold=15
         raise ValueError("File processing canceled by user.")
 
     # Process files in valid folders
-    for folder in folders:
-        filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager)
+    for path in folders.keys():
+        filter_in_folder(folders[path], particle_size, foci_threshold)
+
+    print("\n--- All processing tasks completed ---")
 
 
 if __name__ == '__main__':
@@ -288,5 +214,17 @@ if __name__ == '__main__':
                         type=str,
                         help="JSON file with all paths of directories",
                         required=True)
+    parser.add_argument('-p',
+                        '--particle_size',
+                        type=int,
+                        help="The threshold for size of nuclei. "
+                             "Default is 2500",
+                        default=2500)
+    parser.add_argument('-f',
+                        '--foci_threshold',
+                        type=int,
+                        help="Threshold value for foci analysis. "
+                             "Default is 150",
+                        default=150)
     args = parser.parse_args()
-    main_filter_imgs(args.input)
+    main_filter_imgs(args.input, args.particle_size, args.foci_threshold)
