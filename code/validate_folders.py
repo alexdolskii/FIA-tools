@@ -27,7 +27,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             folder_paths = [path.strip().replace('C:\\', '/mnt/c/')
                             .replace('\\', '/') for path in folder_paths]
 
-    if not folder_paths:
+    if len(folder_paths) == 0:
         raise ValueError("The file does not contain folder paths. Please check the file content.")
 
     # Check existence of folders and count the number of files in each
@@ -49,7 +49,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                       f"{message}")
                 if num_files > 0:
                     valid_folders.append(folder_path)
-            elif step == 2 or step == 3:
+            else:
                 valid_folders.append(folder_path)
         else:
             raise ValueError(f"Folder '{folder_path}' does not exist.")
@@ -100,12 +100,12 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                 raise ValueError(f"No folders found starting with "
                            f"'Nuclei_StarDist_mask_processed_' "
                            f"in '{foci_assay_folder}'. Skipping this folder.")
-
-            # Select the latest folder
-            latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
-            print(f"Found latest folder "
-                  f"'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
-            result[folder]["nuclei_folder"] = latest_processed_folder
+            else:
+                # Select the latest folder
+                latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
+                print(f"Found latest folder "
+                      f"'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
+                result[folder]["nuclei_folder"] = latest_processed_folder
 
             # Check for files in 'Foci'
             foci_files = [f for f in os.listdir(foci_folder)
@@ -134,5 +134,80 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             print(
                 f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. "
                 f"Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
+    elif step == 4:
+        result = {}
+        for folder in valid_folders:
+            result[folder] = {}
+            result[folder]['base_folder'] = folder
+            # Check for 'foci_assay' subdirectory
+            foci_assay_folder = os.path.join(folder, 'foci_assay')
+            if not os.path.exists(foci_assay_folder):
+                raise ValueError(f"Subdirectory 'foci_assay' not found "
+                                 f"in folder '{folder}'. Skipping this folder.")
+            else:
+                result[folder]['foci_assay_folder'] = foci_assay_folder
+            # Find the dir 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS'
+            final_nuclei_folders = []
+            for name in os.listdir(foci_assay_folder):
+                if name.startswith('Final_Nuclei_Mask_'):
+                    date_str = name.replace('Final_Nuclei_Mask_', '')
+                    folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+                    final_nuclei_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
 
+            if len(final_nuclei_folders) == 0:
+                raise ValueError(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' "
+                                 f"found in '{foci_assay_folder}'. Skipping this folder.")
+            else:
+                # Find the latest Final_Nuclei_Mask
+                lat_fin_nuc_mask_dir = (max(final_nuclei_folders,
+                                            key=lambda x: x[0])[1])
+                print(f"Selected the latest "
+                      f"'Final_Nuclei_Mask' folder: {lat_fin_nuc_mask_dir}")
+                result[folder]['final_nuclei_mask_folder'] = lat_fin_nuc_mask_dir
+
+                # Count the number of files that finished
+                # on '_StarDist_processed.tif'
+                star_dist_processed_files = [f for f in os.listdir(lat_fin_nuc_mask_dir) if
+                                             f.endswith('_StarDist_processed.tif')]
+                star_dist_count = len(star_dist_processed_files)
+                print(
+                    f"Number of '_StarDist_processed.tif' files in '{lat_fin_nuc_mask_dir}': {star_dist_count}")
+                result[folder]['star_dist_files'] = star_dist_processed_files
+                result[folder]['star_dist_count'] = star_dist_count
+
+            # Search for the latest 'Foci_Mask_YYYYMMDD_HHMMSS'
+            foci_masks_folders = []
+            for name in os.listdir(foci_assay_folder):
+                if name.startswith('Foci_Mask_'):
+                    date_str = name.replace('Foci_Mask_', '')
+                    folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+                    foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+
+            if len(foci_masks_folders) == 0:
+                raise ValueError(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' "
+                                 f"found in '{foci_assay_folder}'. Skipping this folder.")
+
+            else:
+                # Chose the latest Foci_Mask
+                latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
+                print(f"Selected the latest 'Foci_Mask' "
+                      f"folder: {latest_foci_masks_folder}")
+                result[folder]['foci_masks_folder'] = latest_foci_masks_folder
+
+                # Count the number of files that ended as '_foci_projection.tif'
+                foci_projection_files = [f for f in os.listdir(latest_foci_masks_folder) if
+                                         f.endswith('_foci_projection.tif')]
+                foci_projection_count = len(foci_projection_files)
+                print(f"Number of '_foci_projection.tif' files in "
+                      f"'{latest_foci_masks_folder}': {foci_projection_count}")
+                result[folder]['foci_projection_files'] = foci_projection_files
+                result[folder]['foci_projection_count'] = foci_projection_count
+                print(f"  Found '_StarDist_processed.tif' files: {star_dist_count}")
+                print(f"  Found '_foci_projection.tif' files: {foci_projection_count}")
+
+            # Check if there are folders for processing
+            if len(result) == 0:
+                raise ValueError('There are no files to process')
+    else:
+        raise ValueError('Please choose the particular step from 1 to 4')
     return result
