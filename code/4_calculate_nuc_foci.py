@@ -13,7 +13,7 @@ from validate_folders import validate_path_files
 def calculate_nuc_foci(folder: dict) -> None:
     # Initialize ImageJ in interactive mode
     print("Initializing ImageJ...")
-    ij = imagej.init('1.53')
+    ij = imagej.init('sc.fiji:fiji', mode='headless')
     print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
 
     # Import Java classes
