@@ -8,9 +8,7 @@ from pathlib import Path
 import numpy as np
 from csbdeep.utils import normalize
 from skimage.io import imread, imsave
-from stardist import random_label_cmap
 from stardist.models import StarDist2D
-from stardist.plot import render_label
 
 from validate_folders import validate_path_files
 
