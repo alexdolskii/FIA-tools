@@ -10,7 +10,7 @@ from scyjava import jimport
 from validate_folders import validate_path_files
 
 
-def calculate_nuc_foci(folder: dict):
+def calculate_nuc_foci(folder: dict) -> None:
     # Initialize ImageJ in interactive mode
     print("Initializing ImageJ...")
     ij = imagej.init('sc.fiji:fiji', mode='headless')
