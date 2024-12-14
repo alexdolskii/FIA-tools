@@ -249,7 +249,12 @@ def filter_imgs(folder, particle_size, foci_threshold, IJ, WindowManager):
             print(f"Error processing file '{file_path}': {e}")
 
 
-def main_filter_imgs(input_json_path: str):
+def main_filter_imgs(input_json_path: str, particle_size=2500, foci_threshold=150):
+    if not isinstance(particle_size, int):
+        raise ValueError('Particle size must be integer!')
+
+    if not isinstance(foci_threshold, int):
+        raise ValueError('Foci threshold must be integer!')
 
     folders = validate_path_files(input_json_path, step=3)
 
@@ -265,33 +270,11 @@ def main_filter_imgs(input_json_path: str):
     WindowManager = jimport('ij.WindowManager')
     print("Java classes successfully imported.")
 
-    # Request particle size for nuclear analysis
-    particle_size_input = input("Enter particle size for 'Analyze Particles...' for nuclear images (default is 2500): ").strip()
-    if particle_size_input == '':
-        particle_size = 2500
-    else:
-        try:
-            particle_size = float(particle_size_input)
-        except ValueError:
-            print("Invalid input. Using default particle size of 2500.")
-            particle_size = 2500
-
-    # Request threshold value for foci analysis
-    foci_threshold_input = input("Enter threshold value for 'Foci' images (default is 150): ").strip()
-    if foci_threshold_input == '':
-        foci_threshold = 150
-    else:
-        try:
-            foci_threshold = float(foci_threshold_input)
-        except ValueError:
-            print("Invalid input. Using default threshold value of 150.")
-            foci_threshold = 150
-
     # Request to start processing
     start_processing = input("\nStart processing the "
                              "found folders? (yes/no): ").strip().lower()
     if start_processing not in ('yes', 'y'):
-        ValueError("File processing canceled by user.")
+        raise ValueError("File processing canceled by user.")
 
     # Process files in valid folders
     for folder in folders:
