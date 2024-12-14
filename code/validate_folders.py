@@ -30,7 +30,6 @@ def validate_path_files(input_json_path: str, step: int) -> list:
     if not folder_paths:
         raise ValueError("The file does not contain folder paths. Please check the file content.")
 
-
     # Check existence of folders and count the number of files in each
     print(f"Found {len(folder_paths)} folders for verification.")
     valid_folders = []
@@ -76,7 +75,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             foci_assay_folder = os.path.join(folder, 'foci_assay')
             if not os.path.exists(foci_assay_folder):
                 raise ValueError(f"Subfolder 'foci_assay' not found "
-                           f"in folder '{folder}'. Skipping this folder.")
+                                 f"in folder '{folder}'. Skipping this folder.")
             else:
                 result[folder]["foci_assay_folder"] = foci_assay_folder
 
@@ -84,8 +83,8 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             foci_folder = os.path.join(foci_assay_folder, 'Foci')
             if not os.path.exists(foci_folder):
                 raise ValueError(f"Subfolder 'Foci' not found "
-                           f"in folder '{foci_assay_folder}'. "
-                           f"Skipping this folder.")
+                                 f"in folder '{foci_assay_folder}'. "
+                                 f"Skipping this folder.")
             else:
                 result[folder]["foci_folder"] = foci_folder
 
@@ -113,7 +112,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                           if f.lower().endswith('.tif')]
             if len(foci_files) == 0:
                 raise ValueError(f"No files with '.tif' "
-                           f"extension found in folder 'Foci'. Skipping this folder.")
+                                 f"extension found in folder 'Foci'. Skipping this folder.")
             else:
                 result[folder]["foci_files"] = foci_files
 
@@ -122,8 +121,8 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                             if f.lower().endswith('.tif')]
             if len(nuclei_files) == 0:
                 raise ValueError(f"No files with '.tif' extension "
-                           f"found in folder '{latest_processed_folder}'. "
-                           f"Skipping this folder.")
+                                 f"found in folder '{latest_processed_folder}'. "
+                                 f"Skipping this folder.")
             else:
                 result[folder]["nuclei_files"] = nuclei_files
 
