@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 
+
 def validate_path_files(input_json_path: str, step: int) -> list:
     """
     Function validate_path_files read json file with the path
@@ -27,7 +28,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                             .replace('\\', '/') for path in folder_paths]
 
     if not folder_paths:
-        ValueError("The file does not contain folder paths. Please check the file content.")
+        raise ValueError("The file does not contain folder paths. Please check the file content.")
 
 
     # Check existence of folders and count the number of files in each
@@ -74,7 +75,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             result[folder] = {}
             foci_assay_folder = os.path.join(folder, 'foci_assay')
             if not os.path.exists(foci_assay_folder):
-                ValueError(f"Subfolder 'foci_assay' not found "
+                raise ValueError(f"Subfolder 'foci_assay' not found "
                            f"in folder '{folder}'. Skipping this folder.")
             else:
                 result[folder]["foci_assay_folder"] = foci_assay_folder
@@ -82,7 +83,7 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             # Check for 'Foci' subfolder inside 'foci_assay'
             foci_folder = os.path.join(foci_assay_folder, 'Foci')
             if not os.path.exists(foci_folder):
-                ValueError(f"Subfolder 'Foci' not found "
+                raise ValueError(f"Subfolder 'Foci' not found "
                            f"in folder '{foci_assay_folder}'. "
                            f"Skipping this folder.")
             else:
@@ -95,16 +96,13 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                     timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
                     timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
                     processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
-                else:
-                    ValueError(f"Invalid folder name format: {name}. Skipping this folder.")
 
-            if not processed_folders:
-                ValueError(f"No folders found starting with "
+            if len(processed_folders) == 0:
+                raise ValueError(f"No folders found starting with "
                            f"'Nuclei_StarDist_mask_processed_' "
                            f"in '{foci_assay_folder}'. Skipping this folder.")
 
             # Select the latest folder
-            # ES Что тут происходит?
             latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
             print(f"Found latest folder "
                   f"'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
@@ -113,8 +111,8 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             # Check for files in 'Foci'
             foci_files = [f for f in os.listdir(foci_folder)
                           if f.lower().endswith('.tif')]
-            if not foci_files:
-                ValueError(f"No files with '.tif' "
+            if len(foci_files) == 0:
+                raise ValueError(f"No files with '.tif' "
                            f"extension found in folder 'Foci'. Skipping this folder.")
             else:
                 result[folder]["foci_files"] = foci_files
@@ -122,8 +120,8 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
             nuclei_files = [f for f in os.listdir(latest_processed_folder)
                             if f.lower().endswith('.tif')]
-            if not nuclei_files:
-                ValueError(f"No files with '.tif' extension "
+            if len(nuclei_files) == 0:
+                raise ValueError(f"No files with '.tif' extension "
                            f"found in folder '{latest_processed_folder}'. "
                            f"Skipping this folder.")
             else:
