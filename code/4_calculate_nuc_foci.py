@@ -5,16 +5,8 @@ from scyjava import jimport
 from datetime import datetime
 import re
 
-# Initialize ImageJ in interactive mode
-print("Initializing ImageJ...")
-ij = imagej.init(r"C:\Users\dolsk\Desktop\Orientation_assay_script\Fiji.app", mode='interactive')
-print("ImageJ initialization completed.")
 
-# Import Java classes
-IJ = jimport('ij.IJ')
-Prefs = jimport('ij.Prefs')
-WindowManager = jimport('ij.WindowManager')
-ImageCalculator = jimport('ij.plugin.ImageCalculator')
+
 
 # Function to extract the common part of the filename
 def extract_common_part(foci_filename):
@@ -30,95 +22,87 @@ def extract_common_part(foci_filename):
     else:
         return None
 
-# Step 1: Request .txt file with folder paths
-txt_file_path = input("Enter the full path to the .txt file containing folder paths for processing: ")
+def calculate_nuc_foci(folder: dict, paricle_size = 0):
+    # Initialize ImageJ in interactive mode
+    print("Initializing ImageJ...")
+    ij = imagej.init('sc.fiji:fiji', mode='headless')
+    print("ImageJ initialization completed.")
 
-# Check if the file exists
-if not os.path.isfile(txt_file_path):
-    print(f"File '{txt_file_path}' does not exist. Please try again.")
-    exit()
+    # Import Java classes
+    IJ = jimport('ij.IJ')
+    Prefs = jimport('ij.Prefs')
+    WindowManager = jimport('ij.WindowManager')
+    ImageCalculator = jimport('ij.plugin.ImageCalculator')
 
-# Read folder paths from file
-with open(txt_file_path, 'r', encoding='utf-8') as f:
-    folder_paths = [line.strip() for line in f if line.strip()]
 
-# Check if folder paths are available
-if not folder_paths:
-    print("The file does not contain any folder paths. Please check the file contents.")
-    exit()
+    # Get current date and time for folder naming
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
 
-# Set particle size to 0 (fixed)
-particle_size = 0
-print(f"Using fixed particle size for 'Analyze Particles...': {particle_size}-Infinity")
+# # Part 1: Verify folders and display information
+# print("\nVerifying folders and files...")
+#
+# folders_info = []
 
-# Get current date and time for folder naming
-now = datetime.now()
-timestamp = now.strftime("%Y%m%d_%H%M%S")
+# for idx, base_folder in enumerate(folder_paths, start=1):
+#     print(f"\nVerifying base folder {idx}: {base_folder}")
+#     if not os.path.exists(base_folder):
+#         print(f"Folder '{base_folder}' does not exist. Skipping this folder.")
+#         continue
 
-# Part 1: Verify folders and display information
-print("\nVerifying folders and files...")
-
-folders_info = []
-
-for idx, base_folder in enumerate(folder_paths, start=1):
-    print(f"\nVerifying base folder {idx}: {base_folder}")
-    if not os.path.exists(base_folder):
-        print(f"Folder '{base_folder}' does not exist. Skipping this folder.")
-        continue
-
-    # Check for 'foci_assay' subdirectory
-    foci_assay_folder = os.path.join(base_folder, 'foci_assay')
-    if not os.path.exists(foci_assay_folder):
-        print(f"Subdirectory 'foci_assay' not found in folder '{base_folder}'. Skipping this folder.")
-        continue
-
-    # Поиск самой последней папки 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS'
-    final_nuclei_folders = []
-    for name in os.listdir(foci_assay_folder):
-        if name.startswith('Final_Nuclei_Mask_'):
-            date_str = name.replace('Final_Nuclei_Mask_', '')
-            try:
-                folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                final_nuclei_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
-            except ValueError:
-                continue
-
-    if not final_nuclei_folders:
-        print(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'. Skipping this folder.")
-        continue
-
-    # Выбор самой последней папки Final_Nuclei_Mask
-    latest_final_nuclei_mask_folder = max(final_nuclei_folders, key=lambda x: x[0])[1]
-    print(f"Selected the latest 'Final_Nuclei_Mask' folder: {latest_final_nuclei_mask_folder}")
-
-    # Подсчет количества изображений заканчивающихся на '_StarDist_processed.tif'
-    star_dist_processed_files = [f for f in os.listdir(latest_final_nuclei_mask_folder) if f.endswith('_StarDist_processed.tif')]
-    star_dist_count = len(star_dist_processed_files)
-    print(f"Number of '_StarDist_processed.tif' files in '{latest_final_nuclei_mask_folder}': {star_dist_count}")
-
-    # Поиск самой последней папки 'Foci_Mask_YYYYMMDD_HHMMSS'
-    foci_masks_folders = []
-    for name in os.listdir(foci_assay_folder):
-        if name.startswith('Foci_Mask_'):
-            date_str = name.replace('Foci_Mask_', '')
-            try:
-                folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
-            except ValueError:
-                continue
-
-    if not foci_masks_folders:
-        print(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'. Skipping this folder.")
-        continue
-
-    # Выбор самой последней папки Foci_Mask
-    latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
-    print(f"Selected the latest 'Foci_Mask' folder: {latest_foci_masks_folder}")
-
-    # Подсчет количества изображений заканчивающихся на '_foci_projection.tif'
-    foci_projection_files = [f for f in os.listdir(latest_foci_masks_folder) if f.endswith('_foci_projection.tif')]
-    foci_projection_count = len(foci_projection_files)
-    print(f"Number of '_foci_projection.tif' files in '{latest_foci_masks_folder}': {foci_projection_count}")
+    # # Check for 'foci_assay' subdirectory
+    # foci_assay_folder = os.path.join(base_folder, 'foci_assay')
+    # if not os.path.exists(foci_assay_folder):
+    #     print(f"Subdirectory 'foci_assay' not found in folder '{base_folder}'. Skipping this folder.")
+    #     continue
+    #
+    # # Поиск самой последней папки 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS'
+    # final_nuclei_folders = []
+    # for name in os.listdir(foci_assay_folder):
+    #     if name.startswith('Final_Nuclei_Mask_'):
+    #         date_str = name.replace('Final_Nuclei_Mask_', '')
+    #         try:
+    #             folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+    #             final_nuclei_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+    #         except ValueError:
+    #             continue
+    #
+    # if not final_nuclei_folders:
+    #     print(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'. Skipping this folder.")
+    #     continue
+    #
+    # # Выбор самой последней папки Final_Nuclei_Mask
+    # latest_final_nuclei_mask_folder = max(final_nuclei_folders, key=lambda x: x[0])[1]
+    # print(f"Selected the latest 'Final_Nuclei_Mask' folder: {latest_final_nuclei_mask_folder}")
+    #
+    # # Подсчет количества изображений заканчивающихся на '_StarDist_processed.tif'
+    # star_dist_processed_files = [f for f in os.listdir(latest_final_nuclei_mask_folder) if f.endswith('_StarDist_processed.tif')]
+    # star_dist_count = len(star_dist_processed_files)
+    # print(f"Number of '_StarDist_processed.tif' files in '{latest_final_nuclei_mask_folder}': {star_dist_count}")
+    #
+    # # Поиск самой последней папки 'Foci_Mask_YYYYMMDD_HHMMSS'
+    # foci_masks_folders = []
+    # for name in os.listdir(foci_assay_folder):
+    #     if name.startswith('Foci_Mask_'):
+    #         date_str = name.replace('Foci_Mask_', '')
+    #         try:
+    #             folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+    #             foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+    #         except ValueError:
+    #             continue
+    #
+    # if not foci_masks_folders:
+    #     print(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'. Skipping this folder.")
+    #     continue
+    #
+    # # Выбор самой последней папки Foci_Mask
+    # latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
+    # print(f"Selected the latest 'Foci_Mask' folder: {latest_foci_masks_folder}")
+    #
+    # # Подсчет количества изображений заканчивающихся на '_foci_projection.tif'
+    # foci_projection_files = [f for f in os.listdir(latest_foci_masks_folder) if f.endswith('_foci_projection.tif')]
+    # foci_projection_count = len(foci_projection_files)
+    # print(f"Number of '_foci_projection.tif' files in '{latest_foci_masks_folder}': {foci_projection_count}")
 
     # Prepare paths for saving results
     results_folder = os.path.join(base_folder, 'foci_analysis', f'Nuclei_count_results_{timestamp}')
