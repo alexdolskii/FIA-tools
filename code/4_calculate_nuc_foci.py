@@ -16,7 +16,8 @@ def compute_summary_from_rt(rt):
     We compute:
     - count: number of detected objects
     - total_area: sum of the "Area" column
-    - mean_area: average area per object (renamed as AverageSize in the summary output)
+    - mean_area: average area per object
+    (renamed as AverageSize in the summary output)
 
     Returns a string: "count,total_area,mean_area"
     """
@@ -62,7 +63,7 @@ def analyze_particles(imp,
                           max_circ)
     success = pa.analyze(imp)
     if not success:
-        print("Particle analysis failed.")
+        raise ValueError("Particle analysis failed.")
 
     return rt
 
@@ -77,7 +78,7 @@ def calculate_nuc_foci(folder: dict) -> None:
 
     print("Initializing ImageJ...")
     ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print("ImageJ initialization completed.")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
 
     IJ = jimport('ij.IJ')
     ImageCalculator = jimport('ij.plugin.ImageCalculator')
@@ -112,7 +113,8 @@ def calculate_nuc_foci(folder: dict) -> None:
     print("\n--- Processing Nuclei Masks ---")
 
     for filename in star_dist_files:
-        file_path = os.path.join(final_nuclei_mask_folder, filename)
+        file_path = os.path.join(final_nuclei_mask_folder,
+                                 filename)
 
         if not os.path.isfile(file_path):
             print(f"'{file_path}' is not a file. Skipping.")
@@ -131,7 +133,8 @@ def calculate_nuc_foci(folder: dict) -> None:
             print("No nuclei detected.")
         else:
             # Save per-nucleus results
-            results_filename = f"{os.path.splitext(filename)[0]}_Each_nucleus.csv"
+            results_filename = (f"{os.path.splitext(filename)[0]}"
+                                f"_Each_nucleus.csv")
             results_file_path = os.path.join(results_folder, results_filename)
             rt.save(results_file_path)
             print(f"Per nucleus results saved to '{results_file_path}'.")
@@ -146,28 +149,35 @@ def calculate_nuc_foci(folder: dict) -> None:
 
     # Save combined summary for nuclei
     if nuclei_summaries:
+        name_file = (f"{os.path.basename(folder['base_folder'])}_"
+                     f"Combined_Summary_nuclei.csv")
         combined_summary_file = os.path.join(results_folder,
-                                             f"{os.path.basename(folder['base_folder'])}_Combined_Summary_nuclei.csv")
-        with open(combined_summary_file, 'w', encoding='utf-8') as sf:
+                                             name_file)
+        with open(combined_summary_file,
+                  'w', encoding='utf-8') as sf:
             sf.write(nuclei_summary_headers + '\n')
             for line in nuclei_summaries:
                 sf.write(line + '\n')
-        print(f"Combined summary for nuclei saved to '{combined_summary_file}'.")
+        print(f"Combined summary for nuclei "
+              f"saved to '{combined_summary_file}'.")
     else:
-        print(f"No nuclei summary data to save in folder '{folder['base_folder']}'.")
+        print(f"No nuclei summary data to "
+              f"save in folder '{folder['base_folder']}'.")
 
     # ----------------------------
     # Process Foci
     # ----------------------------
     print("\n--- Processing Foci Masks ---")
-
+    name_file = f'Foci_in_nuclei_final_{timestamp}'
     foci_in_nuclei_final_folder = os.path.join(foci_assay_folder,
-                                               f'Foci_in_nuclei_final_{timestamp}')
+                                               name_file)
     Path(foci_in_nuclei_final_folder).mkdir(parents=True, exist_ok=True)
-    print(f"Created folder for combined foci masks: '{foci_in_nuclei_final_folder}'")
+    print(f"Created folder for "
+          f"combined foci masks: '{foci_in_nuclei_final_folder}'")
 
     for foci_filename in foci_projection_files:
-        foci_file_path = os.path.join(foci_masks_folder, foci_filename)
+        foci_file_path = os.path.join(foci_masks_folder,
+                                      foci_filename)
 
         if not os.path.isfile(foci_file_path):
             print(f"'{foci_file_path}' is not a file. Skipping.")
@@ -175,17 +185,22 @@ def calculate_nuc_foci(folder: dict) -> None:
 
         print(f"\nProcessing foci file: {foci_file_path}")
 
-        match = re.match(r'processed_(.+?)_foci_projection\.tif', foci_filename)
+        match = re.match(r'processed_(.+?)_foci_projection\.tif',
+                         foci_filename)
         if match is None:
-            print(f"Could not extract common part from filename '{foci_filename}'. Skipping.")
+            print(f"Could not extract common part "
+                  f"from filename '{foci_filename}'. Skipping.")
             continue
         common_part = match.group(1)
 
-        corr_nuclei_filename = f"processed_{common_part}_nuclei_projection_StarDist_processed.tif"
-        corr_nuclei_file_path = os.path.join(final_nuclei_mask_folder, corr_nuclei_filename)
+        corr_nuclei_filename = (f"processed_{common_part}_nuclei_"
+                                f"projection_StarDist_processed.tif")
+        corr_nuclei_file_path = os.path.join(final_nuclei_mask_folder,
+                                             corr_nuclei_filename)
 
         if not os.path.isfile(corr_nuclei_file_path):
-            print(f"Corresponding nuclei file '{corr_nuclei_filename}' not found. Skipping.")
+            print(f"Corresponding nuclei file "
+                  f"'{corr_nuclei_filename}' not found. Skipping.")
             continue
 
         print(f"Found corresponding nuclei file: {corr_nuclei_file_path}")
@@ -194,26 +209,30 @@ def calculate_nuc_foci(folder: dict) -> None:
 
         imp_foci = IJ.openImage(foci_file_path)
         if imp_foci is None:
-            print(f"Failed to open foci image: {foci_file_path}. Skipping.")
+            print(f"Failed to open foci image: "
+                  f"{foci_file_path}. Skipping.")
             continue
 
         imp_nuclei = IJ.openImage(corr_nuclei_file_path)
         if imp_nuclei is None:
-            print(f"Failed to open nuclei image: {corr_nuclei_file_path}. Skipping.")
+            print(f"Failed to open nuclei image: "
+                  f"{corr_nuclei_file_path}. Skipping.")
             imp_foci.close()
             continue
 
         ic = ImageCalculator()
         imp3 = ic.run(imp_foci, imp_nuclei, "AND create")
         if imp3 is None:
-            print(f"Failed to create combined mask for '{foci_filename}'. Skipping.")
+            print(f"Failed to create combined mask "
+                  f"for '{foci_filename}'. Skipping.")
             imp_foci.close()
             imp_nuclei.close()
             continue
 
         # Save combined mask
         result_mask_filename = f"Result_of_{foci_filename}"
-        result_mask_file_path = os.path.join(foci_in_nuclei_final_folder, result_mask_filename)
+        result_mask_file_path = os.path.join(foci_in_nuclei_final_folder,
+                                             result_mask_filename)
         IJ.saveAs(imp3, "Tiff", result_mask_file_path)
         print(f"Combined mask saved to '{result_mask_file_path}'.")
 
@@ -222,10 +241,13 @@ def calculate_nuc_foci(folder: dict) -> None:
         if rt_foci is None or rt_foci.size() == 0:
             print("No foci detected.")
         else:
-            foci_analysis_filename = f"{os.path.splitext(foci_filename)[0]}_foci_analysis.csv"
-            foci_analysis_file_path = os.path.join(foci_results_folder, foci_analysis_filename)
+            foci_analysis_filename = (f"{os.path.splitext(foci_filename)[0]}"
+                                      f"_foci_analysis.csv")
+            foci_analysis_file_path = os.path.join(foci_results_folder,
+                                                   foci_analysis_filename)
             rt_foci.save(foci_analysis_file_path)
-            print(f"Foci analysis results saved to '{foci_analysis_file_path}'.")
+            print(f"Foci analysis results "
+                  f"saved to '{foci_analysis_file_path}'.")
 
             summary_line = compute_summary_from_rt(rt_foci)
             summary_line = f"{result_mask_filename},{summary_line}"
@@ -238,15 +260,20 @@ def calculate_nuc_foci(folder: dict) -> None:
 
     # Save combined summary for foci
     if foci_summaries:
+        name_file = (f"{os.path.basename(folder['base_folder'])}"
+                     f"_Combined_Summary_foci.csv")
         combined_foci_summary_file = os.path.join(foci_results_folder,
-                                                  f"{os.path.basename(folder['base_folder'])}_Combined_Summary_foci.csv")
-        with open(combined_foci_summary_file, 'w', encoding='utf-8') as sf:
+                                                  name_file)
+        with open(combined_foci_summary_file,
+                  'w', encoding='utf-8') as sf:
             sf.write(foci_summary_headers + '\n')
             for line in foci_summaries:
                 sf.write(line + '\n')
-        print(f"Combined summary for foci saved to '{combined_foci_summary_file}'.")
+        print(f"Combined summary for foci "
+              f"saved to '{combined_foci_summary_file}'.")
     else:
-        print(f"No foci summary data to save in folder '{folder['base_folder']}'.")
+        print(f"No foci summary data to "
+              f"save in folder '{folder['base_folder']}'.")
 
 
 def main_summarize_res(input_json_path: str) -> None:
@@ -258,7 +285,8 @@ def main_summarize_res(input_json_path: str) -> None:
     """
     folders = validate_path_files(input_json_path, step=4)
 
-    start_processing = input("\nDo you want to start processing files? (yes/no): ").strip().lower()
+    start_processing = input("\nDo you want to start processing "
+                             "files? (yes/no): ").strip().lower()
     if start_processing not in ('yes', 'y'):
         raise ValueError("File processing canceled by user.")
 
@@ -270,6 +298,10 @@ def main_summarize_res(input_json_path: str) -> None:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-i', '--input', type=str, help="JSON file with directory paths", required=True)
+    parser.add_argument('-i',
+                        '--input',
+                        type=str,
+                        help="JSON file with directory paths",
+                        required=True)
     args = parser.parse_args()
     main_summarize_res(args.input)
