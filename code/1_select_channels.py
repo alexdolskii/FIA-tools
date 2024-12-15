@@ -168,8 +168,10 @@ def select_channel_name(input_json_path: str) -> None:
     # Ask user if analysis should start
     start_analysis = input("Start analyzing files in "
                            "the specified folders? (yes/no): ").strip().lower()
-    if start_analysis == 'no':
+    if start_analysis in ('no', 'n'):
         raise ValueError("Analysis canceled by user")
+    elif start_analysis not in ('yes', 'y', 'no', 'n'):
+        raise ValueError("Incorrect input. Please enter yes/no")
     process_image(valid_folders)
     print("\nPart 1 successfully completed.")
 

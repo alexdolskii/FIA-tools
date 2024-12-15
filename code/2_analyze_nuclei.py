@@ -93,8 +93,10 @@ def main_analyze_nuclei(input_json_path: str) -> None:
     # Ask user if analysis should start
     start_analysis = input("Start analyzing "
                            "Nuclei folders? (yes/no): ").strip().lower()
-    if start_analysis != 'yes':
-        raise ValueError("Analysis canceled by user.")
+    if start_analysis in ('no', 'n'):
+        raise ValueError("Analysis canceled by user")
+    elif start_analysis not in ('yes', 'y', 'no', 'n'):
+        raise ValueError("Incorrect input. Please enter yes/no")
     find_nuclei(nuclei_folders)
     print("Analysis of all Nuclei folders completed.")
 

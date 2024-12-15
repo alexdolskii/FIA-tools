@@ -189,8 +189,10 @@ def main_filter_imgs(input_json_path: str,
     # Request to start processing
     start_processing = input("\nStart processing the "
                              "found folders? (yes/no): ").strip().lower()
-    if start_processing not in ('yes', 'y'):
-        raise ValueError("File processing canceled by user.")
+    if start_processing in ('no', 'n'):
+        raise ValueError("Analysis canceled by user")
+    elif start_processing not in ('yes', 'y', 'no', 'n'):
+        raise ValueError("Incorrect input. Please enter yes/no")
 
     # Process files in valid folders
     for path in folders.keys():

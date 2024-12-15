@@ -287,8 +287,10 @@ def main_summarize_res(input_json_path: str) -> None:
 
     start_processing = input("\nDo you want to start processing "
                              "files? (yes/no): ").strip().lower()
-    if start_processing not in ('yes', 'y'):
-        raise ValueError("File processing canceled by user.")
+    if start_processing in ('no', 'n'):
+        raise ValueError("Analysis canceled by user")
+    elif start_processing not in ('yes', 'y', 'no', 'n'):
+        raise ValueError("Incorrect input. Please enter yes/no")
 
     print("\nStarting image processing...")
     for path in folders.keys():
