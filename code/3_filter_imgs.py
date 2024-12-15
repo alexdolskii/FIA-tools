@@ -27,7 +27,7 @@ def filter_in_folder(folder: dict,
     print("Initializing ImageJ...")
 
     ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print("ImageJ successfully initialized.")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
 
     # Import Java classes
     IJ = jimport('ij.IJ')
