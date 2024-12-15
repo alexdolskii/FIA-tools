@@ -25,7 +25,7 @@ def process_image(valid_folders: list) -> None:
     # Initialize ImageJ
     print("Initializing ImageJ...")
     ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print("ImageJ initialization completed.")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
 
     # Import Java classes
     IJ = jimport('ij.IJ')
