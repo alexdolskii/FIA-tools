@@ -1,6 +1,6 @@
 import json
-import os
 import logging
+import os
 from datetime import datetime
 
 
@@ -72,7 +72,9 @@ def validate_path_files(input_json_path: str,
 
             logging.getLogger('').addHandler(file_handler)
 
-            nuclei_folder = os.path.join(folder, 'foci_assay', 'Nuclei')
+            nuclei_folder = os.path.join(folder,
+                                         'foci_assay',
+                                         'Nuclei')
             if os.path.exists(nuclei_folder):
                 files = os.listdir(nuclei_folder)
                 file_formats = set(os.path.splitext(f)[1] for f in files)
@@ -114,35 +116,46 @@ def validate_path_files(input_json_path: str,
             else:
                 result[folder]["foci_folder"] = foci_folder
 
-            # Find the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>' inside 'foci_assay'
+            # Find the latest folder
+            # 'Nuclei_StarDist_mask_processed_<timestamp>'
+            # inside 'foci_assay'
             processed_folders = []
             for name in os.listdir(foci_assay_folder):
                 if name.startswith('Nuclei_StarDist_mask_processed_'):
-                    timestamp_str = name.replace('Nuclei_StarDist_mask_processed_', '')
-                    timestamp = datetime.strptime(timestamp_str, '%Y%m%d_%H%M%S')
-                    processed_folders.append((timestamp, os.path.join(foci_assay_folder, name)))
+                    timestamp_str = name.replace(
+                        'Nuclei_StarDist_mask_processed_', '')
+                    timestamp = datetime.strptime(timestamp_str,
+                                                  '%Y%m%d_%H%M%S')
+                    processed_folders.append((timestamp,
+                                              os.path.join(foci_assay_folder,
+                                                           name)))
 
             if len(processed_folders) == 0:
-                raise ValueError(f"No folders found starting with "
-                           f"'Nuclei_StarDist_mask_processed_' "
-                           f"in '{foci_assay_folder}'. Skipping this folder.")
+                logging.error(f"No folders found starting with "
+                              f"'Nuclei_StarDist_mask_processed_' "
+                              f"in '{foci_assay_folder}'. "
+                              f"Skipping this folder.")
             else:
                 # Select the latest folder
-                latest_processed_folder = max(processed_folders, key=lambda x: x[0])[1]
+                latest_processed_folder = max(processed_folders,
+                                              key=lambda x: x[0])[1]
                 print(f"Found latest folder "
-                      f"'Nuclei_StarDist_mask_processed_': {latest_processed_folder}")
+                      f"'Nuclei_StarDist_mask_processed_'"
+                      f": {latest_processed_folder}")
                 result[folder]["nuclei_folder"] = latest_processed_folder
 
             # Check for files in 'Foci'
             foci_files = [f for f in os.listdir(foci_folder)
                           if f.lower().endswith('.tif')]
             if len(foci_files) == 0:
-                logging.error(f"No files with '.tif' "
-                              f"extension found in folder 'Foci'. Skipping this folder.")
+                logging.error("No files with '.tif' "
+                              "extension found in folder 'Foci'. "
+                              "Skipping this folder.")
             else:
                 result[folder]["foci_files"] = foci_files
 
-            # Check for files in the latest folder 'Nuclei_StarDist_mask_processed_<timestamp>'
+            # Check for files in the latest folder
+            # 'Nuclei_StarDist_mask_processed_<timestamp>'
             nuclei_files = [f for f in os.listdir(latest_processed_folder)
                             if f.lower().endswith('.tif')]
             if len(nuclei_files) == 0:
@@ -153,13 +166,17 @@ def validate_path_files(input_json_path: str,
                 result[folder]["nuclei_files"] = nuclei_files
 
             # Information about found files
-            print(f"\n--- File information in folder '{foci_assay_folder}' ---")
+            print(f"\n--- File information in folder "
+                  f"'{foci_assay_folder}' ---")
             print(
                 f"Number of files found in 'Foci': {len(foci_files)}. "
-                f"Data types: {set(os.path.splitext(f)[-1] for f in foci_files)}")
+                f"Data types: "
+                f"{set(os.path.splitext(f)[-1] for f in foci_files)}")
             print(
-                f"Number of files found in 'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. "
-                f"Data types: {set(os.path.splitext(f)[-1] for f in nuclei_files)}")
+                f"Number of files found in "
+                f"'Nuclei_StarDist_mask_processed_': {len(nuclei_files)}. "
+                f"Data types: "
+                f"{set(os.path.splitext(f)[-1] for f in nuclei_files)}")
     elif step == 4:
         result = {}
         for folder in valid_folders:
@@ -187,60 +204,82 @@ def validate_path_files(input_json_path: str,
             final_nuclei_folders = []
             for name in os.listdir(foci_assay_folder):
                 if name.startswith('Final_Nuclei_Mask_'):
-                    date_str = name.replace('Final_Nuclei_Mask_', '')
-                    folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                    final_nuclei_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+                    date_str = name.replace(
+                        'Final_Nuclei_Mask_', '')
+                    folder_datetime = datetime.strptime(date_str,
+                                                        '%Y%m%d_%H%M%S')
+                    (final_nuclei_folders
+                     .append((folder_datetime,
+                              os.path.join(foci_assay_folder,
+                                           name))))
 
             if len(final_nuclei_folders) == 0:
-                logging.error(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' "
-                              f"found in '{foci_assay_folder}'. Skipping this folder.")
+                logging.error(f"No folders "
+                              f"'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' "
+                              f"found in '{foci_assay_folder}'. "
+                              f"Skipping this folder.")
             else:
                 # Find the latest Final_Nuclei_Mask
                 lat_fin_nuc_mask_dir = (max(final_nuclei_folders,
                                             key=lambda x: x[0])[1])
                 print(f"Selected the latest "
-                      f"'Final_Nuclei_Mask' folder: {lat_fin_nuc_mask_dir}")
-                result[folder]['final_nuclei_mask_folder'] = lat_fin_nuc_mask_dir
+                      f"'Final_Nuclei_Mask' folder"
+                      f": {lat_fin_nuc_mask_dir}")
+                name = 'final_nuclei_mask_folder'
+                result[folder][name] = lat_fin_nuc_mask_dir
 
                 # Count the number of files that finished
                 # on '_StarDist_processed.tif'
-                star_dist_processed_files = [f for f in os.listdir(lat_fin_nuc_mask_dir) if
-                                             f.endswith('_StarDist_processed.tif')]
-                star_dist_count = len(star_dist_processed_files)
+                star_dist_proc_files = [f for f in
+                                        os.listdir(lat_fin_nuc_mask_dir) if
+                                        f.endswith('_StarDist_processed.tif')]
+                star_dist_count = len(star_dist_proc_files)
                 print(
-                    f"Number of '_StarDist_processed.tif' files in '{lat_fin_nuc_mask_dir}': {star_dist_count}")
-                result[folder]['star_dist_files'] = star_dist_processed_files
+                    f"Number of '_StarDist_processed.tif' "
+                    f"files in '{lat_fin_nuc_mask_dir}': {star_dist_count}")
+                result[folder]['star_dist_files'] = star_dist_proc_files
                 result[folder]['star_dist_count'] = star_dist_count
 
             # Search for the latest 'Foci_Mask_YYYYMMDD_HHMMSS'
             foci_masks_folders = []
             for name in os.listdir(foci_assay_folder):
                 if name.startswith('Foci_Mask_'):
-                    date_str = name.replace('Foci_Mask_', '')
-                    folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                    foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+                    date_str = name.replace(
+                        'Foci_Mask_', '')
+                    folder_datetime = datetime.strptime(date_str,
+                                                        '%Y%m%d_%H%M%S')
+                    foci_masks_folders.append((folder_datetime,
+                                               os.path.join(foci_assay_folder,
+                                                            name)))
 
             if len(foci_masks_folders) == 0:
-                logging_error(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' "
-                              f"found in '{foci_assay_folder}'. Skipping this folder.")
+                logging.error(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' "
+                              f"found in '{foci_assay_folder}'. "
+                              f"Skipping this folder.")
 
             else:
                 # Chose the latest Foci_Mask
-                latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
+                latest_foci_masks_folder = max(foci_masks_folders,
+                                               key=lambda x: x[0])[1]
                 print(f"Selected the latest 'Foci_Mask' "
                       f"folder: {latest_foci_masks_folder}")
                 result[folder]['foci_masks_folder'] = latest_foci_masks_folder
 
-                # Count the number of files that ended as '_foci_projection.tif'
-                foci_projection_files = [f for f in os.listdir(latest_foci_masks_folder) if
+                # Count the number of files
+                # that ended as '_foci_projection.tif'
+                foci_projection_files = [f for f in
+                                         os.listdir(latest_foci_masks_folder)
+                                         if
                                          f.endswith('_foci_projection.tif')]
                 foci_projection_count = len(foci_projection_files)
                 print(f"Number of '_foci_projection.tif' files in "
                       f"'{latest_foci_masks_folder}': {foci_projection_count}")
                 result[folder]['foci_projection_files'] = foci_projection_files
                 result[folder]['foci_projection_count'] = foci_projection_count
-                print(f"  Found '_StarDist_processed.tif' files: {star_dist_count}")
-                print(f"  Found '_foci_projection.tif' files: {foci_projection_count}")
+                print(f"  Found '_StarDist_processed.tif' "
+                      f"files: {star_dist_count}")
+                print(f"  Found '_foci_projection.tif' "
+                      f"files: {foci_projection_count}")
 
             # Check if there are folders for processing
             if len(result) == 0:
