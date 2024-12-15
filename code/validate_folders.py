@@ -62,6 +62,16 @@ def validate_path_files(input_json_path: str,
         # Search for Nuclei folder in each folder and determine file types
         nuclei_folders = []
         for folder in valid_folders:
+            # Setting up logging
+            file_handler = logging.FileHandler(os.path.join(folder,
+                                                            '2_val_log.txt'),
+                                               mode='w')
+            file_handler.setLevel(logging.WARNING)
+            file_handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+            logging.getLogger('').addHandler(file_handler)
+
             nuclei_folder = os.path.join(folder, 'foci_assay', 'Nuclei')
             if os.path.exists(nuclei_folder):
                 files = os.listdir(nuclei_folder)
@@ -70,26 +80,37 @@ def validate_path_files(input_json_path: str,
                       f"File types: {', '.join(file_formats)}")
                 nuclei_folders.append(nuclei_folder)
             else:
-                raise ValueError(f"Nuclei folder not "
-                                 f"found in '{folder}/foci_assay'.")
+                logging.error(f"Nuclei folder not "
+                              f"found in '{folder}/foci_assay'.")
         result = nuclei_folders
     elif step == 3:
         result = {}
         for folder in valid_folders:
+            # Setting up logging
+            file_handler = logging.FileHandler(os.path.join(folder,
+                                                            '3_val_log.txt'),
+                                               mode='w')
+            file_handler.setLevel(logging.WARNING)
+            file_handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+            logging.getLogger('').addHandler(file_handler)
+
             result[folder] = {}
             foci_assay_folder = os.path.join(folder, 'foci_assay')
             if not os.path.exists(foci_assay_folder):
-                raise ValueError(f"Subfolder 'foci_assay' not found "
-                                 f"in folder '{folder}'. Skipping this folder.")
+                logging.error(f"Subfolder 'foci_assay' not found "
+                              f"in folder '{folder}'. Skipping this folder.")
+                continue
             else:
                 result[folder]["foci_assay_folder"] = foci_assay_folder
 
             # Check for 'Foci' subfolder inside 'foci_assay'
             foci_folder = os.path.join(foci_assay_folder, 'Foci')
             if not os.path.exists(foci_folder):
-                raise ValueError(f"Subfolder 'Foci' not found "
-                                 f"in folder '{foci_assay_folder}'. "
-                                 f"Skipping this folder.")
+                logging.error(f"Subfolder 'Foci' not found "
+                              f"in folder '{foci_assay_folder}'. "
+                              f"Skipping this folder.")
             else:
                 result[folder]["foci_folder"] = foci_folder
 
@@ -116,8 +137,8 @@ def validate_path_files(input_json_path: str,
             foci_files = [f for f in os.listdir(foci_folder)
                           if f.lower().endswith('.tif')]
             if len(foci_files) == 0:
-                raise ValueError(f"No files with '.tif' "
-                                 f"extension found in folder 'Foci'. Skipping this folder.")
+                logging.error(f"No files with '.tif' "
+                              f"extension found in folder 'Foci'. Skipping this folder.")
             else:
                 result[folder]["foci_files"] = foci_files
 
@@ -125,9 +146,9 @@ def validate_path_files(input_json_path: str,
             nuclei_files = [f for f in os.listdir(latest_processed_folder)
                             if f.lower().endswith('.tif')]
             if len(nuclei_files) == 0:
-                raise ValueError(f"No files with '.tif' extension "
-                                 f"found in folder '{latest_processed_folder}'. "
-                                 f"Skipping this folder.")
+                logging.error(f"No files with '.tif' extension "
+                              f"found in folder '{latest_processed_folder}'. "
+                              f"Skipping this folder.")
             else:
                 result[folder]["nuclei_files"] = nuclei_files
 
@@ -142,13 +163,24 @@ def validate_path_files(input_json_path: str,
     elif step == 4:
         result = {}
         for folder in valid_folders:
+            # Setting up logging
+            file_handler = logging.FileHandler(os.path.join(folder,
+                                                            '4_val_log.txt'),
+                                               mode='w')
+            file_handler.setLevel(logging.WARNING)
+            file_handler.setFormatter(
+                logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+            logging.getLogger('').addHandler(file_handler)
+
             result[folder] = {}
             result[folder]['base_folder'] = folder
             # Check for 'foci_assay' subdirectory
             foci_assay_folder = os.path.join(folder, 'foci_assay')
             if not os.path.exists(foci_assay_folder):
-                raise ValueError(f"Subdirectory 'foci_assay' not found "
-                                 f"in folder '{folder}'. Skipping this folder.")
+                logging.error(f"Subdirectory 'foci_assay' not found "
+                              f"in folder '{folder}'. Skipping this folder.")
+                continue
             else:
                 result[folder]['foci_assay_folder'] = foci_assay_folder
             # Find the dir 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS'
@@ -160,8 +192,8 @@ def validate_path_files(input_json_path: str,
                     final_nuclei_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
 
             if len(final_nuclei_folders) == 0:
-                raise ValueError(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' "
-                                 f"found in '{foci_assay_folder}'. Skipping this folder.")
+                logging.error(f"No folders 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' "
+                              f"found in '{foci_assay_folder}'. Skipping this folder.")
             else:
                 # Find the latest Final_Nuclei_Mask
                 lat_fin_nuc_mask_dir = (max(final_nuclei_folders,
@@ -189,8 +221,8 @@ def validate_path_files(input_json_path: str,
                     foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
 
             if len(foci_masks_folders) == 0:
-                raise ValueError(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' "
-                                 f"found in '{foci_assay_folder}'. Skipping this folder.")
+                logging_error(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' "
+                              f"found in '{foci_assay_folder}'. Skipping this folder.")
 
             else:
                 # Chose the latest Foci_Mask
