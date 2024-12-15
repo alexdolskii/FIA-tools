@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
 import os
 from pathlib import Path
 
 import imagej
 from scyjava import jimport
-
 from validate_folders import validate_path_files
 
 
@@ -29,9 +29,7 @@ def process_image(valid_folders: list) -> None:
 
     # Import Java classes
     IJ = jimport('ij.IJ')
-    ImagePlus = jimport('ij.ImagePlus')
     ZProjector = jimport('ij.plugin.ZProjector')
-    Prefs = jimport('ij.Prefs')
 
     # Request channel numbers from user
     nuclei_channel = int(input("Enter the channel number for "
@@ -57,6 +55,14 @@ def process_image(valid_folders: list) -> None:
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
         print(f"\nProcessed images "
               f"will be saved in a new folder: {processed_folder}")
+        # Setting up logging
+        file_handler = logging.FileHandler(os.path.join(processed_folder,
+                                                        '1_log.txt'), mode='w')
+        file_handler.setLevel(logging.WARNING)
+        file_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+        logging.getLogger('').addHandler(file_handler)
 
         # Create output folders for images
         nuclei_folder = os.path.join(processed_folder, "Nuclei")
@@ -70,8 +76,8 @@ def process_image(valid_folders: list) -> None:
 
         for filename in os.listdir(input_folder):
             if not filename.lower().endswith('.nd2'):
-                print(f"Skipping file '{filename}',"
-                      f" as it is not an .nd2 file.")
+                logging.error(f"Skipping file '{filename}',"
+                              f" as it is not an .nd2 file.")
                 continue
 
             file_path = os.path.join(input_folder, filename)
@@ -83,8 +89,8 @@ def process_image(valid_folders: list) -> None:
             # Open the image in ImageJ using Bio-Formats
             imp = IJ.openImage(file_path)
             if imp is None:
-                raise ValueError(f"Failed to open image: {file_path}. "
-                                 f"Check Bio-Formats plugin")
+                logging.warning(f"Failed to open image: {file_path}. "
+                                f"Check Bio-Formats plugin")
 
             # Get image dimensions
             width, height, channels, slices, frames = imp.getDimensions()
@@ -94,8 +100,8 @@ def process_image(valid_folders: list) -> None:
 
             # Check if specified channels are available
             if nuclei_channel > channels or foci_channel > channels:
-                print(f"Specified channels exceed available "
-                      f"channels in '{filename}'. Skipping file.")
+                logging.error(f"Specified channels exceed available "
+                              f"channels in '{filename}'. Skipping file.")
                 imp.close()
                 continue
 
@@ -163,6 +169,16 @@ def select_channel_name(input_json_path: str) -> None:
         Processed in new directory "foci_assay" that is created
         in each provided path
     """
+    # Setting up logging
+    logging.basicConfig(level=logging.WARNING,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logging.getLogger('').addHandler(console_handler)
+
     valid_folders = validate_path_files(input_json_path, 1)
 
     # Ask user if analysis should start

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import os
 from datetime import datetime
 
@@ -48,6 +49,16 @@ def filter_in_folder(folder: dict,
     os.makedirs(foci_mask_folder, exist_ok=True)
     os.makedirs(nuclei_mask_folder, exist_ok=True)
 
+    # Setting up logging
+    file_handler = logging.FileHandler(os.path.join(foci_mask_folder,
+                                                    '3_foci_log.txt'),
+                                       mode='w')
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    logging.getLogger('').addHandler(file_handler)
+
     # Process images in 'Foci' folder
     for filename in foci_files:
         file_path = os.path.join(foci_folder, filename)
@@ -58,7 +69,7 @@ def filter_in_folder(folder: dict,
         # Open image
         imp = IJ.openImage(file_path)
         if imp is None:
-            print(f"Failed to open image: {file_path}")
+            logging.error(f"Failed to open image: {file_path}")
             continue
 
         # Convert image to 8-bit
@@ -89,7 +100,7 @@ def filter_in_folder(folder: dict,
             # If title differs, try to find the last opened image
             imp_mask = WindowManager.getCurrentImage()
             if imp_mask is None:
-                print(f"Failed to get mask for image: {file_path}")
+                logging.error(f"Failed to get mask for image: {file_path}")
                 continue
 
         # Save processed image
@@ -102,6 +113,15 @@ def filter_in_folder(folder: dict,
         imp.close()
         imp_mask.close()
 
+    # Setting up logging
+    file_handler = logging.FileHandler(os.path.join(nuclei_mask_folder,
+                                                    '3_nuc_log.txt'), mode='w')
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    logging.getLogger('').addHandler(file_handler)
+
     # Process images in the latest 'Nuclei' folder
     for filename in nuclei_files:
         file_path = os.path.join(nuclei_folder, filename)
@@ -112,7 +132,7 @@ def filter_in_folder(folder: dict,
         # Open image
         imp = IJ.openImage(file_path)
         if imp is None:
-            print(f"Failed to open image: {file_path}")
+            logging.error(f"Failed to open image: {file_path}")
             continue
 
         # Convert image to 8-bit
@@ -144,7 +164,7 @@ def filter_in_folder(folder: dict,
             # If title differs, try to find the last opened image
             imp_mask = WindowManager.getCurrentImage()
             if imp_mask is None:
-                print(f"Failed to get mask for image: {file_path}")
+                logging.error(f"Failed to get mask for image: {file_path}")
                 continue
 
         # Save processed image
@@ -178,6 +198,16 @@ def main_filter_imgs(input_json_path: str,
     Returns:
         Two directories: 'Final_Nuclei_Mask' and 'Foci_Mask'
     """
+    # Setting up logging
+    logging.basicConfig(level=logging.WARNING,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logging.getLogger('').addHandler(console_handler)
+
     if not isinstance(particle_size, int):
         raise ValueError('Particle size must be integer!')
 

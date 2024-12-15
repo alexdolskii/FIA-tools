@@ -1,9 +1,11 @@
 import json
 import os
+import logging
 from datetime import datetime
 
 
-def validate_path_files(input_json_path: str, step: int) -> list:
+def validate_path_files(input_json_path: str,
+                        step: int) -> list:
     """
     Function validate_path_files read json file with the path
     to files and check if they all exist
@@ -28,7 +30,8 @@ def validate_path_files(input_json_path: str, step: int) -> list:
                             .replace('\\', '/') for path in folder_paths]
 
     if len(folder_paths) == 0:
-        raise ValueError("The file does not contain folder paths. Please check the file content.")
+        raise ValueError("The file does not contain folder paths. "
+                         "Please check the file content.")
 
     # Check existence of folders and count the number of files in each
     print(f"Found {len(folder_paths)} folders for verification.")
@@ -63,10 +66,12 @@ def validate_path_files(input_json_path: str, step: int) -> list:
             if os.path.exists(nuclei_folder):
                 files = os.listdir(nuclei_folder)
                 file_formats = set(os.path.splitext(f)[1] for f in files)
-                print(f"Nuclei folder found: {nuclei_folder}, File types: {', '.join(file_formats)}")
+                print(f"Nuclei folder found: {nuclei_folder}, "
+                      f"File types: {', '.join(file_formats)}")
                 nuclei_folders.append(nuclei_folder)
             else:
-                raise ValueError(f"Nuclei folder not found in '{folder}/foci_assay'.")
+                raise ValueError(f"Nuclei folder not "
+                                 f"found in '{folder}/foci_assay'.")
         result = nuclei_folders
     elif step == 3:
         result = {}

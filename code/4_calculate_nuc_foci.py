@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import logging
 import os
 import re
 from datetime import datetime
@@ -96,6 +97,17 @@ def calculate_nuc_foci(folder: dict) -> None:
                                        f'Foci_count_results_{timestamp}')
     Path(foci_results_folder).mkdir(parents=True, exist_ok=True)
 
+    # Setting up logging
+    file_handler = logging.FileHandler(os.path.join(folder['base_folder'],
+                                                    'foci_analysis',
+                                                    '4_log.txt'),
+                                       mode='w')
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+    logging.getLogger('').addHandler(file_handler)
+
     final_nuclei_mask_folder = folder['final_nuclei_mask_folder']
     foci_masks_folder = folder['foci_masks_folder']
     star_dist_files = folder['star_dist_files']
@@ -117,7 +129,7 @@ def calculate_nuc_foci(folder: dict) -> None:
                                  filename)
 
         if not os.path.isfile(file_path):
-            print(f"'{file_path}' is not a file. Skipping.")
+            logging.error(f"'{file_path}' is not a file. Skipping.")
             continue
 
         print(f"\nProcessing file: {file_path}")
@@ -125,12 +137,12 @@ def calculate_nuc_foci(folder: dict) -> None:
 
         imp = IJ.openImage(file_path)
         if imp is None:
-            print(f"Failed to open image: {file_path}")
+            logging.error(f"Failed to open image: {file_path}")
             continue
 
         rt = analyze_particles(imp)
         if rt is None or rt.size() == 0:
-            print("No nuclei detected.")
+            logging.warning("No nuclei detected.")
         else:
             # Save per-nucleus results
             results_filename = (f"{os.path.splitext(filename)[0]}"
@@ -161,8 +173,8 @@ def calculate_nuc_foci(folder: dict) -> None:
         print(f"Combined summary for nuclei "
               f"saved to '{combined_summary_file}'.")
     else:
-        print(f"No nuclei summary data to "
-              f"save in folder '{folder['base_folder']}'.")
+        logging.error(f"No nuclei summary data to "
+                      f"save in folder '{folder['base_folder']}'.")
 
     # ----------------------------
     # Process Foci
@@ -180,7 +192,7 @@ def calculate_nuc_foci(folder: dict) -> None:
                                       foci_filename)
 
         if not os.path.isfile(foci_file_path):
-            print(f"'{foci_file_path}' is not a file. Skipping.")
+            logging.error(f"'{foci_file_path}' is not a file. Skipping.")
             continue
 
         print(f"\nProcessing foci file: {foci_file_path}")
@@ -188,8 +200,8 @@ def calculate_nuc_foci(folder: dict) -> None:
         match = re.match(r'processed_(.+?)_foci_projection\.tif',
                          foci_filename)
         if match is None:
-            print(f"Could not extract common part "
-                  f"from filename '{foci_filename}'. Skipping.")
+            logging.warning(f"Could not extract common part "
+                            f"from filename '{foci_filename}'. Skipping.")
             continue
         common_part = match.group(1)
 
@@ -199,8 +211,8 @@ def calculate_nuc_foci(folder: dict) -> None:
                                              corr_nuclei_filename)
 
         if not os.path.isfile(corr_nuclei_file_path):
-            print(f"Corresponding nuclei file "
-                  f"'{corr_nuclei_filename}' not found. Skipping.")
+            logging.error(f"Corresponding nuclei file "
+                          f"'{corr_nuclei_filename}' not found. Skipping.")
             continue
 
         print(f"Found corresponding nuclei file: {corr_nuclei_file_path}")
@@ -209,22 +221,22 @@ def calculate_nuc_foci(folder: dict) -> None:
 
         imp_foci = IJ.openImage(foci_file_path)
         if imp_foci is None:
-            print(f"Failed to open foci image: "
-                  f"{foci_file_path}. Skipping.")
+            logging.error(f"Failed to open foci image: "
+                          f"{foci_file_path}. Skipping.")
             continue
 
         imp_nuclei = IJ.openImage(corr_nuclei_file_path)
         if imp_nuclei is None:
-            print(f"Failed to open nuclei image: "
-                  f"{corr_nuclei_file_path}. Skipping.")
+            logging.error(f"Failed to open nuclei image: "
+                          f"{corr_nuclei_file_path}. Skipping.")
             imp_foci.close()
             continue
 
         ic = ImageCalculator()
         imp3 = ic.run(imp_foci, imp_nuclei, "AND create")
         if imp3 is None:
-            print(f"Failed to create combined mask "
-                  f"for '{foci_filename}'. Skipping.")
+            logging.error(f"Failed to create combined mask "
+                          f"for '{foci_filename}'. Skipping.")
             imp_foci.close()
             imp_nuclei.close()
             continue
@@ -239,7 +251,7 @@ def calculate_nuc_foci(folder: dict) -> None:
         # Analyze foci
         rt_foci = analyze_particles(imp3)
         if rt_foci is None or rt_foci.size() == 0:
-            print("No foci detected.")
+            logging.warning("No foci detected.")
         else:
             foci_analysis_filename = (f"{os.path.splitext(foci_filename)[0]}"
                                       f"_foci_analysis.csv")
@@ -272,8 +284,8 @@ def calculate_nuc_foci(folder: dict) -> None:
         print(f"Combined summary for foci "
               f"saved to '{combined_foci_summary_file}'.")
     else:
-        print(f"No foci summary data to "
-              f"save in folder '{folder['base_folder']}'.")
+        logging.error(f"No foci summary data to "
+                      f"save in folder '{folder['base_folder']}'.")
 
 
 def main_summarize_res(input_json_path: str) -> None:
@@ -283,6 +295,16 @@ def main_summarize_res(input_json_path: str) -> None:
     - Prompt user to start processing
     - Run processing for each path
     """
+    # Setting up logging
+    logging.basicConfig(level=logging.WARNING,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logging.getLogger('').addHandler(console_handler)
+
     folders = validate_path_files(input_json_path, step=4)
 
     start_processing = input("\nDo you want to start processing "

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -9,7 +10,6 @@ import numpy as np
 from csbdeep.utils import normalize
 from skimage.io import imread, imsave
 from stardist.models import StarDist2D
-
 from validate_folders import validate_path_files
 
 
@@ -39,14 +39,23 @@ def find_nuclei(nuclei_folders: list) -> None:
                                      output_folder_name)
         Path(output_folder).mkdir(parents=True, exist_ok=True)
 
+        # Setting up logging
+        file_handler = logging.FileHandler(os.path.join(output_folder,
+                                                        '2_log.txt'), mode='w')
+        file_handler.setLevel(logging.WARNING)
+        file_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+        logging.getLogger('').addHandler(file_handler)
+
         # Get list of files with .tif extension
         image_files = [f for f in os.listdir(nuclei_folder)
                        if f.endswith('.tif')]
 
         # Check if there are any images in the folder
         if not image_files:
-            print(f"No .tif images found in folder "
-                  f"'{nuclei_folder}'. Skipping folder.")
+            logging.error(f"No .tif images found in folder "
+                          f"'{nuclei_folder}'. Skipping folder.")
             continue
 
         # Process each image in the folder
@@ -56,8 +65,8 @@ def find_nuclei(nuclei_folders: list) -> None:
 
             # Check if the image is 8-bit grayscale
             if image.dtype != np.uint8:
-                print(f"Image '{image_file}' "
-                      f"is not 8-bit grayscale. Skipping file.")
+                logging.error(f"Image '{image_file}' "
+                              f"is not 8-bit grayscale. Skipping file.")
                 continue
 
             # Normalize the image
@@ -88,6 +97,15 @@ def main_analyze_nuclei(input_json_path: str) -> None:
         The new folder that starts with Nuclei_StarDist_mask_processed
         in each provided directory
     """
+    # Setting up logging
+    logging.basicConfig(level=logging.WARNING,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.WARNING)
+    console_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
     nuclei_folders = validate_path_files(input_json_path, 2)
 
     # Ask user if analysis should start
