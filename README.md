@@ -102,10 +102,10 @@ Additionally, before starting the program, make sure you know how many fluoresce
 
 
 2. Run the main analysis script:
-    - 'python ./code/1_select_channels.py -i input_paths.json'
-    - 'python ./code/2_analyze_nuclei.py -i input_paths.json'
-    - 'python ./code/3_filter_imgs -i input_paths.json'
-    - 'python ./code/4_calculate_nuc_foci.py -i input_paths.json'
+    - `python ./code/1_select_channels.py -i input_paths.json`
+    - `python ./code/2_analyze_nuclei.py -i input_paths.json`
+    - `python ./code/3_filter_imgs -i input_paths.json`
+    - `python ./code/4_calculate_nuc_foci.py -i input_paths.json`
 
 
 # FIA-tool workflow description
