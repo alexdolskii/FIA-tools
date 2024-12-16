@@ -77,20 +77,19 @@ For macOS users, skip the WSL installation and work directly in the terminal.
    - `git branch` (You will see a list of branches, and an asterisk (`*`), confirming you are on the correct branch)
    - `git pull` (This will fetch all new changes from the remote repository in the FIA-tools)
 5. Make the main script executable:
-    ```
-    chmod +x code/1_select_channels.py`
-    chmod +x code/2_analyze_nuclei.py`
-    chmod +x code/3_filter_imgs
-    chmod +x code/4_calculate_nuc_foci.py
-    ```
+    - `chmod +x code/1_select_channels.py`
+    - `chmod +x code/2_analyze_nuclei.py`
+    - `chmod +x code/3_filter_imgs`
+    - `chmod +x code/4_calculate_nuc_foci.py`
+
 
 
 ### Step 4: Create Environment for UMA Tools
 1. Create the environment:
     - `conda env create -f fia_tools_environment_Linux_MacOs.yml -n fia_tools_environment_Linux_MacOs`
-    To check conda environments:
+To check conda environments:
     - `conda info --envs`
-    To delete conda envioment:
+To delete conda envioment:
     - `conda remove --name <environment_name> --all`
 
 2. Activate the environment:
@@ -104,12 +103,11 @@ Additionally, before starting the program, make sure you know how many fluoresce
 
 
 2. Run the main analysis script:
-```
-   python ./code/1_select_channels.py -i input_paths.json
-   python ./code/2_analyze_nuclei.py -i input_paths.json
-   python ./code/3_filter_imgs -i input_paths.json
-   python ./code/4_calculate_nuc_foci.py -i input_paths.json
-```
+    - 'python ./code/1_select_channels.py -i input_paths.json'
+    - 'python ./code/2_analyze_nuclei.py -i input_paths.json'
+    - 'python ./code/3_filter_imgs -i input_paths.json'
+    - 'python ./code/4_calculate_nuc_foci.py -i input_paths.json'
+
 
 # FIA-tool workflow description
 ## 1_select_channels.py
