@@ -47,11 +47,11 @@ For macOS users, skip the WSL installation and work directly in the terminal.
 1. Open Powerell with administrator privileges:
     Press the Windows key, type "Powerell," right-click on it, and select "Run as administrator".
 2. Run the following command to install WSL:
-    - wsl --install
+    - `wsl --install`
 3. After the installation, restart your computer.
 4. Once WSL is installed, open your WSL terminal and run:
-    - sudo apt update
-    - sudo apt upgrade -y
+    - `sudo apt update`
+    - `sudo apt upgrade -y`
 
 ### Step 2: Install Miniconda
 1. You can find instructions for Lunux or MacOs:
@@ -60,39 +60,41 @@ For macOS users, skip the WSL installation and work directly in the terminal.
 
 ### Step 3: Clone a GitHub Repository on WSL
 1. Check if Git is installed:
-   - git --version
-   - sudo apt update
-   - sudo apt install git
+   - `git --version`
+   - `sudo apt update`
+   - `sudo apt install git`
 2. Choose the Directory for Cloning
-   - cd ~
-   - cd ..
-   - ls
+   - `cd ~`
+   - `cd ..`
+   - `ls`
    Or create another folder if preferred:
-   - mkdir <folder_name>
-   - cd <folder_name>
+   - `mkdir <folder_name>`
+   - `cd <folder_name>`
 3. Clone the Repository:
-   - git clone https://github.com/alexdolskii/FIA-tools
+   - `git clone https://github.com/alexdolskii/FIA-tools`
 4. Verify the Result:
-   - cd FIA-tools
-   - git branch (You will see a list of branches, and an asterisk (`*`), confirming you are on the correct branch)
-   - git pull (This will fetch all new changes from the remote repository in the `FIA-tools`)
+   - `cd FIA-tools`
+   - `git branch` (You will see a list of branches, and an asterisk (`*`), confirming you are on the correct branch)
+   - `git pull` (This will fetch all new changes from the remote repository in the FIA-tools)
 5. Make the main script executable:
-    - chmod +x code/1_select_channels.py
-    - chmod +x code/2_analyze_nuclei.py
-    - chmod +x code/3_filter_imgs
-    - chmod +x code/4_calculate_nuc_foci.py
+    ```
+    chmod +x code/1_select_channels.py`
+    chmod +x code/2_analyze_nuclei.py`
+    chmod +x code/3_filter_imgs
+    chmod +x code/4_calculate_nuc_foci.py
+    ```
 
 
 ### Step 4: Create Environment for UMA Tools
 1. Create the environment:
-    - conda env create -f fia_tools_environment_Linux_MacOs.yml -n fia_tools_environment_Linux_MacOs
+    - `conda env create -f fia_tools_environment_Linux_MacOs.yml -n fia_tools_environment_Linux_MacOs`
     To check conda environments:
-    - conda info --envs
+    - `conda info --envs`
     To delete conda envioment:
-    - conda remove --name <environment_name> --all
+    - `conda remove --name <environment_name> --all`
 
 2. Activate the environment:
-    - conda activate fia_tools_environment_Linux_MacOs
+    - `conda activate fia_tools_environment_Linux_MacOs`
 
 
 ### Step 5:  Running the UMA Tools Script
@@ -102,11 +104,12 @@ Additionally, before starting the program, make sure you know how many fluoresce
 
 
 2. Run the main analysis script:
-   - python ./code/1_select_channels.py -i input_paths.json
-   - python ./code/2_analyze_nuclei.py -i input_paths.json
-   - python ./code/3_filter_imgs -i input_paths.json
-   - python ./code/4_calculate_nuc_foci.py -i input_paths.json
-
+```
+   python ./code/1_select_channels.py -i input_paths.json
+   python ./code/2_analyze_nuclei.py -i input_paths.json
+   python ./code/3_filter_imgs -i input_paths.json
+   python ./code/4_calculate_nuc_foci.py -i input_paths.json
+```
 
 # FIA-tool workflow description
 ## 1_select_channels.py
