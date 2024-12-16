@@ -1,5 +1,5 @@
 # Info
-This project was originally developed for the article "Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts" in the Edna (Eti) Cukierman lab (https://www.foxchase.org/edna-cukierman). 
+This project was originally developed for the article "Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts" in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
 Its primary goal is to quantify and measure the area of double-strand break (DSB) foci in multi-level 3D confocal images of cancer-associated fibroblasts. 
 The program can be adapted to analyze any type of foci/specks detected by immunofluorescence (IF) staining, utilizing a nuclei mask for segmentation.
 
@@ -54,8 +54,7 @@ For macOS users, skip the WSL installation and work directly in the terminal.
     - `sudo apt upgrade -y`
 
 ### Step 2: Install Miniconda
-1. You can find instructions for Lunux or MacOs:
-    https://docs.anaconda.com/miniconda/install/#quick-command-line-install
+1. You can find instructions for Lunux or MacOs [here](https://docs.anaconda.com/miniconda/install/#quick-command-line-install):
 
 
 ### Step 3: Clone a GitHub Repository on WSL
