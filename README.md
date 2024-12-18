@@ -101,7 +101,7 @@ This program utilizes the following tools:
 
 ## Contributors
 
-- Aleksandr Dolskii
+- [Aleksandr Dolskii](aleksandr.dolskii@fccc.edu)
 
 - [Ekaterina Shitik](mailto:shitik.ekaterina@gmail.com) 
 
