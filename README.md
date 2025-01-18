@@ -1,16 +1,16 @@
 # FIA-tools
 
-**FIA-tools** quantifies and measures the area of double-strand break (DSB) foci in multi-level 3D confocal images of cancer-associated fibroblasts. It used [ImageJ](https://github.com/imagej) to process images and count elements and pretrained models from [StarDist](https://github.com/stardist/stardist) to recognize cell nuclei.
+**FIA-tools** quantifies and measures the area of double-strand break (DSB) foci in multi-level 3D confocal images of cancer-associated fibroblasts. It used [ImageJ](https://github.com/imagej) to process images and count elements and pre-trained models from [StarDist](https://github.com/stardist/stardist) to recognize cell nuclei.
 The program can be adapted to analyze any foci/specks detected by immunofluorescence (IF) staining, utilizing a nuclei mask for segmentation.
 
 The project is developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
 
 ## Installation 
-To download and install *git* please visit [Git Download page](https://git-scm.com/downloads).
+To download and install *git*, please visit [Git Download page](https://git-scm.com/downloads).
 
 To download and install *conda* please visit [Miniforge github](https://github.com/conda-forge/miniforge)
 
-To install the package please follow these steps:
+To install the package, please follow these steps:
 
 ```bash
 git clone https://github.com/alexdolskii/FIA-tools.git
@@ -21,9 +21,9 @@ conda activate fia-tools
 
 ## Usage
 
-The main input for all of the programms is `input_paths.json`. Therefore, previously it have to be modified. This file should contain a list of folders with `.nd2` images. The file can contain as many folders as needed.
+The main input for all of the programs is `input_paths.json`. Therefore, it had to be modified previously. This file should contain a list of folders with `.nd2` images. The file can contain as many folders as needed.
 
-Further, to implement analysis run all of the programs one after another:
+Further, to implement analysis, run all of the programs one after another:
 
 #### 1_select_channels.py
 Make the script executable
@@ -48,7 +48,7 @@ code/2_analyse_nuclei.py -i input_paths.json
 
 #### 3_filter_imgs.py
 
-Make the script executable
+Make the script executable.
 
 ```bash
 chmod +x code/3_filter_imgs.py
@@ -60,7 +60,7 @@ Run command
 code/3_filter_imgs.py -i input_paths.json
 ```
 
-To customize the thresholds for nuclei and foci please use other arguments
+To customize the thresholds for nuclei and foci, please use other arguments.
 
 ```bash
 code/3_filter_imgs.py -i input_paths.json -p 2000 -f 100
@@ -77,7 +77,7 @@ Run command
 code/4_calculate_nuc_foci.py  -i input_paths.json
 ```
 
-To delve into more details of program usage please visit [FIA_tools](FIA_tools.ipynb) notebook 
+To delve into more details of program usage, please visit [FIA_tools](FIA_tools.ipynb) notebook 
 
 ## References
 
