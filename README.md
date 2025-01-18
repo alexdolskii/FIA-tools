@@ -34,11 +34,11 @@ Run command
 ```bash
 code/1_select_channels.py -i input_paths.json
 ```
-#### 2_analyse_nuclei.py
+#### 2_analyze_nuclei.py
 
 Make the script executable
 ```bash
-chmod +x code/2_analyse_nuclei.py
+chmod +x code/2_analyze_nuclei.py
 ```
 
 Run command
