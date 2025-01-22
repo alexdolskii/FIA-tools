@@ -88,12 +88,12 @@ def process_image(valid_folders: list) -> None:
         valid_exts = ('.nd2', '.tif', '.tiff')
 
         for filename in os.listdir(input_folder):
-            # 1) Skip hidden or resource-fork files that start with '.'
-            if filename.startswith('.'):
+            # Skip hidden files and files starting with "._"
+            if filename.startswith('.') or filename.startswith('._'):
                 logging.warning(f"Skipping hidden or dot-underscore file: {filename}")
                 continue
 
-            # 2) Check file extension
+            # Check file extension
             file_ext = filename.lower()
             if not file_ext.endswith(valid_exts):
                 # If file is not ND2 nor TIF/TIFF, skip
