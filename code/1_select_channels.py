@@ -17,12 +17,12 @@ def process_image(valid_folders: list) -> None:
 
     - For ND2 files (3D stacks):
         * Nuclei -> Max Intensity Z-projection
-        * Foci   -> Standard Deviation Z-projection
+        * Foci   -> Standard Deviation Z-projection for each specified channel
     - For TIF/TIFF (already 2D multi-channel):
         * Nuclei -> ChannelSplitter channel for user input
-        * Foci   -> ChannelSplitter channel for user input
+        * Foci   -> ChannelSplitter channel for each specified channel
 
-    In addition, the script creates a text file (image_metadata.txt) 
+    In addition, the script creates a text file (image_metadata.txt)
     in the 'foci_assay' folder, listing image calibration properties
     and dimension info for each processed image.
     """
@@ -37,12 +37,23 @@ def process_image(valid_folders: list) -> None:
     ZProjector = jimport('ij.plugin.ZProjector')
     ChannelSplitter = jimport('ij.plugin.ChannelSplitter')
 
-    # Request channel numbers from user (1-based)
+    # Request channel number for Nuclei (1-based)
     nuclei_channel = int(input("Enter the channel number for nuclei staining (starting from 1): "))
-    foci_channel = int(input("Enter the channel number for foci staining (starting from 1): "))
-    if (nuclei_channel not in range(1, 13) or
-            foci_channel not in range(1, 13)):
-        raise ValueError("Invalid channel number (must be 1–12).")
+    if nuclei_channel not in range(1, 13):
+        raise ValueError("Invalid channel number for Nuclei (must be 1–12).")
+
+    # Request the number of Foci channels to process
+    num_foci_channels = int(input("How many Foci channels do you want to process? "))
+    if num_foci_channels < 1:
+        raise ValueError("Number of Foci channels must be at least 1.")
+
+    # Request channel numbers for each Foci (1-based)
+    foci_channels = []
+    for i in range(num_foci_channels):
+        channel = int(input(f"Enter the channel number for Foci {i + 1} (starting from 1): "))
+        if channel not in range(1, 13):
+            raise ValueError(f"Invalid channel number for Foci {i + 1} (must be 1–12).")
+        foci_channels.append(channel)
 
     # Process images in each folder
     for input_folder in valid_folders:
@@ -65,18 +76,21 @@ def process_image(valid_folders: list) -> None:
         file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
         logging.getLogger('').addHandler(file_handler)
 
-        # Create subfolders for Nuclei and Foci
+        # Create subfolder for Nuclei
         nuclei_folder = os.path.join(processed_folder, "Nuclei")
-        foci_folder = os.path.join(processed_folder, "Foci")
         Path(nuclei_folder).mkdir(parents=True, exist_ok=True)
-        Path(foci_folder).mkdir(parents=True, exist_ok=True)
-        print(f"Subfolders 'Nuclei' and 'Foci' created in {processed_folder}")
+        print(f"Subfolder 'Nuclei' created in {processed_folder}")
+
+        # Create subfolders for each Foci channel
+        foci_folders = {}
+        for i, channel in enumerate(foci_channels):
+            folder_name = os.path.join(processed_folder, "Foci", f"Foci_{i + 1}_Channel_{channel}")
+            Path(folder_name).mkdir(parents=True, exist_ok=True)
+            foci_folders[channel] = folder_name
+            print(f"Subfolder 'Foci_{i + 1}_Channel_{channel}' created in {processed_folder}")
 
         # Create or open the metadata file in append mode
-        # If you want to overwrite on each run, use 'w' instead of 'a'
         metadata_file_path = os.path.join(processed_folder, 'image_metadata.txt')
-        # We'll open it in append mode so each new run (or folder) appends
-        # If you prefer overwriting each time, change mode='w'
         metadata_file = open(metadata_file_path, mode='w', encoding='utf-8')
         metadata_file.write("Image Metadata:\n")
         metadata_file.write("================\n")
@@ -142,9 +156,8 @@ def process_image(valid_folders: list) -> None:
             # For ND2 files, we assume a multi-Z or multi-channel stack
             if file_ext.endswith('.nd2'):
                 # Check if channels exist
-                if nuclei_channel > channels or foci_channel > channels:
-                    logging.error(f"Specified channels ({nuclei_channel}, {foci_channel}) "
-                                  f"exceed available ({channels}) in '{filename}'.")
+                if nuclei_channel > channels or any(foci_channel > channels for foci_channel in foci_channels):
+                    logging.error(f"Specified channels exceed available ({channels}) in '{filename}'.")
                     imp.close()
                     continue
 
@@ -172,27 +185,29 @@ def process_image(valid_folders: list) -> None:
                 nuclei_proj.close()
                 imp_nuclei.close()
 
-                # ----- Process FOCI (ND2): SD Z-projection -----
-                print(f"Processing foci channel {foci_channel} in ND2 file.")
-                imp.setC(foci_channel)
-                IJ.run(imp, "Duplicate...", f"title=imp_foci duplicate channels={foci_channel}")
-                imp_foci = IJ.getImage()
+                # ----- Process FOCI (ND2): SD Z-projection for each channel -----
+                for foci_channel in foci_channels:
+                    print(f"Processing foci channel {foci_channel} in ND2 file.")
+                    imp.setC(foci_channel)
+                    IJ.run(imp, "Duplicate...", f"title=imp_foci duplicate channels={foci_channel}")
+                    imp_foci = IJ.getImage()
 
-                zp_foci = ZProjector(imp_foci)
-                zp_foci.setMethod(ZProjector.SD_METHOD)
-                zp_foci.doProjection()
-                foci_proj = zp_foci.getProjection()
+                    zp_foci = ZProjector(imp_foci)
+                    zp_foci.setMethod(ZProjector.SD_METHOD)
+                    zp_foci.doProjection()
+                    foci_proj = zp_foci.getProjection()
 
-                # Resize & convert
-                foci_proj = foci_proj.resize(1024, 1024, 1, "bilinear")
-                IJ.run(foci_proj, "8-bit", "")
+                    # Resize & convert
+                    foci_proj = foci_proj.resize(1024, 1024, 1, "bilinear")
+                    IJ.run(foci_proj, "8-bit", "")
 
-                foci_out = os.path.join(foci_folder, f"{base_name}_foci_projection.tif")
-                IJ.saveAs(foci_proj, "Tiff", foci_out)
-                print(f"Foci (SD Z) saved to '{foci_out}'")
+                    # Save to the corresponding Foci folder
+                    foci_out = os.path.join(foci_folders[foci_channel], f"{base_name}_foci_projection.tif")
+                    IJ.saveAs(foci_proj, "Tiff", foci_out)
+                    print(f"Foci (SD Z) saved to '{foci_out}'")
 
-                foci_proj.close()
-                imp_foci.close()
+                    foci_proj.close()
+                    imp_foci.close()
 
                 # Close the original
                 imp.close()
@@ -209,9 +224,8 @@ def process_image(valid_folders: list) -> None:
                 print(f"Total channels in TIF: {total_split_channels}")
 
                 # Check channel availability
-                if nuclei_channel > total_split_channels or foci_channel > total_split_channels:
-                    logging.error(f"Requested channels ({nuclei_channel}, {foci_channel}) "
-                                  f"exceed total split channels ({total_split_channels}). Skipping.")
+                if nuclei_channel > total_split_channels or any(foci_channel > total_split_channels for foci_channel in foci_channels):
+                    logging.error(f"Requested channels exceed total split channels ({total_split_channels}). Skipping.")
                     imp.close()
                     continue
 
@@ -228,15 +242,17 @@ def process_image(valid_folders: list) -> None:
                 imp_nuclei.close()
 
                 # ----- Process FOCI (TIF) -----
-                print(f"Extracting foci channel {foci_channel} from TIF.")
-                imp_foci = splitted_channels[foci_channel - 1]
-                imp_foci = imp_foci.resize(1024, 1024, 1, "bilinear")
-                IJ.run(imp_foci, "8-bit", "")
+                for foci_channel in foci_channels:
+                    print(f"Extracting foci channel {foci_channel} from TIF.")
+                    imp_foci = splitted_channels[foci_channel - 1]
+                    imp_foci = imp_foci.resize(1024, 1024, 1, "bilinear")
+                    IJ.run(imp_foci, "8-bit", "")
 
-                foci_out = os.path.join(foci_folder, f"{base_name}_foci_projection.tif")
-                IJ.saveAs(imp_foci, "Tiff", foci_out)
-                print(f"Foci channel saved to '{foci_out}'.")
-                imp_foci.close()
+                    # Save to the corresponding Foci folder
+                    foci_out = os.path.join(foci_folders[foci_channel], f"{base_name}_foci_projection.tif")
+                    IJ.saveAs(imp_foci, "Tiff", foci_out)
+                    print(f"Foci channel saved to '{foci_out}'.")
+                    imp_foci.close()
 
                 # Close the original image
                 imp.close()

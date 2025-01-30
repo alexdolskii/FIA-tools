@@ -194,7 +194,7 @@ def validate_path_files(input_json_path: str,
         result = result
 
     elif step == 4:
-        # In step 4, we search for 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' and 'Foci_Mask_YYYYMMDD_HHMMSS'
+        # In step 4, we search for 'Final_Nuclei_Mask_YYYYMMDD_HHMMSS' and 'Foci_Masks'
         result = {}
         for folder in valid_folders:
             # Set up logging
@@ -243,33 +243,33 @@ def validate_path_files(input_json_path: str,
                 result[folder]['star_dist_files'] = star_dist_proc_files
                 result[folder]['star_dist_count'] = star_dist_count
 
-            # Look for 'Foci_Mask_YYYYMMDD_HHMMSS'
-            foci_masks_folders = []
-            for name in os.listdir(foci_assay_folder):
-                if name.startswith('Foci_Mask_'):
-                    date_str = name.replace('Foci_Mask_', '')
-                    folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
-                    foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
+            # # Look for 'Foci_Masks'
+            # foci_masks_folders = []
+            # for name in os.listdir(foci_assay_folder):
+            #     if name.startswith('Foci_Masks'):
+            #         date_str = name.replace('Foci_Mask_', '')
+            #         folder_datetime = datetime.strptime(date_str, '%Y%m%d_%H%M%S')
+            #         foci_masks_folders.append((folder_datetime, os.path.join(foci_assay_folder, name)))
 
-            if len(foci_masks_folders) == 0:
-                logging.error(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'.")
-            else:
-                # Take the latest
-                latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
-                print(f"Selected the latest 'Foci_Mask' folder: {latest_foci_masks_folder}")
-                result[folder]['foci_masks_folder'] = latest_foci_masks_folder
+            # if len(foci_masks_folders) == 0:
+            #     logging.error(f"No folders 'Foci_Mask_YYYYMMDD_HHMMSS' found in '{foci_assay_folder}'.")
+            # else:
+            #     # Take the latest
+            #     latest_foci_masks_folder = max(foci_masks_folders, key=lambda x: x[0])[1]
+            #     print(f"Selected the latest 'Foci_Mask' folder: {latest_foci_masks_folder}")
+            #     result[folder]['foci_masks_folder'] = latest_foci_masks_folder
 
-                # Count files ending with '_foci_projection.tif'
-                foci_projection_files = [
-                    f for f in os.listdir(latest_foci_masks_folder)
-                    if f.endswith('_foci_projection.tif')
-                ]
-                foci_projection_count = len(foci_projection_files)
-                print(f"Number of '_foci_projection.tif' files in '{latest_foci_masks_folder}': {foci_projection_count}")
-                result[folder]['foci_projection_files'] = foci_projection_files
-                result[folder]['foci_projection_count'] = foci_projection_count
-                print(f"  Found '_StarDist_processed.tif' files: {star_dist_count}")
-                print(f"  Found '_foci_projection.tif' files: {foci_projection_count}")
+            #     # Count files ending with '_foci_projection.tif'
+            #     foci_projection_files = [
+            #         f for f in os.listdir(latest_foci_masks_folder)
+            #         if f.endswith('_foci_projection.tif')
+            #     ]
+            #     foci_projection_count = len(foci_projection_files)
+            #     print(f"Number of '_foci_projection.tif' files in '{latest_foci_masks_folder}': {foci_projection_count}")
+            #     result[folder]['foci_projection_files'] = foci_projection_files
+            #     result[folder]['foci_projection_count'] = foci_projection_count
+            #     print(f"  Found '_StarDist_processed.tif' files: {star_dist_count}")
+            #     print(f"  Found '_foci_projection.tif' files: {foci_projection_count}")
 
         result = result
 
