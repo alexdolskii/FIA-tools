@@ -13,6 +13,8 @@ import matplotlib.pyplot as plt
 import itertools
 import time
 
+
+
 def extract_image_key(filename: str) -> str:
     """
     Removes known prefixes/suffixes from a filename to derive a 'nuc_key'.
@@ -21,6 +23,7 @@ def extract_image_key(filename: str) -> str:
     filename = re.sub(r"^processed_", "", filename)
     filename = re.sub(r"_foci_projection", "", filename)
     filename = re.sub(r"\.tif$", "", filename)
+    filename = re.sub(r"\.nd2", "", filename)
     return filename
 
 def extract_metadata(metadata_path: str) -> dict:
@@ -227,8 +230,8 @@ def count_foci_in_nuclei(nuclei_mask, foci_mask, pixel_area, image_key):
             rel_area = (total_foci_px / nuc_area_px) * 100.0
 
         results.append({
-            "Image Key": image_key,
-            "Nucleus": nuc_label,
+            "Image Key": image_key,  # Ensure this column is always present
+            "Nucleus": nuc_label,    # Ensure this column is always present
             "Foci Count": foci_count,
             "Nucleus Area (pixels)": nuc_area_px,
             "Nucleus Area (micron²)": nuc_area_micron,
@@ -236,7 +239,168 @@ def count_foci_in_nuclei(nuclei_mask, foci_mask, pixel_area, image_key):
             "Total Foci Area (micron²)": total_foci_micron,
             "Relative Foci Area (%)": round(rel_area, 2),
         })
+
+    # Ensure the DataFrame is not empty and contains the required columns
+    if not results:
+        results.append({
+            "Image Key": image_key,
+            "Nucleus": 0,
+            "Foci Count": 0,
+            "Nucleus Area (pixels)": 0,
+            "Nucleus Area (micron²)": 0,
+            "Total Foci Area (pixels)": 0,
+            "Total Foci Area (micron²)": 0,
+            "Relative Foci Area (%)": 0.0,
+        })
+
     return results
+
+def process_nuclei_image(nuc_file_path: str,
+                         foci_channels_info: dict,
+                         metadata: dict,
+                         results_folder: str,
+                         perform_colocalization: bool,
+                         min_subset_size=2,
+                         max_subset_size=None) -> list:
+    """
+    Processes ONE nucleus mask + all corresponding foci channels.
+    """
+    nuc_filename = os.path.basename(nuc_file_path)
+    nuc_key = extract_image_key(nuc_filename)
+    logging.info(f"Started nuclei processing: {nuc_filename}")
+
+    if nuc_key not in metadata:
+        logging.warning(f"No metadata for {nuc_key}. Skipping.")
+        return []
+
+    # Load nucleus
+    nuclei_mask = io.imread(nuc_file_path)
+    nuclei_labels = measure.label(nuclei_mask)
+    nuclei_props = measure.regionprops(nuclei_labels)
+
+    # Save labeled nucleus image
+    labels_dict = {prop.label: prop.centroid for prop in nuclei_props}
+    labeled_path = labeled_nuclei_path(nuc_file_path, results_folder)
+    save_labeled_image(nuclei_labels, labeled_path, title=f"Nuclei {nuc_key}", labels=labels_dict)
+
+    # Pixel area
+    px_width = metadata[nuc_key]["Pixel Width"]
+    px_height = metadata[nuc_key]["Pixel Height"]
+    pixel_area_micron = px_width * px_height
+
+    # Load all foci channel masks
+    channel_names = sorted(foci_channels_info.keys())
+    channel_masks = {}
+    for ch_name in channel_names:
+        path_ch = foci_channels_info[ch_name]
+        if not os.path.exists(path_ch):
+            logging.warning(f"Foci file not found: {path_ch}")
+            continue
+        foci_mask = io.imread(path_ch)
+        if foci_mask.shape != nuclei_mask.shape:
+            logging.warning(f"Foci shape {foci_mask.shape} != Nuclei shape {nuclei_mask.shape}. Skipping {path_ch}")
+            continue
+        channel_masks[ch_name] = foci_mask
+
+    if not channel_masks:
+        logging.warning(f"No valid foci channels for nucleus {nuc_key}")
+        return []
+
+    # Single-channel measurements
+    all_dfs = []
+    for ch_name, f_mask in channel_masks.items():
+        res = count_foci_in_nuclei(nuclei_labels, f_mask, pixel_area_micron, nuc_key)
+        df_res = pd.DataFrame(res)
+        # rename columns
+        df_res.rename(columns={
+            "Foci Count": f"Foci Count ({ch_name})",
+            "Total Foci Area (pixels)": f"Total Foci Area (pixels) ({ch_name})",
+            "Total Foci Area (micron²)": f"Total Foci Area (micron²) ({ch_name})",
+            "Relative Foci Area (%)": f"Relative Foci Area (%) ({ch_name})"
+        }, inplace=True)
+        all_dfs.append(df_res)
+
+    # Merge single channels
+    df_single = all_dfs[0]
+    for df_next in all_dfs[1:]:
+        # Ensure the required columns are present before merging
+        if "Image Key" not in df_next.columns or "Nucleus" not in df_next.columns:
+            logging.warning(f"Skipping merge for {nuc_key} due to missing required columns.")
+            continue
+        df_single = df_single.merge(df_next, on=["Image Key", "Nucleus"], how="outer")
+
+    # If user doesn't want colocalization => return single
+    if not perform_colocalization:
+        return df_single.to_dict("records")
+
+    # Build intersection masks for subsets
+    n_channels = len(channel_masks)
+    if max_subset_size is None or max_subset_size > n_channels:
+        max_subset_size = n_channels
+
+    ch_name_list = list(channel_masks.keys())
+    ch_name_list.sort()
+
+    df_intersections = []
+    for r in range(min_subset_size, max_subset_size + 1):
+        for subset in itertools.combinations(ch_name_list, r):
+            subset_str = "+".join(subset)
+            # Build labeled intersection
+            masks_to_intersect = [channel_masks[ch] for ch in subset]
+            intersection_mask = build_intersection_mask(*masks_to_intersect)
+
+            # Convert to black-objects, white-background:
+            #   objects = 0, background = 255
+            # This is a binary representation, losing distinct labels
+            # but satisfying the user's request for black object / white background
+            inverted_mask = np.where(intersection_mask > 0, 0, 255).astype(np.uint8)
+
+            # Save new mask
+            intersection_name = f"intersection_{nuc_key}_{subset_str}.tif"
+            save_path = os.path.join(results_folder, intersection_name)
+            io.imsave(save_path, inverted_mask)
+            logging.info(f"Saved intersection mask (black objects/white bg): {save_path}")
+
+            # We still measure the labeled intersection (for stats),
+            # so let's measure intersection_mask as is
+            inter_res = count_foci_in_nuclei(nuclei_labels, intersection_mask, pixel_area_micron, nuc_key)
+            df_temp = pd.DataFrame(inter_res)
+
+            # For intersection-based results, we don't want repeated nucleus-area columns
+            # because merges cause duplicates. So let's drop them before renaming:
+            # 'Nucleus Area (pixels)' and 'Nucleus Area (micron²)' are redundant
+            # we only keep them from the single-ch data
+            if "Nucleus Area (pixels)" in df_temp.columns:
+                df_temp.drop(columns=["Nucleus Area (pixels)"], inplace=True, errors="ignore")
+            if "Nucleus Area (micron²)" in df_temp.columns:
+                df_temp.drop(columns=["Nucleus Area (micron²)"], inplace=True, errors="ignore")
+
+            # rename foci columns
+            df_temp.rename(columns={
+                "Foci Count": f"Foci Count ({subset_str})",
+                "Total Foci Area (pixels)": f"Total Foci Area (pixels) ({subset_str})",
+                "Total Foci Area (micron²)": f"Total Foci Area (micron²) ({subset_str})",
+                "Relative Foci Area (%)": f"Relative Foci Area (%) ({subset_str})"
+            }, inplace=True)
+            df_intersections.append(df_temp)
+
+    if df_intersections:
+        df_inter_merged = df_intersections[0]
+        for df_next in df_intersections[1:]:
+            # Ensure the required columns are present before merging
+            if "Image Key" not in df_next.columns or "Nucleus" not in df_next.columns:
+                logging.warning(f"Skipping merge for {nuc_key} due to missing required columns.")
+                continue
+            df_inter_merged = df_inter_merged.merge(df_next, on=["Image Key","Nucleus"], how="outer")
+    else:
+        df_inter_merged = pd.DataFrame()
+
+    if not df_inter_merged.empty:
+        df_final = df_single.merge(df_inter_merged, on=["Image Key","Nucleus"], how="outer")
+    else:
+        df_final = df_single
+
+    return df_final.to_dict("records")
 
 #########################################
 # Main per-nucleus logic

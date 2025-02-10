@@ -5,6 +5,14 @@ import logging
 import os
 from pathlib import Path
 
+# Увеличиваем память для JVM
+os.environ['_JAVA_OPTIONS'] = (
+    "-Xmx16g "                # До 16 ГБ оперативной памяти
+    "-XX:+IgnoreUnrecognizedVMOptions "  
+    "--illegal-access=warn "
+    "--add-opens=java.base/java.lang=ALL-UNNAMED "
+)
+
 import imagej
 from scyjava import jimport
 from validate_folders import validate_path_files
