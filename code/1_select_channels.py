@@ -5,9 +5,9 @@ import logging
 import os
 from pathlib import Path
 
-# Увеличиваем память для JVM
+# Increase memory limit for JVM
 os.environ['_JAVA_OPTIONS'] = (
-    "-Xmx16g "                # До 16 ГБ оперативной памяти
+    "-Xmx16g "                # up to 16GB of memory
     "-XX:+IgnoreUnrecognizedVMOptions "  
     "--illegal-access=warn "
     "--add-opens=java.base/java.lang=ALL-UNNAMED "
