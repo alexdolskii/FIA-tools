@@ -5,17 +5,44 @@ import logging
 import os
 from pathlib import Path
 
+import imagej
+from scyjava import jimport
+from validate_folders import validate_input_file
+
 # Increase memory limit for JVM
 os.environ['_JAVA_OPTIONS'] = (
     "-Xmx16g "                # up to 16GB of memory
-    "-XX:+IgnoreUnrecognizedVMOptions "  
+    "-XX:+IgnoreUnrecognizedVMOptions "
     "--illegal-access=warn "
     "--add-opens=java.base/java.lang=ALL-UNNAMED "
 )
 
-import imagej
-from scyjava import jimport
-from validate_folders import validate_path_files
+
+def validate_folders(input_json_path: str) -> list:
+    folder_paths = validate_input_file(input_json_path)
+    valid_folders = []
+    for folder_path in folder_paths:
+        if not os.path.exists(folder_path):
+            raise ValueError(f"Folder '{folder_path}' does not exist.")
+        valid_extensions = {'.nd2', '.tif', '.tiff'}
+        all_files = [f for f in os.listdir(folder_path)
+                     if os.path.isfile(os.path.join(folder_path, f))]
+        recognized_files = [
+            f for f in all_files
+            if os.path.splitext(f)[1].lower() in valid_extensions
+        ]
+        num_files = len(recognized_files)
+        file_formats = set(os.path.splitext(f)[1].lower()
+                           for f in recognized_files)
+        message = (', '.join(sorted(file_formats))
+                   if file_formats else
+                   'No .nd2 or .tif/.tiff files')
+        print(f"Folder: {folder_path}, "
+              f"Number of recognized files: {num_files}, "
+              f"File formats: {message}")
+        if num_files > 0:
+            valid_folders.append(folder_path)
+    return valid_folders
 
 
 def process_image(valid_folders: list) -> None:
@@ -46,27 +73,36 @@ def process_image(valid_folders: list) -> None:
     ChannelSplitter = jimport('ij.plugin.ChannelSplitter')
 
     # Request channel number for Nuclei (1-based)
-    nuclei_channel = int(input("Enter the channel number for nuclei staining (starting from 1): "))
+    nuclei_channel = int(input("Enter the channel "
+                               "number for nuclei "
+                               "staining (starting from 1): "))
     if nuclei_channel not in range(1, 13):
         raise ValueError("Invalid channel number for Nuclei (must be 1–12).")
 
     # Request the number of Foci channels to process
-    num_foci_channels = int(input("How many Foci channels do you want to process? "))
+    num_foci_channels = int(input("How many Foci "
+                                  "channels do you want to process? "))
     if num_foci_channels < 1:
-        raise ValueError("Number of Foci channels must be at least 1.")
+        raise ValueError("Number of Foci "
+                         "channels must be at least 1.")
 
     # Request channel numbers for each Foci (1-based)
     foci_channels = []
     for i in range(num_foci_channels):
-        channel = int(input(f"Enter the channel number for Foci {i + 1} (starting from 1): "))
+        channel = int(input(f"Enter the channel "
+                            f"number for Foci {i + 1} "
+                            f"(starting from 1): "))
         if channel not in range(1, 13):
-            raise ValueError(f"Invalid channel number for Foci {i + 1} (must be 1–12).")
+            raise ValueError(f"Invalid channel "
+                             f"number for Foci {i + 1} "
+                             f"(must be 1–12).")
         foci_channels.append(channel)
 
     # Process images in each folder
     for input_folder in valid_folders:
         # Create a new folder 'foci_assay' for processed images
-        processed_folder = os.path.join(input_folder, 'foci_assay')
+        processed_folder = os.path.join(input_folder,
+                                        'foci_assay')
         if os.path.exists(processed_folder):
             response = input(
                 f"The folder {processed_folder} already exists. "
@@ -81,7 +117,9 @@ def process_image(valid_folders: list) -> None:
         log_file = os.path.join(processed_folder, '1_log.txt')
         file_handler = logging.FileHandler(log_file, mode='w')
         file_handler.setLevel(logging.WARNING)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - '
+                                                    '%(levelname)s - '
+                                                    '%(message)s'))
         logging.getLogger('').addHandler(file_handler)
 
         # Create subfolder for Nuclei
@@ -92,14 +130,21 @@ def process_image(valid_folders: list) -> None:
         # Create subfolders for each Foci channel
         foci_folders = {}
         for i, channel in enumerate(foci_channels):
-            folder_name = os.path.join(processed_folder, "Foci", f"Foci_{i + 1}_Channel_{channel}")
+            folder_name = os.path.join(processed_folder,
+                                       "Foci",
+                                       f"Foci_{i + 1}_Channel_{channel}")
             Path(folder_name).mkdir(parents=True, exist_ok=True)
             foci_folders[channel] = folder_name
-            print(f"Subfolder 'Foci_{i + 1}_Channel_{channel}' created in {processed_folder}")
+            print(f"Subfolder "
+                  f"'Foci_{i + 1}_Channel_{channel}' "
+                  f"created in {processed_folder}")
 
         # Create or open the metadata file in append mode
-        metadata_file_path = os.path.join(processed_folder, 'image_metadata.txt')
-        metadata_file = open(metadata_file_path, mode='w', encoding='utf-8')
+        metadata_file_path = os.path.join(processed_folder,
+                                          'image_metadata.txt')
+        metadata_file = open(metadata_file_path,
+                             mode='w',
+                             encoding='utf-8')
         metadata_file.write("Image Metadata:\n")
         metadata_file.write("================\n")
 
@@ -112,7 +157,9 @@ def process_image(valid_folders: list) -> None:
         for filename in os.listdir(input_folder):
             # Skip hidden files and files starting with "._"
             if filename.startswith('.') or filename.startswith('._'):
-                logging.warning(f"Skipping hidden or dot-underscore file: {filename}")
+                logging.warning(f"Skipping hidden "
+                                f"or dot-underscore "
+                                f"file: {filename}")
                 continue
 
             # Check file extension
@@ -138,7 +185,11 @@ def process_image(valid_folders: list) -> None:
             # Gather dimension info
             width, height, channels, slices, frames = imp.getDimensions()
             print(f"Image dimensions for '{filename}': "
-                  f"W={width}, H={height}, C={channels}, Z={slices}, T={frames}")
+                  f"W={width}, "
+                  f"H={height}, "
+                  f"C={channels}, "
+                  f"Z={slices}, "
+                  f"T={frames}")
 
             # ---------------------------------------------------
             # WRITE METADATA TO THE TEXT FILE
@@ -164,15 +215,21 @@ def process_image(valid_folders: list) -> None:
             # For ND2 files, we assume a multi-Z or multi-channel stack
             if file_ext.endswith('.nd2'):
                 # Check if channels exist
-                if nuclei_channel > channels or any(foci_channel > channels for foci_channel in foci_channels):
-                    logging.error(f"Specified channels exceed available ({channels}) in '{filename}'.")
+                if (nuclei_channel > channels
+                        or any(foci_channel > channels
+                               for foci_channel in foci_channels)):
+                    logging.error(f"Specified channels "
+                                  f"exceed available ({channels}) "
+                                  f"in '{filename}'.")
                     imp.close()
                     continue
 
                 # ----- Process NUCLEI (ND2): Max Z-projection -----
-                print(f"Processing nuclei channel {nuclei_channel} in ND2 file.")
+                print(f"Processing nuclei channel "
+                      f"{nuclei_channel} in ND2 file.")
                 imp.setC(nuclei_channel)
-                IJ.run(imp, "Duplicate...", f"title=imp_nuclei duplicate channels={nuclei_channel}")
+                IJ.run(imp, "Duplicate...",
+                       f"title=imp_nuclei duplicate channels={nuclei_channel}")
                 imp_nuclei = IJ.getImage()
 
                 zp_nuclei = ZProjector(imp_nuclei)
@@ -186,18 +243,21 @@ def process_image(valid_folders: list) -> None:
 
                 # Save
                 base_name = os.path.splitext(filename)[0]
-                nuclei_out = os.path.join(nuclei_folder, f"{base_name}_nuclei_projection.tif")
+                nuclei_out = os.path.join(nuclei_folder,
+                                          f"{base_name}_nuclei_projection.tif")
                 IJ.saveAs(nuclei_proj, "Tiff", nuclei_out)
                 print(f"Nuclei (Max Z) saved to '{nuclei_out}'")
 
                 nuclei_proj.close()
                 imp_nuclei.close()
 
-                # ----- Process FOCI (ND2): SD Z-projection for each channel -----
+                # Process FOCI (ND2): SD Z-projection for each channel
                 for foci_channel in foci_channels:
-                    print(f"Processing foci channel {foci_channel} in ND2 file.")
+                    print(f"Processing foci channel "
+                          f"{foci_channel} in ND2 file.")
                     imp.setC(foci_channel)
-                    IJ.run(imp, "Duplicate...", f"title=imp_foci duplicate channels={foci_channel}")
+                    IJ.run(imp, "Duplicate...",
+                           f"title=imp_foci duplicate channels={foci_channel}")
                     imp_foci = IJ.getImage()
 
                     zp_foci = ZProjector(imp_foci)
@@ -210,7 +270,8 @@ def process_image(valid_folders: list) -> None:
                     IJ.run(foci_proj, "8-bit", "")
 
                     # Save to the corresponding Foci folder
-                    foci_out = os.path.join(foci_folders[foci_channel], f"{base_name}_foci_projection.tif")
+                    foci_out = os.path.join(foci_folders[foci_channel],
+                                            f"{base_name}_foci_projection.tif")
                     IJ.saveAs(foci_proj, "Tiff", foci_out)
                     print(f"Foci (SD Z) saved to '{foci_out}'")
 
@@ -224,7 +285,8 @@ def process_image(valid_folders: list) -> None:
                 # For TIF/TIFF, we assume 2D multi-channel images
                 # The user wants to skip Z-projection; just separate channels
                 # using ChannelSplitter.split()
-                print(f"Processing TIF/TIFF file (assumed 2D multi-channel).")
+                print("Processing TIF/TIFF file "
+                      "(assumed 2D multi-channel).")
 
                 # Split channels
                 splitted_channels = ChannelSplitter.split(imp)
@@ -232,8 +294,12 @@ def process_image(valid_folders: list) -> None:
                 print(f"Total channels in TIF: {total_split_channels}")
 
                 # Check channel availability
-                if nuclei_channel > total_split_channels or any(foci_channel > total_split_channels for foci_channel in foci_channels):
-                    logging.error(f"Requested channels exceed total split channels ({total_split_channels}). Skipping.")
+                if (nuclei_channel > total_split_channels
+                        or any(foci_channel > total_split_channels
+                               for foci_channel in foci_channels)):
+                    logging.error(f"Requested channels "
+                                  f"exceed total split channels "
+                                  f"({total_split_channels}). Skipping.")
                     imp.close()
                     continue
 
@@ -244,7 +310,8 @@ def process_image(valid_folders: list) -> None:
                 IJ.run(imp_nuclei, "8-bit", "")
 
                 base_name = os.path.splitext(filename)[0]
-                nuclei_out = os.path.join(nuclei_folder, f"{base_name}_nuclei_projection.tif")
+                nuclei_out = os.path.join(nuclei_folder,
+                                          f"{base_name}_nuclei_projection.tif")
                 IJ.saveAs(imp_nuclei, "Tiff", nuclei_out)
                 print(f"Nuclei channel saved to '{nuclei_out}'.")
                 imp_nuclei.close()
@@ -257,7 +324,8 @@ def process_image(valid_folders: list) -> None:
                     IJ.run(imp_foci, "8-bit", "")
 
                     # Save to the corresponding Foci folder
-                    foci_out = os.path.join(foci_folders[foci_channel], f"{base_name}_foci_projection.tif")
+                    foci_out = os.path.join(foci_folders[foci_channel],
+                                            f"{base_name}_foci_projection.tif")
                     IJ.saveAs(imp_foci, "Tiff", foci_out)
                     print(f"Foci channel saved to '{foci_out}'.")
                     imp_foci.close()
@@ -282,10 +350,12 @@ def select_channel_name(input_json_path: str) -> None:
                         format='%(asctime)s - %(levelname)s - %(message)s')
 
     # Validate input directories from the JSON file
-    valid_folders = validate_path_files(input_json_path, 1)
+    valid_folders = validate_folders(input_json_path)
 
     # Confirm whether the user wants to start analysis
-    start_analysis = input("Start analyzing files in the specified folders? (yes/no): ").strip().lower()
+    start_analysis = input("Start analyzing "
+                           "files in the specified folders? "
+                           "(yes/no): ").strip().lower()
     if start_analysis in ('no', 'n'):
         raise ValueError("Analysis canceled by user.")
     elif start_analysis not in ('yes', 'y', 'no', 'n'):
