@@ -15,7 +15,7 @@ To install the package please follow these steps:
 ```bash
 git clone https://github.com/alexdolskii/FIA-tools.git
 cd FIA-tools
-conda env create -f environment.yaml
+conda env create -f <linux_|mac_>environment.yaml
 conda activate fia-tools
 ```
 
@@ -26,56 +26,45 @@ The main input for all of the programms is `input_paths.json`. Therefore, previo
 Further, to implement analysis run all of the programs one after another:
 
 #### 1_select_channels.py
-Make the script executable
+
 ```bash
 chmod +x code/1_select_channels.py
-```
-Run command
-```bash
+# Run command
 code/1_select_channels.py -i input_paths.json
 ```
-#### 2_analyse_nuclei.py
-
-Make the script executable
-```bash
-chmod +x code/2_analyse_nuclei.py
-```
-
-Run command
-```bash
-code/2_analyse_nuclei.py -i input_paths.json
-```
-
-#### 3_filter_imgs.py
-
-Make the script executable
+#### 2_nuclei_mask_generation
 
 ```bash
-chmod +x code/3_filter_imgs.py
+chmod +x code/2_nuclei_mask_generation.py
+# Run command
+code/2_nuclei_mask_generation.py -i input_paths.json
 ```
 
-Run command
+To customize the thresholds for nuclei please use other *particle_size* parameter
 
 ```bash
-code/3_filter_imgs.py -i input_paths.json
+code/2_nuclei_mask_generation.py -i input_paths.json -p 2000
 ```
 
-To customize the thresholds for nuclei and foci please use other arguments
-
-```bash
-code/3_filter_imgs.py -i input_paths.json -p 2000 -f 100
-```
-
-#### 4_calculate_nuc_foci.py
-Make the script executable
+#### 3_foci_mask_generation.py
 
 ```bash
-chmod +x code/4_calculate_nuc_foci.py
+chmod +x code/3_foci_mask_generation.py
+# Run command
+code/3_foci_mask_generation.py -i input_paths.json
 ```
-Run command
+
+To customize the thresholds for foci please use other *foci_threshold* parameter
+
 ```bash
-code/4_calculate_nuc_foci.py  -i input_paths.json
+code/3_foci_mask_generation.py  -i input_paths.json -f 100
 ```
+
+#### 4_foci_quantification.py
+
+```bash
+chmod +x code/4_foci_quantification.py
+code/4_foci_quantification.py -i input_paths.json
 
 To delve into more details of program usage please visit [FIA_tools](FIA_tools.ipynb) notebook 
 
