@@ -65,6 +65,7 @@ code/3_foci_mask_generation.py  -i input_paths.json -f 100
 ```bash
 chmod +x code/4_foci_quantification.py
 code/4_foci_quantification.py -i input_paths.json
+```
 
 To delve into more details of program usage please visit [FIA_tools](FIA_tools.ipynb) notebook 
 
