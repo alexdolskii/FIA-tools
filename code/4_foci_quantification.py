@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import re
+import shutil
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -355,7 +356,7 @@ def count_foci_in_nuclei(nuclei_mask,
         reader = csv.DictReader(temp_file)
         for row in reader:
             results.append(row)
-    os.remove(temp_results_file)
+    shutil.rmtree(temp_folder)
     return results
 
 
@@ -564,7 +565,7 @@ def main_summarize_res(input_json_path: str) -> None:
         Path(results_folder).mkdir(parents=True, exist_ok=True)
 
         fh = logging.FileHandler(os.path.join(results_folder,
-                                              "log.log"), mode='w')
+                                              "4_log.log"), mode='w')
         fh.setLevel(logging.INFO)
         logging.getLogger('').addHandler(fh)
 
