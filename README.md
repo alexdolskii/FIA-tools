@@ -48,6 +48,8 @@ code/2_nuclei_mask_generation.py -i input_paths.json -p 2000
 
 
 #### 3_foci_mask_generation.py
+
+``` bash
 chmod +x code/3_foci_mask_generation.py
 # Run command
 code/3_foci_mask_generation.py -i input_paths.json
