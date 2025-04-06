@@ -111,10 +111,13 @@ def process_image(valid_folders: list) -> None:
             if response == 'no':
                 raise ValueError("Analysis canceled by user.")
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
-        print(f"\nProcessed images will be saved in: {processed_folder}")
+        step1_folder = os.path.join(processed_folder,
+                                    'selected_channels')
+        Path(step1_folder).mkdir(parents=True, exist_ok=True)
+        print(f"\nProcessed images will be saved in: {step1_folder}")
 
         # Set up logging
-        log_file = os.path.join(processed_folder, '1_log.log')
+        log_file = os.path.join(step1_folder, '1_log.log')
         file_handler = logging.FileHandler(log_file, mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - '
@@ -123,24 +126,24 @@ def process_image(valid_folders: list) -> None:
         logging.getLogger('').addHandler(file_handler)
 
         # Create subfolder for Nuclei
-        nuclei_folder = os.path.join(processed_folder, "Nuclei")
+        nuclei_folder = os.path.join(step1_folder, "Nuclei")
         Path(nuclei_folder).mkdir(parents=True, exist_ok=True)
-        print(f"Subfolder 'Nuclei' created in {processed_folder}")
+        print(f"Subfolder 'Nuclei' created in {step1_folder}")
 
         # Create subfolders for each Foci channel
         foci_folders = {}
         for i, channel in enumerate(foci_channels):
-            folder_name = os.path.join(processed_folder,
+            folder_name = os.path.join(step1_folder,
                                        "Foci",
                                        f"Foci_{i + 1}_Channel_{channel}")
             Path(folder_name).mkdir(parents=True, exist_ok=True)
             foci_folders[channel] = folder_name
             print(f"Subfolder "
                   f"'Foci_{i + 1}_Channel_{channel}' "
-                  f"created in {processed_folder}")
+                  f"created in {step1_folder}")
 
         # Create or open the metadata file in append mode
-        metadata_file_path = os.path.join(processed_folder,
+        metadata_file_path = os.path.join(step1_folder,
                                           'image_metadata.txt')
         metadata_file = open(metadata_file_path,
                              mode='w',
