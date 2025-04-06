@@ -40,11 +40,12 @@ def get_latest_nuclei_mask_folder(foci_assay_folder: str) -> str:
     Finds the newest folder containing nuclei
     masks (e.g., Final_Nuclei_Mask_YYYYMMDD_HHMMSS).
     """
-    nuclei_mask_folders = [f for f in os.listdir(foci_assay_folder)
+    nuclei_folder = os.path.join(foci_assay_folder, "Nuclei_masks")
+    nuclei_mask_folders = [f for f in os.listdir(nuclei_folder)
                            if f.startswith("Final_Nuclei_Mask_")]
     if not nuclei_mask_folders:
         raise FileNotFoundError(f"No 'Final_Nuclei_Mask_' "
-                                f"olders in {foci_assay_folder}.")
+                                f"olders in {nuclei_folder}.")
     folder_timestamps = []
     for folder in nuclei_mask_folders:
         match = re.search(r"_(\d{8}_\d{6})", folder)
@@ -56,7 +57,7 @@ def get_latest_nuclei_mask_folder(foci_assay_folder: str) -> str:
                          f"folders in {foci_assay_folder}.")
     folder_timestamps.sort(key=lambda x: x[1], reverse=True)
     latest_folder = folder_timestamps[0][0]
-    path2lat_folder = os.path.join(foci_assay_folder, latest_folder)
+    path2lat_folder = os.path.join(nuclei_folder, latest_folder)
     return path2lat_folder
 
 
@@ -568,6 +569,7 @@ def main_summarize_res(input_json_path: str) -> None:
         logging.getLogger('').addHandler(fh)
 
         metadata_path = os.path.join(foci_assay_folder,
+                                     "selected_channels",
                                      "image_metadata.txt")
         metadata = extract_metadata(metadata_path)
 
