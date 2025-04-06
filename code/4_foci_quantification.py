@@ -2,6 +2,7 @@
 
 import argparse
 import csv
+import itertools
 import logging
 import os
 import re
@@ -233,6 +234,59 @@ def print_progress_bar(progress,
         print()
 
 
+# Intersection logic
+def build_intersection_mask(*masks):
+    """
+    Creates a labeled mask representing the
+    intersection of all input labeled masks.
+    Each distinct overlap region among them
+    gets a unique label.
+    """
+    if len(masks) < 2:
+        raise ValueError("The function "
+                         "requires at least 2 masks.")
+
+    shape_set = {m.shape for m in masks}
+    if len(shape_set) != 1:
+        raise ValueError("All masks must have the "
+                         "same shape for intersection.")
+
+    intersection_mask = np.zeros_like(masks[0],
+                                      dtype=np.uint16)
+    label_counter = 1
+
+    # gather unique labels from each mask
+    label_lists = []
+    for m in masks:
+        lbls = np.unique(m)
+        lbls = lbls[lbls != 0]
+        label_lists.append(lbls)
+    # use itertools.product to combine possible
+    # labels from each mask
+    for combo in itertools.product(*label_lists):
+        overlap_bool = None
+        for mask_index, lbl_val in enumerate(combo):
+            m = masks[mask_index]
+            coords = np.argwhere(m == lbl_val)
+            if coords.size == 0:
+                overlap_bool = None
+                break
+            if overlap_bool is None:
+                overlap_bool = np.zeros(m.shape, dtype=bool)
+                overlap_bool[coords[:, 0], coords[:, 1]] = True
+            else:
+                temp_bool = np.zeros(m.shape, dtype=bool)
+                temp_bool[coords[:, 0], coords[:, 1]] = True
+                overlap_bool &= temp_bool
+            if overlap_bool is not None and not np.any(overlap_bool):
+                overlap_bool = None
+                break
+        if overlap_bool is not None and np.any(overlap_bool):
+            intersection_mask[overlap_bool] = label_counter
+            label_counter += 1
+    return intersection_mask
+
+
 def count_foci_in_nuclei(nuclei_mask,
                          foci_mask,
                          pixel_area,
@@ -308,7 +362,9 @@ def process_nuclei_image(nuc_file_path: str,
                          foci_channels_info: dict,
                          metadata: dict,
                          results_folder: str,
-                         perform_colocalization: bool) -> list:
+                         perform_colocalization: bool,
+                         min_subset_size=2,
+                         max_subset_size=None) -> list:
     """
     Processes ONE nucleus mask + all corresponding
     foci channels.
@@ -388,9 +444,88 @@ def process_nuclei_image(nuc_file_path: str,
         # If colocalization is not needed, simply return the result
         if not perform_colocalization:
             return df_single.to_dict("records")
-        # Colocalization logic can be added here if needed.
-        # В данной версии оставлено как в исходном коде "return df_single".
-        return df_single.to_dict("records")
+        # Build intersection masks for subsets
+        n_channels = len(channel_masks)
+        if (max_subset_size is None
+                or max_subset_size > n_channels):
+            max_subset_size = n_channels
+
+        ch_name_list = list(channel_masks.keys())
+        ch_name_list.sort()
+
+        df_intersections = []
+        for r in range(min_subset_size, max_subset_size + 1):
+            for subset in itertools.combinations(ch_name_list, r):
+                subset_str = "+".join(subset)
+                # Build labeled intersection
+                masks_to_intersect = [channel_masks[ch] for ch in subset]
+                intersection_mask = build_intersection_mask(*masks_to_intersect)
+                # Convert to black-objects, white-background:
+                #   objects = 0, background = 255
+                # This is a binary representation, losing distinct labels
+                # but satisfying the user's request for black
+                # object / white background
+                inverted_mask = (np.where(intersection_mask > 0, 0, 255)
+                                 .astype(np.uint8))
+                # Save new mask
+                intersection_name = (f"intersection_"
+                                     f"{nuc_key}_{subset_str}.tif")
+                save_path = os.path.join(results_folder,
+                                         intersection_name)
+                io.imsave(save_path, inverted_mask)
+                logging.info(f"Saved intersection mask "
+                             f"(black objects/white bg): {save_path}")
+                # We still measure the labeled intersection (for stats),
+                # so let's measure intersection_mask as is
+                inter_res = count_foci_in_nuclei(nuclei_labels,
+                                                 intersection_mask,
+                                                 pixel_area_micron,
+                                                 nuc_key)
+                df_temp = pd.DataFrame(inter_res)
+                # For intersection-based results,
+                # we don't want repeated nucleus-area columns
+                # because merges cause duplicates.
+                # So let's drop them before renaming:
+                # 'Nucleus Area (pixels)' and 'Nucleus Area (micron²)'
+                # are redundant
+                # we only keep them from the single-ch data
+                if "Nucleus Area (pixels)" in df_temp.columns:
+                    df_temp.drop(columns=["Nucleus Area (pixels)"],
+                                 inplace=True,
+                                 errors="ignore")
+                if "Nucleus Area (micron²)" in df_temp.columns:
+                    df_temp.drop(columns=["Nucleus Area (micron²)"],
+                                 inplace=True,
+                                 errors="ignore")
+                # rename foci columns
+                df_temp.rename(columns={
+                    "Foci Count":
+                        f"Foci Count ({subset_str})",
+                    "Total Foci Area (pixels)":
+                        f"Total Foci Area (pixels) ({subset_str})",
+                    "Total Foci Area (micron²)":
+                        f"Total Foci Area (micron²) ({subset_str})",
+                    "Relative Foci Area (%)":
+                        f"Relative Foci Area (%) ({subset_str})"
+                }, inplace=True)
+                df_intersections.append(df_temp)
+
+        if df_intersections:
+            df_inter_merged = df_intersections[0]
+            for df_next in df_intersections[1:]:
+                df_inter_merged = df_inter_merged.merge(df_next,
+                                                        on=["Image Key", "Nucleus"],
+                                                        how="outer")
+        else:
+            df_inter_merged = pd.DataFrame()
+
+        if not df_inter_merged.empty:
+            df_final = df_single.merge(df_inter_merged,
+                                       on=["Image Key", "Nucleus"],
+                                       how="outer")
+        else:
+            df_final = df_single
+        return df_final.to_dict("records")
     except Exception as e:
         logging.error(f"Error processing {nuc_file_path}: {e}")
         return []
