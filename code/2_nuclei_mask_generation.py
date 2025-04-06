@@ -78,9 +78,6 @@ def find_nuclei(nuclei_folders: list) -> list:
         Path(result_folder).mkdir(parents=True, exist_ok=True)
         output_folder = os.path.join(result_folder,
                                      output_folder_name)
-        print(result_folder)
-
-        print(output_folder)
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         processed_folders.append(output_folder)
 
