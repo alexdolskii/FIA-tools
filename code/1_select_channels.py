@@ -114,7 +114,7 @@ def process_image(valid_folders: list) -> None:
         print(f"\nProcessed images will be saved in: {processed_folder}")
 
         # Set up logging
-        log_file = os.path.join(processed_folder, '1_log.txt')
+        log_file = os.path.join(processed_folder, '1_log.log')
         file_handler = logging.FileHandler(log_file, mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - '

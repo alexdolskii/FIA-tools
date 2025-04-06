@@ -17,7 +17,7 @@ def validate_folders(input_json_path: str) -> dict:
     for folder in valid_folders:
         # Set up logging
         file_handler = logging.FileHandler(os.path.join(folder,
-                                                        '3_val_log.txt'),
+                                                        '3_val_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(
@@ -236,7 +236,7 @@ def filter_foci(folder: dict,
 
     # Setup logging to file in the result subfolder
     file_handler = logging.FileHandler(os.path.join(foci_mask_folder,
-                                                    'foci_log.txt'),
+                                                    'foci_log.log'),
                                        mode='w')
     file_handler.setLevel(logging.WARNING)
     file_handler.setFormatter(logging.Formatter('%(asctime)s - '

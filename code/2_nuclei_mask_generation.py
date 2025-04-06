@@ -21,7 +21,7 @@ def validate_folders(input_json_path: str) -> list:
     for folder in valid_folders:
         # Set up logging
         file_handler = logging.FileHandler(os.path.join(folder,
-                                                        '2_val_log.txt'),
+                                                        '2_val_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(
@@ -77,7 +77,7 @@ def find_nuclei(nuclei_folders: list) -> list:
 
         # Setting up logging
         file_handler = logging.FileHandler(os.path.join(output_folder,
-                                                        '2_log.txt'),
+                                                        '2_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - '
@@ -167,7 +167,7 @@ def process_nuclei(valid_folders: list,
         print(f"\nProcessed images will be saved in: {processed_folder}")
 
         # Set up logging
-        log_file = os.path.join(processed_folder, 'nuclei_log.txt')
+        log_file = os.path.join(processed_folder, 'nuclei_log.log')
         file_handler = logging.FileHandler(log_file, mode='w')
         file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(logging.Formatter('%(asctime)s - '
