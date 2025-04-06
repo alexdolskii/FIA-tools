@@ -17,6 +17,7 @@ def validate_folders(input_json_path: str) -> dict:
     for folder in valid_folders:
         # Set up logging
         file_handler = logging.FileHandler(os.path.join(folder,
+                                                        'foci_assay',
                                                         '3_val_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
@@ -27,7 +28,9 @@ def validate_folders(input_json_path: str) -> dict:
         logging.getLogger('').addHandler(file_handler)
 
         result[folder] = {}
-        foci_assay_folder = os.path.join(folder, 'foci_assay')
+        foci_assay_folder = os.path.join(folder,
+                                         'foci_assay',
+                                         'selected_channels')
         if not os.path.exists(foci_assay_folder):
             logging.error(f"Subfolder 'foci_assay' "
                           f"not found in folder '{folder}'. "
@@ -48,14 +51,17 @@ def validate_folders(input_json_path: str) -> dict:
 
         # Look for the latest 'Nuclei_StarDist_mask_processed_<timestamp>'
         processed_folders = []
-        for name in os.listdir(foci_assay_folder):
+        nuclei_folder = os.path.join(folder,
+                                     'foci_assay',
+                                     'Nuclei_masks')
+        for name in os.listdir(nuclei_folder):
             if name.startswith('Nuclei_StarDist_mask_processed_'):
                 timestamp_str = name.replace('Nuclei_StarDist_mask_processed_',
                                              '')
                 timestamp = datetime.strptime(timestamp_str,
                                               '%Y%m%d_%H%M%S')
                 processed_folders.append((timestamp,
-                                          os.path.join(foci_assay_folder,
+                                          os.path.join(nuclei_folder,
                                                        name)))
 
         if len(processed_folders) == 0:
@@ -76,7 +82,7 @@ def validate_folders(input_json_path: str) -> dict:
             foci_files = [f for f in os.listdir(result[folder]["foci_folder"])
                           if f.lower().endswith('.tif')]
             if len(foci_files) == 0:
-                logging.error("No '.tif' files found in folder 'Foci'.")
+                logging.info("No '.tif' files found in folder 'Foci'.")
             else:
                 result[folder]["foci_files"] = foci_files
 
@@ -187,7 +193,8 @@ def filter_foci(folder: dict,
     # Extract the relevant paths
     foci_folder = folder['foci_folder']
     foci_assay_folder = folder['foci_assay_folder']
-
+    sep_files = str.split(foci_assay_folder, "/")[:-1]
+    result_folder = "/".join(sep_files)
     # Build the path to the chosen subfolder
     subfolder_path = os.path.join(foci_folder, chosen_subfolder)
 
@@ -224,7 +231,7 @@ def filter_foci(folder: dict,
     metadata_dict = parse_metadata_file(metadata_path)
 
     # Create (or reuse) a "Foci_Masks" folder in the assay folder
-    foci_masks_base = os.path.join(foci_assay_folder, "Foci_Masks")
+    foci_masks_base = os.path.join(result_folder, "Foci_Masks")
     os.makedirs(foci_masks_base, exist_ok=True)
 
     # Create a timestamped subfolder for the chosen subfolder
