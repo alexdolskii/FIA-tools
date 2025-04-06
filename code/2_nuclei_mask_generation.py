@@ -21,6 +21,7 @@ def validate_folders(input_json_path: str) -> list:
     for folder in valid_folders:
         # Set up logging
         file_handler = logging.FileHandler(os.path.join(folder,
+                                                        'foci_assay',
                                                         '2_val_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
@@ -32,6 +33,7 @@ def validate_folders(input_json_path: str) -> list:
 
         nuclei_folder = os.path.join(folder,
                                      'foci_assay',
+                                     'selected_channels',
                                      'Nuclei')
         if os.path.exists(nuclei_folder):
             files = os.listdir(nuclei_folder)
@@ -41,7 +43,7 @@ def validate_folders(input_json_path: str) -> list:
             nuclei_folders.append(nuclei_folder)
         else:
             logging.error(f"Nuclei folder not found "
-                          f"in '{folder}/foci_assay'.")
+                          f"in '{folder}/foci_assay/selected_channels'.")
     return nuclei_folders
 
 
@@ -70,13 +72,20 @@ def find_nuclei(nuclei_folders: list) -> list:
                             .strftime("%Y%m%d_%H%M%S"))
         output_folder_name = (f"Nuclei_StarDist_mask_"
                               f"processed_{current_datetime}")
-        output_folder = os.path.join(os.path.dirname(nuclei_folder),
+        sep_files = str.split(nuclei_folder, "/")[:-2]
+        sep_files.append("Nuclei_masks")
+        result_folder = "/".join(sep_files)
+        Path(result_folder).mkdir(parents=True, exist_ok=True)
+        output_folder = os.path.join(result_folder,
                                      output_folder_name)
+        print(result_folder)
+
+        print(output_folder)
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         processed_folders.append(output_folder)
 
         # Setting up logging
-        file_handler = logging.FileHandler(os.path.join(output_folder,
+        file_handler = logging.FileHandler(os.path.join(result_folder,
                                                         '2_log.log'),
                                            mode='w')
         file_handler.setLevel(logging.WARNING)
