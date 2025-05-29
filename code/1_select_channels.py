@@ -25,8 +25,10 @@ def validate_folders(input_json_path: str) -> list:
         if not os.path.exists(folder_path):
             raise ValueError(f"Folder '{folder_path}' does not exist.")
         valid_extensions = {'.nd2', '.tif', '.tiff'}
+        # Skip hidden files (starting with .) and macOS temp files (starting with ._)
         all_files = [f for f in os.listdir(folder_path)
-                     if os.path.isfile(os.path.join(folder_path, f))]
+                     if os.path.isfile(os.path.join(folder_path, f))
+                     and not f.startswith('.') and not f.startswith('._')]
         recognized_files = [
             f for f in all_files
             if os.path.splitext(f)[1].lower() in valid_extensions
@@ -50,16 +52,18 @@ def process_image(valid_folders: list) -> None:
     Process all files from the provided directories (.nd2 or .tif/.tiff)
     according to user-selected nuclei and foci channels.
 
-    - For ND2 files (3D stacks):
+    Three types of input files are supported:
+    1. ND2 files (multi-channel Z-stacks)
         * Nuclei -> Max Intensity Z-projection
         * Foci   -> Standard Deviation Z-projection for each specified channel
-    - For TIF/TIFF (already 2D multi-channel):
+    2. Multi-channel TIFF files with Z-stacks (similar to ND2 structure)
+        * Same processing as ND2 files
+    3. 2D multi-channel TIFF files (already projections)
         * Nuclei -> ChannelSplitter channel for user input
         * Foci   -> ChannelSplitter channel for each specified channel
 
-    In addition, the script creates a text file (image_metadata.txt)
-    in the 'foci_assay' folder, listing image calibration properties
-    and dimension info for each processed image.
+    Creates a text file (image_metadata.txt) in the 'foci_assay' folder,
+    listing image calibration properties and dimension info for each processed image.
     """
 
     # Initialize ImageJ
@@ -72,12 +76,21 @@ def process_image(valid_folders: list) -> None:
     ZProjector = jimport('ij.plugin.ZProjector')
     ChannelSplitter = jimport('ij.plugin.ChannelSplitter')
 
+    # Request file type
+    print("\nSelect input file type:")
+    print("1. ND2 files (multi-channel Z-stacks)")
+    print("2. Multi-channel TIFF files with Z-stacks")
+    print("3. 2D multi-channel TIFF files (already projections)")
+    file_type = int(input("Enter choice (1-3): "))
+    if file_type not in [1, 2, 3]:
+        raise ValueError("Invalid file type selection (must be 1-3).")
+
     # Request channel number for Nuclei (1-based)
     nuclei_channel = int(input("Enter the channel "
                                "number for nuclei "
                                "staining (starting from 1): "))
     if nuclei_channel not in range(1, 13):
-        raise ValueError("Invalid channel number for Nuclei (must be 1–12).")
+        raise ValueError("Invalid channel number for Nuclei (must be 1-12).")
 
     # Request the number of Foci channels to process
     num_foci_channels = int(input("How many Foci "
@@ -95,7 +108,7 @@ def process_image(valid_folders: list) -> None:
         if channel not in range(1, 13):
             raise ValueError(f"Invalid channel "
                              f"number for Foci {i + 1} "
-                             f"(must be 1–12).")
+                             f"(must be 1-12).")
         foci_channels.append(channel)
 
     # Process images in each folder
@@ -155,18 +168,13 @@ def process_image(valid_folders: list) -> None:
         valid_exts = ('.nd2', '.tif', '.tiff')
 
         for filename in os.listdir(input_folder):
-            # Skip hidden files and files starting with "._"
+            # Skip hidden files and macOS temporary files
             if filename.startswith('.') or filename.startswith('._'):
-                logging.warning(f"Skipping hidden "
-                                f"or dot-underscore "
-                                f"file: {filename}")
                 continue
 
             # Check file extension
-            file_ext = filename.lower()
-            if not file_ext.endswith(valid_exts):
-                # If file is not ND2 nor TIF/TIFF, skip
-                logging.error(f"Skipping '{filename}' (unsupported format).")
+            file_ext = os.path.splitext(filename)[1].lower()
+            if file_ext not in valid_exts:
                 continue
 
             file_path = os.path.join(input_folder, filename)
@@ -198,7 +206,7 @@ def process_image(valid_folders: list) -> None:
             cal = imp.getCalibration()
             pixel_width = cal.pixelWidth
             pixel_height = cal.pixelHeight
-            pixel_depth = cal.pixelDepth
+            pixel_depth = cal.pixelDepth if hasattr(cal, 'pixelDepth') else 0
             unit = cal.getUnit()  # e.g. "micron"
 
             # Write an entry for this image to the metadata file
@@ -212,8 +220,8 @@ def process_image(valid_folders: list) -> None:
             metadata_file.write(f"  Frames: {frames}\n\n")
             metadata_file.flush()  # Ensure immediate write
 
-            # For ND2 files, we assume a multi-Z or multi-channel stack
-            if file_ext.endswith('.nd2'):
+            # For ND2 files or Z-stack TIFFs (file types 1 and 2)
+            if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff') and file_type in (1, 2))):
                 # Check if channels exist
                 if (nuclei_channel > channels
                         or any(foci_channel > channels
@@ -224,9 +232,9 @@ def process_image(valid_folders: list) -> None:
                     imp.close()
                     continue
 
-                # ----- Process NUCLEI (ND2): Max Z-projection -----
+                # ----- Process NUCLEI: Max Z-projection -----
                 print(f"Processing nuclei channel "
-                      f"{nuclei_channel} in ND2 file.")
+                      f"{nuclei_channel} as Max Z-projection.")
                 imp.setC(nuclei_channel)
                 IJ.run(imp, "Duplicate...",
                        f"title=imp_nuclei duplicate channels={nuclei_channel}")
@@ -251,10 +259,10 @@ def process_image(valid_folders: list) -> None:
                 nuclei_proj.close()
                 imp_nuclei.close()
 
-                # Process FOCI (ND2): SD Z-projection for each channel
+                # Process FOCI: SD Z-projection for each channel
                 for foci_channel in foci_channels:
                     print(f"Processing foci channel "
-                          f"{foci_channel} in ND2 file.")
+                          f"{foci_channel} as SD Z-projection.")
                     imp.setC(foci_channel)
                     IJ.run(imp, "Duplicate...",
                            f"title=imp_foci duplicate channels={foci_channel}")
@@ -282,16 +290,13 @@ def process_image(valid_folders: list) -> None:
                 imp.close()
 
             else:
-                # For TIF/TIFF, we assume 2D multi-channel images
-                # The user wants to skip Z-projection; just separate channels
-                # using ChannelSplitter.split()
-                print("Processing TIF/TIFF file "
-                      "(assumed 2D multi-channel).")
-
+                # For 2D multi-channel TIFF files (file type 3)
+                print("Processing as 2D multi-channel TIFF file.")
+                
                 # Split channels
                 splitted_channels = ChannelSplitter.split(imp)
                 total_split_channels = len(splitted_channels)
-                print(f"Total channels in TIF: {total_split_channels}")
+                print(f"Total channels in TIFF: {total_split_channels}")
 
                 # Check channel availability
                 if (nuclei_channel > total_split_channels
@@ -303,8 +308,8 @@ def process_image(valid_folders: list) -> None:
                     imp.close()
                     continue
 
-                # ----- Process NUCLEI (TIF) -----
-                print(f"Extracting nuclei channel {nuclei_channel} from TIF.")
+                # ----- Process NUCLEI (2D TIFF) -----
+                print(f"Extracting nuclei channel {nuclei_channel} from 2D TIFF.")
                 imp_nuclei = splitted_channels[nuclei_channel - 1]
                 imp_nuclei = imp_nuclei.resize(1024, 1024, 1, "bilinear")
                 IJ.run(imp_nuclei, "8-bit", "")
@@ -316,9 +321,9 @@ def process_image(valid_folders: list) -> None:
                 print(f"Nuclei channel saved to '{nuclei_out}'.")
                 imp_nuclei.close()
 
-                # ----- Process FOCI (TIF) -----
+                # ----- Process FOCI (2D TIFF) -----
                 for foci_channel in foci_channels:
-                    print(f"Extracting foci channel {foci_channel} from TIF.")
+                    print(f"Extracting foci channel {foci_channel} from 2D TIFF.")
                     imp_foci = splitted_channels[foci_channel - 1]
                     imp_foci = imp_foci.resize(1024, 1024, 1, "bilinear")
                     IJ.run(imp_foci, "8-bit", "")
@@ -343,7 +348,7 @@ def process_image(valid_folders: list) -> None:
 def select_channel_name(input_json_path: str) -> None:
     """
     Reads the JSON file to get valid folders, then prompts the user
-    for channel numbers, and processes ND2/TIF images.
+    for file type and channel numbers, and processes images accordingly.
     """
     # Set up logging
     logging.basicConfig(level=logging.WARNING,
