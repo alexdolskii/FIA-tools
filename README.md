@@ -1,47 +1,41 @@
 # FIA-tools (Foci Imaging Assay)
-This toolkit is optimized for high-throughput, batch processing of large confocal datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
+This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
 
 The project was oroginally developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
 
 For a complete guide to script usage, visit protocols.io.
 
 # Aplication
-A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM unit assays. FIA-tools complements (UMA-tools)[https://github.com/alexdolskii/UMA-tools] by focusing on per-nucleus foci counts, areas, and overlap metrics while preserving a reproducible, batch-friendly workflow.
+A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM unit assays. FIA-tools complements (UMA-tools)[https://github.com/alexdolskii/UMA-tools] by focusing on per-nucleus foci counts and/or colocolization between multiple foci channels, areas while preserving a reproducible, batch-friendly workflow.
 
 For detailed description of 3D fibroblast/ECM units please refer [1](https://pubmed.ncbi.nlm.nih.gov/32222216/) and [2](https://pubmed.ncbi.nlm.nih.gov/27245425/).
 
-Input formats: .nd2 3D stacks and .tif/.tiff 2D images
+Input is a directory of .nd2 or .tif/.tiff confocal images representing Z-stacks with multiple detection channels (DAPI, fibronectin). To ensure correct channel mapping, keep the same channel order across every image.
 Core stack: Python + FIJI/ImageJ (headless), StarDist (2D_versatile_fluo)
-Scope: multiple folders / multiple images per run via a JSON manifest
 Use cases: punctate nuclear foci (Ki-67), pan-nuclear stains, and multi-marker colocalization
 
-Key features
-Robust nuclei detection in noisy data with StarDist; optional watershed + particle analysis to split touching nuclei.
+## Key features
+Robust nuclei detection in noisy data with StarDist; watershed + particle analysis to split touching nuclei.
 Flexible foci calls: user-defined thresholds per marker; supports multiple foci channels and co-localization (pairwise or multi-channel intersections).
-Projection-aware preprocessing: MIP for nuclei; StdDev Z-projection for foci (ND2), or direct channel split (2D TIFF).
-Reproducible batch runs: standardized resizing (1024×1024), 8-bit conversion, metadata capture, timestamped outputs.
-Scalable: parallelized quantification for multi-image datasets.
+Projection-aware preprocessing: Max Intensity Z-prrojection for nuclei; StdDev Z-projection for foci (ND2).
 Transparent: extensive logging, safety prompts before overwriting, and structured output folders.
 
-Workflow (4 scripts)
-1) Image Pre-processing & Channel Extraction
-Select channels interactively: 1 nuclei channel + 1..N foci channels.
-ND2 stacks:
-Nuclei → Max-Intensity Z-Projection (XY)
-Foci → StdDev Z-Projection (XY) to emphasize puncta
-2D TIFF: direct channel split (no Z-projection)
-Standardize & organize: resize to 1024×1024, convert to 8-bit, write to foci_assay/ with subfolders per channel.
-Record calibration: writes image_metadata.txt (pixel size, units, dimensions).
-2) Nuclei Segmentation & Mask Generation
+## Workflow (4 scripts)
+**1) Image Pre-processing & Channel Extraction**
+Interactively select channels (1 nuclei + 1..N foci). For .nd2 .tiff stacks, create Max Intensity Z-projections for nuclei and StdDev Z-projections for foci (XY). Standardize all images (resize to 1024×1024, convert to 8-bit), save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
+
+**2) Nuclei Segmentation & Mask Generation**
 StarDist (2D_versatile_fluo) for nuclei masks; intensity normalization before inference.
 Refinement: ImageJ particle analysis + watershed; minimum size filter to drop debris.
 Output: timestamped nuclei mask folders; logs of warnings/errors for QA.
-3) Foci Detection & Mask Generation
+
+**3) Foci Detection & Mask Generation**
 Validate inputs: finds latest nuclei masks; verifies foci channel folders; reads calibration.
 Choose which foci set to process (e.g., Foci_1_Channel_1).
-Thresholding: apply user-defined intensity threshold → binary foci masks, then watershed to split touching foci.
+Thresholding: apply user-defined intensity threshold - binary foci masks, then watershed to split touching foci.
 Output: timestamped Foci_Masks_* folders + detailed logs.
-4) Foci Quantification (with optional colocalization)
+
+**4) Foci Quantification (with optional colocalization)**
 Label nuclei and compute area metrics (pixels, µm²); save quick-look images with labeled IDs.
 Per-nucleus foci stats: count, total foci area (pixels, µm²), and % nucleus area occupied by foci.
 Colocalization (optional): build intersection masks across selected foci channels; compute the same metrics for overlapped regions.
@@ -59,7 +53,7 @@ Keep fluorescence channel order consistent across images within a run.
 Thresholds and minimum object sizes materially affect sensitivity—tune once, then batch.
 For new cell types or stain characteristics, consider training a custom StarDist model for best accuracy.
 
-## Installation 
+# Installation 
 To download and install *git* please visit [Git Download page](https://git-scm.com/downloads).
 
 To download and install *conda* please visit [Miniforge github](https://github.com/conda-forge/miniforge)
@@ -73,7 +67,7 @@ conda env create -f <linux_|mac_>environment.yaml
 conda activate fia-tools
 ```
 
-## Usage
+# Usage
 
 The main input for all of the programms is `input_paths.json`. Therefore, previously it have to be modified. This file should contain a list of folders with `.nd2` images. The file can contain as many folders as needed.
 
@@ -121,9 +115,7 @@ chmod +x code/4_foci_quantification.py
 code/4_foci_quantification.py -i input_paths.json
 ```
 
-To delve into more details of program usage please visit [FIA_tools](FIA_tools.ipynb) notebook 
-
-## References
+# Dependencies and Tools Used
 
 This program utilizes the following tools:
 
@@ -143,7 +135,7 @@ This program utilizes the following tools:
     - Repository: [StarDist](https://github.com/stardist/stardist)  
     - License: [BSD 3-Clause License](https://github.com/stardist/stardist/blob/main/LICENSE.txt)
 
-## Contributors
+# Contributors
 
 - [Aleksandr Dolskii](aleksandr.dolskii@fccc.edu)
 
