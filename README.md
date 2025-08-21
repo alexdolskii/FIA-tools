@@ -1,12 +1,14 @@
 # FIA-tools (Foci Imaging Assay)
 This toolkit is optimized for high-throughput, batch processing of large confocal datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
 
+The project was oroginally developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
+
 For a complete guide to script usage, visit protocols.io.
 
 # Aplication
-The project was oroginally developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
+A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM unit assays. FIA-tools complements (UMA-tools)[https://github.com/alexdolskii/UMA-tools] by focusing on per-nucleus foci counts, areas, and overlap metrics while preserving a reproducible, batch-friendly workflow.
 
-A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM “unit” assays. FIA-tools complements UMA-tools by focusing on per-nucleus foci counts, areas, and overlap metrics while preserving a reproducible, batch-friendly workflow.
+For detailed description of 3D fibroblast/ECM units please refer [1](https://pubmed.ncbi.nlm.nih.gov/32222216/) and [2](https://pubmed.ncbi.nlm.nih.gov/27245425/).
 
 Input formats: .nd2 3D stacks and .tif/.tiff 2D images
 Core stack: Python + FIJI/ImageJ (headless), StarDist (2D_versatile_fluo)
