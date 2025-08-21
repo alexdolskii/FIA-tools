@@ -15,6 +15,31 @@ from stardist.models import StarDist2D
 from validate_folders import validate_input_file
 
 
+class ImageJInitializationError(Exception):
+    """
+    Exception raised for unsuccessful initialization of ImageJ.
+    """
+    pass
+
+
+def initialize_imagej():
+    """
+    Initialize ImageJ in headless mode.
+
+    Returns:
+        ij (imagej.ImageJ): The initialized ImageJ instance.
+    """
+    # Attempt to initialize ImageJ headless mode
+    print("Initializing ImageJ...")
+    try:
+        ij = imagej.init('sc.fiji:fiji', mode='headless')
+    except Exception as e:
+        raise ImageJInitializationError(
+            f"Failed to initialize ImageJ: {e}")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    return ij
+
+
 def validate_folders(input_json_path: str) -> list:
     valid_folders = validate_input_file(input_json_path)
     nuclei_folders = []
@@ -137,9 +162,7 @@ def process_nuclei(valid_folders: list,
         particle_size: minimum size of nuclei to analyze.
     """
     # Initialize ImageJ
-    print("Initializing ImageJ...")
-    ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    ij = initialize_imagej()
 
     # Import Java classes
     IJ = jimport('ij.IJ')

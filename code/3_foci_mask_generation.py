@@ -9,6 +9,31 @@ from scyjava import jimport
 from validate_folders import validate_input_file
 
 
+class ImageJInitializationError(Exception):
+    """
+    Exception raised for unsuccessful initialization of ImageJ.
+    """
+    pass
+
+
+def initialize_imagej():
+    """
+    Initialize ImageJ in headless mode.
+
+    Returns:
+        ij (imagej.ImageJ): The initialized ImageJ instance.
+    """
+    # Attempt to initialize ImageJ headless mode
+    print("Initializing ImageJ...")
+    try:
+        ij = imagej.init('sc.fiji:fiji', mode='headless')
+    except Exception as e:
+        raise ImageJInitializationError(
+            f"Failed to initialize ImageJ: {e}")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    return ij
+
+
 def validate_folders(input_json_path: str) -> dict:
     valid_folders = validate_input_file(input_json_path)
     # checking 'Foci' and the latest
@@ -207,12 +232,8 @@ def filter_foci(folder: dict,
               f"{subfolder_path}. Nothing to do.\n")
         return
 
-    # Initialize ImageJ once we know there's something to process
-    print("  - Initializing ImageJ...")
-    ij = imagej.init('sc.fiji:fiji',
-                     mode='headless')
-    print(f"  - ImageJ initialization completed. "
-          f"Version: {ij.getVersion()}")
+    # Initialize ImageJ
+    ij = initialize_imagej()
 
     # Import Java classes
     IJ = jimport('ij.IJ')

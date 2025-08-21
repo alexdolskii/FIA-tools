@@ -18,6 +18,31 @@ os.environ['_JAVA_OPTIONS'] = (
 )
 
 
+class ImageJInitializationError(Exception):
+    """
+    Exception raised for unsuccessful initialization of ImageJ.
+    """
+    pass
+
+
+def initialize_imagej():
+    """
+    Initialize ImageJ in headless mode.
+
+    Returns:
+        ij (imagej.ImageJ): The initialized ImageJ instance.
+    """
+    # Attempt to initialize ImageJ headless mode
+    print("Initializing ImageJ...")
+    try:
+        ij = imagej.init('sc.fiji:fiji', mode='headless')
+    except Exception as e:
+        raise ImageJInitializationError(
+            f"Failed to initialize ImageJ: {e}")
+    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    return ij
+
+
 def validate_folders(input_json_path: str) -> list:
     folder_paths = validate_input_file(input_json_path)
     valid_folders = []
@@ -25,7 +50,8 @@ def validate_folders(input_json_path: str) -> list:
         if not os.path.exists(folder_path):
             raise ValueError(f"Folder '{folder_path}' does not exist.")
         valid_extensions = {'.nd2', '.tif', '.tiff'}
-        # Skip hidden files (starting with .) and macOS temp files (starting with ._)
+        # Skip hidden files (starting with .)
+        # and macOS temp files (starting with ._)
         all_files = [f for f in os.listdir(folder_path)
                      if os.path.isfile(os.path.join(folder_path, f))
                      and not f.startswith('.') and not f.startswith('._')]
@@ -63,13 +89,12 @@ def process_image(valid_folders: list) -> None:
         * Foci   -> ChannelSplitter channel for each specified channel
 
     Creates a text file (image_metadata.txt) in the 'foci_assay' folder,
-    listing image calibration properties and dimension info for each processed image.
+    listing image calibration properties and dimension
+    info for each processed image.
     """
 
     # Initialize ImageJ
-    print("Initializing ImageJ...")
-    ij = imagej.init('sc.fiji:fiji', mode='headless')
-    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    ij = initialize_imagej()
 
     # Import Java classes
     IJ = jimport('ij.IJ')
@@ -221,7 +246,8 @@ def process_image(valid_folders: list) -> None:
             metadata_file.flush()  # Ensure immediate write
 
             # For ND2 files or Z-stack TIFFs (file types 1 and 2)
-            if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff') and file_type in (1, 2))):
+            if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff')
+                                       and file_type in (1, 2))):
                 # Check if channels exist
                 if (nuclei_channel > channels
                         or any(foci_channel > channels
@@ -292,7 +318,7 @@ def process_image(valid_folders: list) -> None:
             else:
                 # For 2D multi-channel TIFF files (file type 3)
                 print("Processing as 2D multi-channel TIFF file.")
-                
+
                 # Split channels
                 splitted_channels = ChannelSplitter.split(imp)
                 total_split_channels = len(splitted_channels)
@@ -309,7 +335,8 @@ def process_image(valid_folders: list) -> None:
                     continue
 
                 # ----- Process NUCLEI (2D TIFF) -----
-                print(f"Extracting nuclei channel {nuclei_channel} from 2D TIFF.")
+                print(f"Extracting nuclei channel "
+                      f"{nuclei_channel} from 2D TIFF.")
                 imp_nuclei = splitted_channels[nuclei_channel - 1]
                 imp_nuclei = imp_nuclei.resize(1024, 1024, 1, "bilinear")
                 IJ.run(imp_nuclei, "8-bit", "")
@@ -323,7 +350,8 @@ def process_image(valid_folders: list) -> None:
 
                 # ----- Process FOCI (2D TIFF) -----
                 for foci_channel in foci_channels:
-                    print(f"Extracting foci channel {foci_channel} from 2D TIFF.")
+                    print(f"Extracting foci channel "
+                          f"{foci_channel} from 2D TIFF.")
                     imp_foci = splitted_channels[foci_channel - 1]
                     imp_foci = imp_foci.resize(1024, 1024, 1, "bilinear")
                     IJ.run(imp_foci, "8-bit", "")
