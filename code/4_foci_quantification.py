@@ -414,7 +414,8 @@ def process_nuclei_image(nuc_file_path: str,
     # Merge single channels
     df_single = all_dfs[0]
     for df_next in all_dfs[1:]:
-        # we allow duplicates of "Nucleus Area (pixels)" but they are the same => no conflict yet
+        # we allow duplicates of "Nucleus Area (pixels)"
+        # but they are the same => no conflict yet
         df_single = df_single.merge(df_next,
                                     on=["Image Key", "Nucleus"],
                                     how="outer")
@@ -443,7 +444,8 @@ def process_nuclei_image(nuc_file_path: str,
             # Convert to black-objects, white-background:
             #   objects = 0, background = 255
             # This is a binary representation, losing distinct labels
-            # but satisfying the user's request for black object / white background
+            # but satisfying the user's request
+            # for black object / white background
             inverted_mask = (np.where(intersection_mask > 0, 0, 255)
                              .astype(np.uint8))
 
@@ -497,7 +499,8 @@ def process_nuclei_image(nuc_file_path: str,
         df_inter_merged = df_intersections[0]
         for df_next in df_intersections[1:]:
             df_inter_merged = df_inter_merged.merge(df_next,
-                                                    on=["Image Key", "Nucleus"],
+                                                    on=["Image Key",
+                                                        "Nucleus"],
                                                     how="outer")
     else:
         df_inter_merged = pd.DataFrame()
@@ -605,7 +608,8 @@ def parallel_processing(nuclei_files: list,
 
             logging.info(
                 f"Task {i}/{len(futures)} completed. "
-                f"Elapsed {elapsed:.1f}s, avg {avg_time_per_task:.2f}s per task. "
+                f"Elapsed {elapsed:.1f}s, "
+                f"avg {avg_time_per_task:.2f}s per task. "
                 f"Remaining {tasks_left} tasks, "
                 f"ETA ~ {finish_time_est.strftime('%H:%M:%S')}."
             )
@@ -620,7 +624,8 @@ def main_summarize_res(input_json_path: str, njobs=4) -> None:
       1) Reads JSON with folder paths,
       2) Asks user if we should start any processing,
       3) Asks user if we should perform colocalization or skip it,
-      4) For each folder, gathers nuclei/foci, loads metadata, runs parallel analysis, saves results.
+      4) For each folder, gathers nuclei/foci,
+      loads metadata, runs parallel analysis, saves results.
     """
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - '
                                                    '%(levelname)s - '
@@ -635,8 +640,9 @@ def main_summarize_res(input_json_path: str, njobs=4) -> None:
     elif proceed_processing not in ('yes', 'y', 'no', 'n'):
         raise ValueError("Incorrect input. Please enter yes/no")
 
-    co_loc_answer = input("Do you want to perform "
-                          "colocalization analysis? (yes/no): ").strip().lower()
+    co_loc_answer = (input("Do you want to perform "
+                           "colocalization analysis? (yes/no): ")
+                     .strip().lower())
     perform_colocalization = (co_loc_answer in ("yes", "y"))
 
     for base_folder, info in folder_dicts.items():
@@ -656,7 +662,8 @@ def main_summarize_res(input_json_path: str, njobs=4) -> None:
         metadata = extract_metadata(metadata_path)
 
         try:
-            nuclei_files, channels_dict = gather_paths_and_channels(base_folder)
+            (nuclei_files,
+             channels_dict) = gather_paths_and_channels(base_folder)
         except Exception as e:
             logging.error(f"Error gathering paths: {e}")
             continue
@@ -679,7 +686,8 @@ def main_summarize_res(input_json_path: str, njobs=4) -> None:
             continue
 
         df_results = df_results.sort_values(by=["Image Key", "Nucleus"])
-        output_csv = os.path.join(results_folder, "all_results_with_coloc_universal.csv")
+        output_csv = os.path.join(results_folder,
+                                  "all_results_with_coloc_universal.csv")
         df_results.to_csv(output_csv, index=False)
         logging.info(f"Saved result: {output_csv}")
 
