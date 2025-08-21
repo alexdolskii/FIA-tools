@@ -1,9 +1,61 @@
-# FIA-tools
+# FIA-tools (Foci Imaging Assay)
+This toolkit is optimized for high-throughput, batch processing of large confocal datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
 
-**FIA-tools** quantifies and measures the area of double-strand break (DSB) foci in multi-level 3D confocal images of cancer-associated fibroblasts. It used [ImageJ](https://github.com/imagej) to process images and count elements and pretrained models from [StarDist](https://github.com/stardist/stardist) to recognize cell nuclei.
-The program can be adapted to analyze any foci/specks detected by immunofluorescence (IF) staining, utilizing a nuclei mask for segmentation.
+For a complete guide to script usage, visit protocols.io.
 
-The project is developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
+# Aplication
+The project was oroginally developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
+
+A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM “unit” assays. FIA-tools complements UMA-tools by focusing on per-nucleus foci counts, areas, and overlap metrics while preserving a reproducible, batch-friendly workflow.
+
+Input formats: .nd2 3D stacks and .tif/.tiff 2D images
+Core stack: Python + FIJI/ImageJ (headless), StarDist (2D_versatile_fluo)
+Scope: multiple folders / multiple images per run via a JSON manifest
+Use cases: punctate nuclear foci (Ki-67), pan-nuclear stains, and multi-marker colocalization
+
+Key features
+Robust nuclei detection in noisy data with StarDist; optional watershed + particle analysis to split touching nuclei.
+Flexible foci calls: user-defined thresholds per marker; supports multiple foci channels and co-localization (pairwise or multi-channel intersections).
+Projection-aware preprocessing: MIP for nuclei; StdDev Z-projection for foci (ND2), or direct channel split (2D TIFF).
+Reproducible batch runs: standardized resizing (1024×1024), 8-bit conversion, metadata capture, timestamped outputs.
+Scalable: parallelized quantification for multi-image datasets.
+Transparent: extensive logging, safety prompts before overwriting, and structured output folders.
+
+Workflow (4 scripts)
+1) Image Pre-processing & Channel Extraction
+Select channels interactively: 1 nuclei channel + 1..N foci channels.
+ND2 stacks:
+Nuclei → Max-Intensity Z-Projection (XY)
+Foci → StdDev Z-Projection (XY) to emphasize puncta
+2D TIFF: direct channel split (no Z-projection)
+Standardize & organize: resize to 1024×1024, convert to 8-bit, write to foci_assay/ with subfolders per channel.
+Record calibration: writes image_metadata.txt (pixel size, units, dimensions).
+2) Nuclei Segmentation & Mask Generation
+StarDist (2D_versatile_fluo) for nuclei masks; intensity normalization before inference.
+Refinement: ImageJ particle analysis + watershed; minimum size filter to drop debris.
+Output: timestamped nuclei mask folders; logs of warnings/errors for QA.
+3) Foci Detection & Mask Generation
+Validate inputs: finds latest nuclei masks; verifies foci channel folders; reads calibration.
+Choose which foci set to process (e.g., Foci_1_Channel_1).
+Thresholding: apply user-defined intensity threshold → binary foci masks, then watershed to split touching foci.
+Output: timestamped Foci_Masks_* folders + detailed logs.
+4) Foci Quantification (with optional colocalization)
+Label nuclei and compute area metrics (pixels, µm²); save quick-look images with labeled IDs.
+Per-nucleus foci stats: count, total foci area (pixels, µm²), and % nucleus area occupied by foci.
+Colocalization (optional): build intersection masks across selected foci channels; compute the same metrics for overlapped regions.
+Parallelized: speeds up large batches via multi-core processing.
+Output: unified CSV (Pandas) merging single-channel and colocalization results; ready for downstream statistics.
+Outputs
+Masks: nuclei masks; per-channel foci masks; optional intersection masks.
+QC images: labeled nuclei overlays for rapid visual validation.
+Tables: image-level and consolidated CSVs with per-nucleus metrics; metadata file for calibration.
+Logs: detailed processing history and warnings.
+
+Conventions & notes
+A single run can cover many folders/conditions defined in one JSON manifest.
+Keep fluorescence channel order consistent across images within a run.
+Thresholds and minimum object sizes materially affect sensitivity—tune once, then batch.
+For new cell types or stain characteristics, consider training a custom StarDist model for best accuracy.
 
 ## Installation 
 To download and install *git* please visit [Git Download page](https://git-scm.com/downloads).
