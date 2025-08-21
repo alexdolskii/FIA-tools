@@ -25,27 +25,13 @@ Transparent: extensive logging, safety prompts before overwriting, and structure
 Interactively select channels (1 nuclei + 1..N foci). For .nd2 .tiff stacks, create Max Intensity Z-projections for nuclei and StdDev Z-projections for foci (XY). Standardize all images (resize to 1024×1024, convert to 8-bit), save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
 
 **2) Nuclei Segmentation & Mask Generation**
-StarDist (2D_versatile_fluo) for nuclei masks; intensity normalization before inference.
-Refinement: ImageJ particle analysis + watershed; minimum size filter to drop debris.
-Output: timestamped nuclei mask folders; logs of warnings/errors for QA.
+Perform nuclei segmentation with StarDist (2D_versatile_fluo) after intensity normalization, then refine masks via ImageJ particle analysis and watershed to split touching objects, applying a minimum-size filter to remove debris; results are saved to timestamped nuclei-mask folders with detailed warning/error logs for QA.
 
 **3) Foci Detection & Mask Generation**
-Validate inputs: finds latest nuclei masks; verifies foci channel folders; reads calibration.
-Choose which foci set to process (e.g., Foci_1_Channel_1).
-Thresholding: apply user-defined intensity threshold - binary foci masks, then watershed to split touching foci.
-Output: timestamped Foci_Masks_* folders + detailed logs.
+Validate inputs by locating the latest nuclei masks, verifying foci-channel folders, and reading calibration; select the foci set to process (e.g., Foci_1_Channel_1); apply a user-defined intensity threshold to create binary foci masks, then use watershed to split touching foci; save results to timestamped Foci_Masks_* directories with detailed logs for QA.
 
 **4) Foci Quantification (with optional colocalization)**
-Label nuclei and compute area metrics (pixels, µm²); save quick-look images with labeled IDs.
-Per-nucleus foci stats: count, total foci area (pixels, µm²), and % nucleus area occupied by foci.
-Colocalization (optional): build intersection masks across selected foci channels; compute the same metrics for overlapped regions.
-Parallelized: speeds up large batches via multi-core processing.
-Output: unified CSV (Pandas) merging single-channel and colocalization results; ready for downstream statistics.
-Outputs
-Masks: nuclei masks; per-channel foci masks; optional intersection masks.
-QC images: labeled nuclei overlays for rapid visual validation.
-Tables: image-level and consolidated CSVs with per-nucleus metrics; metadata file for calibration.
-Logs: detailed processing history and warnings.
+Label nuclei and compute area metrics (pixels, µm²), saving quick-look images with labeled IDs; for each nucleus, quantify foci count, total foci area (pixels, µm²), and % area occupied by foci, with optional colocalization via intersection masks across selected foci channels (same metrics on overlaps). Results are consolidated into a unified CSV combining single-channel and colocalization readouts for downstream stats; outputs also include nuclei masks, per-channel foci masks, optional intersection masks, QC overlays, image-level and study-level tables with per-nucleus metrics, a calibration metadata file, and detailed logs.
 
 Conventions & notes
 A single run can cover many folders/conditions defined in one JSON manifest.
