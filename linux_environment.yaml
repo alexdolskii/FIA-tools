@@ -1,4 +1,4 @@
-name: fia-tools
+name: fia_tools
 channels:
   - conda-forge
 dependencies:
