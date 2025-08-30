@@ -1,7 +1,7 @@
 [project]
 name = "fia-tools"
 version = "0.1.0"
-description = "Add your description here"
+description = "A pipeline for nuclear foci quantification and colocalization in confocal images."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
