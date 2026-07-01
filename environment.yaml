@@ -1,0 +1,24 @@
+name: fia_tools
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - imglyb
+  - ipykernel
+  - ipywidgets
+  - jgo
+  - jpype1
+  - matplotlib-base
+  - maven
+  - notebook
+  - openjdk=11
+  - pandas
+  - scikit-image
+  - scyjava
+  - pip:
+      - csbdeep==0.8.1
+      - numpy==1.26.4
+      - pyimagej==1.5.0
+      - stardist==0.9.1
+      - tensorflow==2.18.0

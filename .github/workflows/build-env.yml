@@ -1,0 +1,84 @@
+name: Build Conda Environment
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "environment.yaml"
+      - ".github/workflows/build-env.yml"
+  pull_request:
+    paths:
+      - "environment.yaml"
+      - ".github/workflows/build-env.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -el {0}
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda (via Miniforge + mamba)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          use-mamba: true
+          auto-activate-base: false
+          activate-environment: fia_tools
+          environment-file: environment.yaml
+          cache-environment: true
+          cache-environment-key: conda-${{ runner.os }}-${{ hashFiles('environment.yaml') }}
+
+      - name: Display environment info
+        run: |
+          conda info
+          conda list
+
+      - name: Verify key package imports
+        run: |
+          python - <<'EOF'
+          import importlib, sys
+
+          packages = {
+              "imagej":       "pyimagej",
+              "stardist":     "stardist",
+              "csbdeep":      "csbdeep",
+              "tensorflow":   "tensorflow",
+              "scyjava":      "scyjava",
+              "skimage":      "scikit-image",
+              "pandas":       "pandas",
+              "matplotlib":   "matplotlib",
+          }
+
+          failed = []
+          for module, pkg in packages.items():
+              try:
+                  importlib.import_module(module)
+                  print(f"  OK  {pkg}")
+              except ImportError as e:
+                  print(f"  FAIL {pkg}: {e}")
+                  failed.append(pkg)
+
+          if failed:
+              print(f"\nFailed imports: {failed}", file=sys.stderr)
+              sys.exit(1)
+
+          import tensorflow as tf
+          print(f"\nTensorFlow version : {tf.__version__}")
+          print("Environment verification passed.")
+          EOF
