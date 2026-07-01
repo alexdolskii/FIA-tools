@@ -2,7 +2,7 @@ name: Build Conda Environment
 
 on:
   push:
-    branches: [main]
+    branches: [main, tech_dev]
     paths:
       - "environment.yaml"
       - ".github/workflows/build-env.yml"
