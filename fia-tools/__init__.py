@@ -32,7 +32,7 @@ def generate_nuclei_mask():
     _load_script("2_nuclei_mask_generation").main(args.input, args.particle_size)
 
 
-def filter_foci():
+def generate_foci_mask():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, required=True)
     parser.add_argument('-f', '--foci_threshold', type=int, default=150)
@@ -40,7 +40,7 @@ def filter_foci():
     _load_script("3_foci_mask_generation").main_filter_foci(args.input, args.foci_threshold)
 
 
-def summarize_results():
+def quantify_foci():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, required=True)
     parser.add_argument('-j', '--jobs', type=int, default=4)
