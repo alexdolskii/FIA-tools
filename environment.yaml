@@ -13,6 +13,7 @@ dependencies:
   - maven
   - notebook
   - openjdk=11
+  - setuptools<82.0.0
   - pandas
   - scikit-image
   - scyjava
