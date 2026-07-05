@@ -51,8 +51,9 @@ To install the package please follow these steps:
 ```bash
 git clone https://github.com/alexdolskii/FIA-tools.git
 cd FIA-tools
-conda env create -f <linux_|mac_>environment.yaml
+conda env create -f environment.yaml
 conda activate fia-tools
+pip install .
 ```
 
 # Usage
@@ -61,33 +62,27 @@ The main input for all of the programms is `input_paths.json`. Therefore, previo
 
 Further, to implement analysis run all of the programs one after another:
 
-#### 1_select_channels.py
+#### Image Pre-processing & Channel Extraction
 
 ```bash
-chmod +x code/1_select_channels.py
-# Run command
-code/1_select_channels.py -i input_paths.json
+select_channels -i input_paths.json
 ```
-#### 2_nuclei_mask_generation
+#### Nuclei Segmentation & Mask Generation
 
 ```bash
-chmod +x code/2_nuclei_mask_generation.py
-# Run command
-code/2_nuclei_mask_generation.py -i input_paths.json
+generate_nuclei_mask -i input_paths.json
 ```
 
 To customize the thresholds for nuclei please use other *particle_size* parameter
 
 ```bash
-code/2_nuclei_mask_generation.py -i input_paths.json -p 2000
+generate_nuclei_mask -i input_paths.json -p 2000
 ```
 
-#### 3_foci_mask_generation.py
+#### Foci Detection & Mask Generation
 
 ```bash
-chmod +x code/3_foci_mask_generation.py
-# Run command
-code/3_foci_mask_generation.py -i input_paths.json
+generate_foci_mask -i input_paths.json
 ```
 
 To customize the thresholds for foci please use other *foci_threshold* parameter
@@ -96,11 +91,10 @@ To customize the thresholds for foci please use other *foci_threshold* parameter
 code/3_foci_mask_generation.py  -i input_paths.json -f 100
 ```
 
-#### 4_foci_quantification.py
+#### Foci Quantification
 
 ```bash
-chmod +x code/4_foci_quantification.py
-code/4_foci_quantification.py -i input_paths.json
+quantify_foci -i input_paths.json
 ```
 
 # Dependencies and Tools Used
