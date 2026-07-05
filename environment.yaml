@@ -7,7 +7,6 @@ dependencies:
   - imglyb
   - ipykernel
   - ipywidgets
-  - jgo
   - jpype1
   - matplotlib-base
   - maven
@@ -16,8 +15,9 @@ dependencies:
   - setuptools<82.0.0
   - pandas
   - scikit-image
-  - scyjava
   - pip:
+      - jgo==1.0.4
+      - scyjava==1.10.0
       - csbdeep==0.8.1
       - numpy==1.26.4
       - pyimagej==1.5.0

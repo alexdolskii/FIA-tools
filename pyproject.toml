@@ -6,11 +6,23 @@ readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
     "csbdeep>=0.8.1",
-    "imagej>=0.3.2",
+    "pyimagej>=0.3.2",
     "numpy==1.26.4",
     "scikit-image>=0.25.2",
-    "setuptools>=80.9.0",
+    "setuptools<82.0.0",
     "scyjava==1.10.0",
     "stardist>=0.9.1",
-    "tensorflow==2.14.1",
+    "tensorflow>=2.14.1",
 ]
+
+[tool.setuptools]
+packages = ["fia_tools"]
+
+[tool.setuptools.package-dir]
+"fia_tools" = "fia-tools"
+
+[project.scripts]
+select_channels = "fia_tools:select_channels"
+generate_nuclei_mask = "fia_tools:generate_nuclei_mask"
+filter_foci = "fia_tools:filter_foci"
+summarize_results = "fia_tools:summarize_results"
