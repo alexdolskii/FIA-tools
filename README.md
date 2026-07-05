@@ -88,7 +88,7 @@ generate_foci_mask -i input_paths.json
 To customize the thresholds for foci please use other *foci_threshold* parameter
 
 ```bash
-code/3_foci_mask_generation.py  -i input_paths.json -f 100
+generate_foci_mask  -i input_paths.json -f 100
 ```
 
 #### Foci Quantification
