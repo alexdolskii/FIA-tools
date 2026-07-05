@@ -94,7 +94,7 @@ def process_image(valid_folders: list) -> None:
     """
 
     # Initialize ImageJ
-    ij = initialize_imagej()
+    ij = initialize_imagej()  # noqa: F841
 
     # Import Java classes
     IJ = jimport('ij.IJ')

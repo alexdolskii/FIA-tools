@@ -162,7 +162,7 @@ def process_nuclei(valid_folders: list,
         particle_size: minimum size of nuclei to analyze.
     """
     # Initialize ImageJ
-    ij = initialize_imagej()
+    ij = initialize_imagej()  # noqa: F841
 
     # Import Java classes
     IJ = jimport('ij.IJ')

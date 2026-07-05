@@ -233,7 +233,7 @@ def filter_foci(folder: dict,
         return
 
     # Initialize ImageJ
-    ij = initialize_imagej()
+    ij = initialize_imagej()  # noqa: F841
 
     # Import Java classes
     IJ = jimport('ij.IJ')
