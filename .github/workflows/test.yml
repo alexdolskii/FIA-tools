@@ -22,10 +22,20 @@ jobs:
           python-version: "3.10"
           auto-activate-base: false  # turn off the base env
 
-      - name: Run pytest
-        shell: bash -el {0}  # Run in the conda env 
+      - name: Run pytest with coverage
+        shell: bash -el {0}  # To run in env
         run: |
-          pytest tests/ -v --tb=short --junitxml=junit/test-results.xml
+          pytest tests/ -v --tb=short \
+            --junitxml=junit/test-results.xml \
+            --cov=fia-tools \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: true
 
       - name: Upload test results
         if: always()
@@ -33,4 +43,3 @@ jobs:
         with:
           name: test-results
           path: junit/test-results.xml
-          
