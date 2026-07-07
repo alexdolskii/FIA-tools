@@ -14,13 +14,9 @@ Each test is structured in three sections:
 
 import os
 import sys
-from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
-import pandas as pd
 import pytest
-from skimage.io import imsave as sk_imsave
 
 # The module was loaded and registered by conftest.py.
 mod = sys.modules["foci_quantification"]

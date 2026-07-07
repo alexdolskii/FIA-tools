@@ -8,7 +8,6 @@ Each test is structured in three sections:
 """
 
 import json
-import os
 
 import pytest
 
