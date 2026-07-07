@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/github/EkaterinShitik/FIA-tools/branch/tech_dev/graph/badge.svg?token=0W6YB1ZV8G)](https://codecov.io/github/EkaterinShitik/FIA-tools)
+
 # FIA-tools (Foci Imaging Assay)
 Please visit full description of FIA-tools: [step-by-step-protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-gzpabx5if)
 
