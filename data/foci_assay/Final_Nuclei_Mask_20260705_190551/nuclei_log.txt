@@ -1,0 +1,1 @@
+2026-07-05 19:05:52,807 - ERROR - Skipping '2_log.txt' (unsupported format).

@@ -1,0 +1,36 @@
+name: Test
+
+on:
+  push:
+    branches: [main, tech_dev]
+  pull_request:
+    branches: [main, tech_dev]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: fia_tools
+          environment-file: environment.yaml
+          python-version: "3.10"
+          auto-activate-base: false  # turn off the base env
+
+      - name: Run pytest
+        shell: bash -el {0}  # Run in the conda env 
+        run: |
+          pytest tests/ -v --tb=short --junitxml=junit/test-results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: junit/test-results.xml
+          

@@ -1,0 +1,15 @@
+2026-07-05 19:05:31,380 - WARNING - No version available for dependency org.jogamp.gluegen:gluegen-rt:jar:natives-macosx-aarch64:runtime
+2026-07-05 19:05:31,381 - WARNING - No version available for dependency org.jogamp.jogl:jogl-all:jar:natives-macosx-aarch64:runtime
+2026-07-05 19:05:31,539 - WARNING - No version available for dependency org.jogamp.gluegen:gluegen-rt:jar:natives-macosx-aarch64:runtime
+2026-07-05 19:05:31,539 - WARNING - No version available for dependency org.jogamp.jogl:jogl-all:jar:natives-macosx-aarch64:runtime
+2026-07-05 19:05:36,152 - WARNING - org.openjfx:javafx-base:19.0.2.1: org.openjfx:javafx-base: skipped (uninterpolated properties in org.openjfx:javafx-base:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,152 - WARNING - org.openjfx:javafx-fxml:19.0.2.1: org.openjfx:javafx-fxml: skipped (uninterpolated properties in org.openjfx:javafx-fxml:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,152 - WARNING - org.openjfx:javafx-swing:19.0.2.1: org.openjfx:javafx-swing: skipped (uninterpolated properties in org.openjfx:javafx-swing:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,153 - WARNING - org.openjfx:javafx-web:19.0.2.1: org.openjfx:javafx-web: skipped (uninterpolated properties in org.openjfx:javafx-web:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,361 - WARNING - org.openjfx:javafx-controls:19.0.2.1: org.openjfx:javafx-controls: skipped (uninterpolated properties in org.openjfx:javafx-controls:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,361 - WARNING - org.openjfx:javafx-graphics:19.0.2.1: org.openjfx:javafx-graphics: skipped (uninterpolated properties in org.openjfx:javafx-graphics:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:36,362 - WARNING - org.openjfx:javafx-media:19.0.2.1: org.openjfx:javafx-media: skipped (uninterpolated properties in org.openjfx:javafx-media:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:38,641 - WARNING - org.openjfx:javafx-base:19.0.2.1: org.openjfx:javafx-base: skipped (uninterpolated properties in org.openjfx:javafx-base:jar:${javafx.platform}:19.0.2.1:compile)
+2026-07-05 19:05:39,576 - WARNING - com.yahoo.datasketches:sketches-core:0.9.0: com.yahoo.datasketches:memory: skipped (uninterpolated properties in com.yahoo.datasketches:memory:jar:${project.parent.version}:compile)
+2026-07-05 19:05:39,666 - WARNING - jar tool not found at /Users/ekaterina_shitik/Library/Caches/cjdk/v0/jdks/99854fcc95cc2a0c3160db591f3abed1cd5a0869/zulu11.88.17-ca-jre11.0.31-macosx_aarch64/Contents/Home/bin/jar
+2026-07-05 19:05:52,807 - ERROR - Skipping '2_log.txt' (unsupported format).

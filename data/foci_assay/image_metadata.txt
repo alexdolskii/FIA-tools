@@ -1,0 +1,20 @@
+Image Metadata:
+================
+Image Name: 2.nd2
+  Pixel Width: 0.2071601898007465
+  Pixel Height: 0.2071601898007465
+  Pixel Depth: 0.5
+  Unit: micron
+  Channels: 3
+  Slices: 30
+  Frames: 1
+
+Image Name: 1.nd2
+  Pixel Width: 0.2071601898007465
+  Pixel Height: 0.2071601898007465
+  Pixel Depth: 0.5
+  Unit: micron
+  Channels: 3
+  Slices: 30
+  Frames: 1
+
