@@ -52,7 +52,7 @@ To install the package please follow these steps:
 git clone https://github.com/alexdolskii/FIA-tools.git
 cd FIA-tools
 conda env create -f environment.yaml
-conda activate fia-tools
+conda activate fia_tools
 pip install .
 ```
 
