@@ -68,11 +68,6 @@ Further, to implement analysis run all of the programs one after another:
 select_channels -i input_paths.json
 ```
 #### Nuclei Segmentation & Mask Generation
-
-```bash
-generate_nuclei_mask -i input_paths.json
-```
-
 To customize the thresholds for nuclei please use other *particle_size* parameter
 
 ```bash
@@ -80,11 +75,6 @@ generate_nuclei_mask -i input_paths.json -p 2000
 ```
 
 #### Foci Detection & Mask Generation
-
-```bash
-generate_foci_mask -i input_paths.json
-```
-
 To customize the thresholds for foci please use other *foci_threshold* parameter
 
 ```bash
