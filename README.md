@@ -1,10 +1,8 @@
 # FIA-tools (Foci Imaging Assay
 
-FIA-tools is a modular, semi-interactive Python toolkit for processing confocal immunofluorescence images and quantifying nuclear foci.This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
+FIA-tools is a modular, semi-interactive Python toolkit for processing confocal immunofluorescence images and quantifying nuclear foci. This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
 
-FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools). The project was originally developed as part of the study *Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts* in the [Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman).
-
-Please visit full description of FIA-tools: [step-by-step-protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-gzpabx5if)
+FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools). The project was originally developed as part of the study [`*Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts*`](https://pubmed.ncbi.nlm.nih.gov/41884584/) in the [Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman).
 
 ## Protocol versions and repository branches
 
