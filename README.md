@@ -1,9 +1,21 @@
-# FIA-tools (Foci Imaging Assay)
+# FIA-tools (Foci Imaging Assay
+
+FIA-tools is a modular, semi-interactive Python toolkit for processing confocal immunofluorescence images and quantifying nuclear foci.This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
+
+FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools). The project was originally developed as part of the study *Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts* in the [Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman).
+
 Please visit full description of FIA-tools: [step-by-step-protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-gzpabx5if)
 
-This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
+## Protocol versions and repository branches
 
-The project was oroginally developed as a part of the research **Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts** in the  [Edna (Eti) Cukierman lab](https://www.foxchase.org/edna-cukierman). 
+| Branch | Relationship to the protocol | Documentation to use |
+| --- | --- | --- |
+| [`main`](https://github.com/alexdolskii/FIA-tools/tree/main) | Implementation associated with the published protocol, version 1 | [Fibroblast/ECM Functional Units: A Medium-Throughput Assay and Digital Analysis Pipeline, version 1](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1) and the README in `main` |
+| [`tech_dev`](https://github.com/alexdolskii/FIA-tools/tree/tech_dev) | Development version being prepared for an updated protocol | This README, including the changes and development notes below |
+
+This README describes `tech_dev`. The installation and command names below apply to this branch. The revised protocol is in preparation; its version-specific link will be added when it is published.
+
+For work following protocol version 1, use the corresponding `main` implementation. For work using `tech_dev`, record the exact Git commit together with the analysis parameters and environment. A branch name can refer to different commits over time.
 
 For a complete guide to script usage, visit protocols.io.
 
