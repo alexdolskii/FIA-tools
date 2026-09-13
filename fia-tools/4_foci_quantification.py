@@ -342,6 +342,10 @@ def process_nuclei_image(nuc_file_path: str,
       for each nucleus.
     """
     nuc_filename = os.path.basename(nuc_file_path)
+    if nuc_filename.startswith('.'):
+        logging.warning(f"Skipping hidden nuclei file: {nuc_file_path}")
+        return []
+
     nuc_key = extract_image_key(nuc_filename)
     logging.info(f"Started nuclei processing: {nuc_filename}")
 
@@ -374,6 +378,10 @@ def process_nuclei_image(nuc_file_path: str,
     channel_masks = {}
     for ch_name in channel_names:
         path_ch = foci_channels_info[ch_name]
+        if os.path.basename(path_ch).startswith('.'):
+            logging.warning(f"Skipping hidden foci file: {path_ch}")
+            continue
+
         if not os.path.exists(path_ch):
             logging.warning(f"Foci file not found: {path_ch}")
             continue
@@ -529,7 +537,7 @@ def gather_paths_and_channels(base_folder: str):
 
     nuclei_files = []
     for f in os.listdir(nuclei_mask_folder):
-        if f.endswith(".tif"):
+        if not f.startswith('.') and f.endswith(".tif"):
             nuclei_files.append(os.path.join(nuclei_mask_folder, f))
 
     latest_foci = get_latest_foci_folders(foci_assay_folder)
@@ -538,7 +546,7 @@ def gather_paths_and_channels(base_folder: str):
     for channel_name, foci_folder_path in latest_foci.items():
         foci_files = [fn for fn in
                       os.listdir(foci_folder_path)
-                      if fn.endswith(".tif")]
+                      if not fn.startswith('.') and fn.endswith(".tif")]
         for tif_file in foci_files:
             foci_key = extract_image_key(tif_file)
             if foci_key not in channels_dict:

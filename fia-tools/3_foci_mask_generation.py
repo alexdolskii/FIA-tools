@@ -99,7 +99,8 @@ def validate_folders(input_json_path: str) -> dict:
         # Check for files in 'Foci'
         if "foci_folder" in result[folder]:
             foci_files = [f for f in os.listdir(result[folder]["foci_folder"])
-                          if f.lower().endswith('.tif')]
+                          if not f.startswith('.')
+                          and f.lower().endswith('.tif')]
             if len(foci_files) == 0:
                 logging.error("No '.tif' files found in folder 'Foci'.")
             else:
@@ -110,7 +111,8 @@ def validate_folders(input_json_path: str) -> dict:
         if "nuclei_folder" in result[folder]:
             nuclei_files = [f for f in
                             os.listdir(result[folder]["nuclei_folder"])
-                            if f.lower().endswith('.tif')]
+                            if not f.startswith('.')
+                            and f.lower().endswith('.tif')]
             if len(nuclei_files) == 0:
                 logging.error(f"No '.tif' files found in folder "
                               f"'{result[folder]['nuclei_folder']}'.")
@@ -213,6 +215,10 @@ def filter_foci(folder: dict,
     foci_folder = folder['foci_folder']
     foci_assay_folder = folder['foci_assay_folder']
 
+    if chosen_subfolder.startswith('.'):
+        logging.warning(f"Skipping hidden foci folder: {chosen_subfolder}")
+        return
+
     # Build the path to the chosen subfolder
     subfolder_path = os.path.join(foci_folder, chosen_subfolder)
 
@@ -225,7 +231,8 @@ def filter_foci(folder: dict,
     # Collect TIF/TIFF files within the chosen subfolder
     foci_files = [
         f for f in os.listdir(subfolder_path)
-        if f.lower().endswith((".tif", ".tiff"))
+        if not f.startswith('.')
+        and f.lower().endswith((".tif", ".tiff"))
     ]
     if not foci_files:
         print(f"  - No TIF/TIFF files found in "
@@ -361,7 +368,7 @@ def main_filter_foci(input_json_path: str, foci_threshold: int) -> None:
         if os.path.isdir(foci_folder):
             for d in os.listdir(foci_folder):
                 subfolder_full = os.path.join(foci_folder, d)
-                if os.path.isdir(subfolder_full):
+                if not d.startswith('.') and os.path.isdir(subfolder_full):
                     all_subfolders.add(d)
 
     if not all_subfolders:

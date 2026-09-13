@@ -59,7 +59,8 @@ def validate_folders(input_json_path: str) -> list:
                                      'foci_assay',
                                      'Nuclei')
         if os.path.exists(nuclei_folder):
-            files = os.listdir(nuclei_folder)
+            files = [f for f in os.listdir(nuclei_folder)
+                     if not f.startswith('.')]
             file_formats = set(os.path.splitext(f)[1] for f in files)
             print(f"Nuclei folder found: {nuclei_folder}, "
                   f"File types: {', '.join(file_formats)}")
@@ -112,7 +113,7 @@ def find_nuclei(nuclei_folders: list) -> list:
 
         # Get list of files with .tif extension
         image_files = [f for f in os.listdir(nuclei_folder)
-                       if f.endswith('.tif')]
+                       if not f.startswith('.') and f.endswith('.tif')]
 
         # Check if there are any images in the folder
         if not image_files:
