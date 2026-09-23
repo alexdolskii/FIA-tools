@@ -33,6 +33,7 @@ The following changes describe the installation, interface, and development infr
 - A shared `environment.yaml` replaces the separate macOS and Linux environment files. The environment is named `fia_tools` and uses Python 3.10.
 - `pyproject.toml` defines the package dependencies and terminal commands. The `uv.lock` file from `main` is not included in this branch.
 - Log filenames in stages 1-3 use the `.log` extension.
+- Stage 2 can reuse validated StarDist masks when changing the minimum nucleus area and exports pixel-based nuclear morphology for each final-mask run.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
 | Stage | Script in `main` | Terminal command in `tech_dev` |
@@ -192,6 +193,28 @@ Every ImageJ run creates a new `Final_Nuclei_Mask_<timestamp>/` folder without o
 
 `quantify_foci` selects the newest final nuclei-mask folder. Check that the new run completed successfully, then rerun quantification to use the new area filter; existing result tables are not updated automatically.
 
+#### Nuclear morphology spreadsheet
+
+Each new `Final_Nuclei_Mask_<timestamp>/` folder also contains `Nuclei_Morphology.xlsx`. Export is automatic with the same command, including when existing StarDist masks are reused. Install the updated package with `python -m pip install .` to include the new `openpyxl` dependency.
+
+The workbook contains three sheets:
+
+- **Nuclei**: one row per object in the final mask after the requested `-p` filter. Columns include `Area_px2`, `Perimeter_px`, `Circularity`, `Aspect_ratio`, `Solidity`, `Major_axis_px`, `Minor_axis_px`, `Feret_max_px`, `Feret_min_px`, `Equivalent_diameter_px`, `Roundness`, `Eccentricity`, `Orientation_deg`, centroid coordinates and `Touches_border`.
+- **Images**: nucleus and border-nucleus counts, per-image medians and interquartile ranges (IQR) of the size and shape metrics, plus completion status and errors. Orientation is not summarized because it is an axial angle. Border nuclei are included in these summaries. An image with no nuclei has count `0` and blank summary statistics; a failed measurement has blank counts and an error.
+- **Run_Info**: selected StarDist folder, `-p`, ImageJ version, units, measurement definitions and export status. The same status is recorded separately as `morphology_status` in `nuclei_run.json`.
+
+UTF-8 CSV copies are saved as `Nuclei_Morphology.csv`, `Nuclei_Images.csv` and `Nuclei_Run_Info.csv`.
+
+Measurements use ImageJ ParticleAnalyzer on a duplicate of the final binary mask, without additional watershed, size filtering or border exclusion. Area is the number of object pixels (`Area_px2`); lengths are in processed-image pixels. No intensity, texture, physical calibration or 3D volume is measured. Shapes refer to the 2D processed images; resizing during channel preparation must be considered when comparing datasets.
+
+Circularity uses the ImageJ definition `min(1, 4*pi*Area/Perimeter^2)`. Aspect ratio is major/minor fitted-ellipse axis length; roundness is `4*Area/(pi*Major_axis^2)`; solidity compares area with convex-hull area. Feret values describe maximum and minimum caliper diameters. Equivalent diameter is `sqrt(4*Area/pi)` and eccentricity is `sqrt(1-(Minor_axis/Major_axis)^2)`. These pixel-boundary measurements can differ from other software definitions. Undefined values are left blank.
+
+Rows include dataset and image identifiers, well (when recognizable as `WellA2`, `WellA02`, etc.), run ID, minimum area and StarDist source. `Condition` and `Biological_replicate` are intentionally blank for manual annotation. When comparing conditions, use independent biological replicates as the experimental units; nuclei within one image are not independent biological replicates.
+
+The `Morphology_QC/` subfolder contains a 16-bit `*_ids.tif` label map and a `*_ids.png` preview with red nucleus numbers for each successfully measured image. `Nucleus_ID` matches the label-map pixel value and is local to an image and run. These IDs are not guaranteed to match StarDist labels or `quantify_foci` IDs. The subfolder keeps QC label TIFFs separate from the binary masks consumed by stage 4. Final masks remain unchanged.
+
+If an image cannot be measured or its QC files cannot be saved, its `Images` row records the error and the morphology export is marked `incomplete`; other images continue processing. Check export status before using the tables. An interrupted run can retain `running` status and lack a completed workbook.
+
 ### Stage 3. Generate foci masks
 
 Run with the default intensity threshold:
@@ -246,7 +269,8 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/Foci/Foci_<index>_Channel_<channel>/` | Prepared images for each foci channel |
 | `foci_assay/image_metadata.txt` | Source-image dimensions and calibration metadata |
 | `foci_assay/Nuclei_StarDist_mask_processed_<timestamp>/` | Initial nuclei masks |
-| `foci_assay/Final_Nuclei_Mask_<timestamp>/` | Processed nuclei masks |
+| `foci_assay/Final_Nuclei_Mask_<timestamp>/` | Processed nuclei masks, morphology workbook/CSV tables and run metadata |
+| `foci_assay/Final_Nuclei_Mask_<timestamp>/Morphology_QC/` | Per-image nucleus ID label maps and numbered PNG previews |
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 

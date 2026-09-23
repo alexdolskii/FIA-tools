@@ -194,7 +194,9 @@ class TestProcessNuclei:
         mock_win.getCurrentImage.return_value = fake_mask
 
         with patch.object(mod, "imagej") as mock_imagej, \
-             patch.object(mod, "jimport") as mock_jimport:
+             patch.object(mod, "jimport") as mock_jimport, \
+             patch.object(mod, "NucleiMorphologyExport") as export:
+            export.return_value.save.return_value = "complete"
             mock_imagej.init.return_value = MagicMock()
             mock_jimport.side_effect = lambda cls: {
                 "ij.IJ": mock_IJ,
@@ -208,6 +210,9 @@ class TestProcessNuclei:
         # IJ.saveAs was called to persist the mask.
         assert mock_IJ.openImage.call_count == 1
         assert mock_IJ.saveAs.call_count == 1
+        export.return_value.add_image.assert_called_once_with(
+            fake_mask, "cell_StarDist_processed.tif",
+            "cell_StarDist_processed_processed.tif")
 
     def test_skips_non_tif_files_silently(self, tmp_path):
         # PRECONDITION: input folder contains only a .png file (unsupported).

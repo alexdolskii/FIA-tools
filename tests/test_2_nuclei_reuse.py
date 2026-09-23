@@ -290,7 +290,9 @@ class TestStarDistReuse(unittest.TestCase):
         window = MagicMock()
         imagej.saveAs.side_effect = lambda image, fmt, path: Path(path).write_bytes(b"mask")
         with patch.object(mod, "initialize_imagej"), \
-             patch.object(mod, "jimport", side_effect=lambda name: imagej if name == "ij.IJ" else window):
+             patch.object(mod, "jimport", side_effect=lambda name: imagej if name == "ij.IJ" else window), \
+             patch.object(mod, "NucleiMorphologyExport") as export:
+            export.return_value.save.return_value = "complete"
             mod.process_nuclei([str(run)], 2000)
             mod.process_nuclei([str(run)], 1000)
         outputs = sorted(run.parent.glob("Final_Nuclei_Mask_*"))
@@ -299,6 +301,8 @@ class TestStarDistReuse(unittest.TestCase):
         records = [json.loads((p / "nuclei_run.json").read_text()) for p in outputs]
         self.assertEqual([r["particle_size_pixels_squared"] for r in records], [2000, 1000])
         self.assertTrue(all(r["status"] == "complete" for r in records))
+        self.assertTrue(all(r["morphology_status"] == "complete" for r in records))
+        self.assertEqual(export.return_value.add_image.call_count, 2)
         self.assertTrue(all(r["stardist_folder"] == str(run.resolve()) for r in records))
         particle_calls = [call for call in imagej.run.call_args_list
                           if len(call.args) > 1 and call.args[1] == "Analyze Particles..."]

@@ -11,6 +11,7 @@ from pathlib import Path
 import imagej
 import numpy as np
 from csbdeep.utils import normalize
+from nuclei_morphology import NucleiMorphologyExport
 from scyjava import jimport
 from skimage.io import imread, imsave
 from stardist.models import StarDist2D
@@ -375,12 +376,15 @@ def process_nuclei(valid_folders: list,
         # Keep every area-filter run separate, including same-second reruns.
         processed_folder = create_output_folder(
             os.path.dirname(input_folder), "Final_Nuclei_Mask_")
+        morphology = NucleiMorphologyExport(
+            processed_folder, input_folder, particle_size, IJ.getVersion())
         print(f"\nProcessed images will be saved in: {processed_folder}")
         run_metadata = {
             "schema_version": 1,
             "status": "running",
             "stardist_folder": str(Path(input_folder).resolve()),
             "particle_size_pixels_squared": particle_size,
+            "morphology_status": "running",
             "processed_files": [],
             "skipped_files": [],
         }
@@ -429,6 +433,7 @@ def process_nuclei(valid_folders: list,
                                 f"{file_path}. "
                                 f"Check Bio-Formats or file integrity.")
                 run_metadata["skipped_files"].append(filename)
+                morphology.record_failure(filename, "Failed to open the StarDist mask.")
                 continue
 
             # Convert image to 8-bit
@@ -452,6 +457,7 @@ def process_nuclei(valid_folders: list,
                     logging.error(f"Failed to get mask for image: {file_path}")
                     imp.close()
                     run_metadata["skipped_files"].append(filename)
+                    morphology.record_failure(filename, "ImageJ did not return a final mask.")
                     continue
 
             # Save processed image
@@ -462,6 +468,14 @@ def process_nuclei(valid_folders: list,
             run_metadata["processed_files"].append(filename)
             print(f"Processed image saved: {output_path}")
 
+            # Measure a duplicate of the final mask without changing segmentation.
+            try:
+                morphology.add_image(imp_mask, filename, Path(output_path).name)
+            except Exception as error:
+                morphology.record_failure(filename, error, Path(output_path).name)
+                logging.exception(f"Morphology export failed for: {filename}")
+                print(f"Morphology export failed for '{filename}': {error}")
+
             # Close images
             imp.close()
             imp_mask.close()
@@ -471,7 +485,10 @@ def process_nuclei(valid_folders: list,
         run_metadata["status"] = (
             "complete" if run_metadata["processed_files"]
             and not run_metadata["skipped_files"] else "incomplete")
+        run_metadata["morphology_status"] = morphology.save()
         write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
+        print(f"Morphology table: {processed_folder}/Nuclei_Morphology.xlsx; "
+              f"status: {run_metadata['morphology_status']}.")
         print(f"ImageJ run status: {run_metadata['status']}; "
               f"processed: {len(run_metadata['processed_files'])}; "
               f"skipped: {len(run_metadata['skipped_files'])}; "
