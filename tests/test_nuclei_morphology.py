@@ -41,21 +41,27 @@ def test_empty_and_failed_images_have_distinct_counts(exporter):
     assert exporter.save() == "incomplete"
     with (exporter.output / "Nuclei_Images.csv").open(encoding="utf-8-sig") as handle:
         csv_rows = list(csv.DictReader(handle))
-    assert csv_rows[0]["Nuclei_count"] == "0"
-    assert csv_rows[1]["Nuclei_count"] == ""
+    for column in ("Nuclei_count_total", "Border_nuclei_count", "Non_border_nuclei_count"):
+        assert csv_rows[0][column] == "0"
+        assert csv_rows[1][column] == ""
     book = load_workbook(exporter.output / "Nuclei_Morphology.xlsx")
     try:
         assert book.sheetnames == ["Nuclei", "Images", "Run_Info"]
         assert book["Nuclei"].max_row == 1
         rows = read_sheet(book, "Images")
-        assert rows[0]["Nuclei_count"] == 0
+        assert rows[0]["Nuclei_count_total"] == 0
+        assert rows[0]["Non_border_nuclei_count"] == 0
+        assert rows[0]["Area_px2_Mean"] is None
         assert rows[0]["Area_px2_Median"] is None
         assert rows[0]["Well"] == "A2"
-        assert rows[0]["Condition"] is None
-        assert rows[1]["Nuclei_count"] is None
+        assert "Condition" not in rows[0]
+        assert "Biological_replicate" not in rows[0]
+        assert rows[1]["Nuclei_count_total"] is None
+        assert rows[1]["Non_border_nuclei_count"] is None
         assert rows[1]["Status"] == "failed"
         assert rows[1]["Error"] == "Cannot read mask"
         assert "Orientation_deg_Median" not in rows[0]
+        assert "Orientation_deg_Mean" not in rows[0]
     finally:
         book.close()
 
@@ -82,7 +88,8 @@ def test_measurement_failure_is_reported_without_losing_final_mask(tmp_path):
     try:
         row = read_sheet(book, "Images")[0]
         assert row["Status"] == "failed"
-        assert row["Nuclei_count"] is None
+        assert row["Nuclei_count_total"] is None
+        assert row["Non_border_nuclei_count"] is None
         assert row["Error"] == "bad geometry"
         assert row["Particle_size_px2"] == 2000
     finally:
@@ -182,20 +189,22 @@ def test_native_empty_mask(imagej_classes, inverted):
         mask.close()
 
 
-def test_native_particle_masks_export_consistent_rows_and_qc(imagej_classes, exporter):
+@pytest.mark.parametrize("minimum_area", [200, 300])
+def test_native_particle_masks_export_consistent_rows_and_qc(
+        imagej_classes, exporter, minimum_area):
     classes = imagej_classes
     source = image_from_pixels(classes, synthetic_objects())
     source.getProcessor().setThreshold(255, 255, classes("ij.process.ImageProcessor").NO_LUT_UPDATE)
     analyzer_type = classes("ij.plugin.filter.ParticleAnalyzer")
-    # Reproduce the existing final-mask output; remove only the 240-pixel object.
+    # At 200 pixels the border object survives the area filter but not table export.
     analyzer = analyzer_type(analyzer_type.SHOW_MASKS, 0, classes("ij.measure.ResultsTable")(),
-                             300.0, float("inf"))
+                             float(minimum_area), float("inf"))
     analyzer.setHideOutputImage(True)
     assert analyzer.analyze(source)
     mask = analyzer.getOutputImage()
     before = morphology.processor_pixels(mask)
     try:
-        exporter.particle_size = 300
+        exporter.particle_size = minimum_area
         exporter.add_image(mask, "WellB12_cell_StarDist_processed.tif", "final.tif")
         assert exporter.save() == "complete"
         np.testing.assert_array_equal(before, morphology.processor_pixels(mask))
@@ -203,11 +212,16 @@ def test_native_particle_masks_export_consistent_rows_and_qc(imagej_classes, exp
         try:
             rows = read_sheet(book, "Nuclei")
             assert [row["Area_px2"] for row in rows] == [800, 709]
+            assert [row["Nucleus_ID"] for row in rows] == (
+                [2, 3] if minimum_area == 200 else [1, 2])
+            assert not any(row["Touches_border"] for row in rows)
             assert all(row["Well"] == "B12" for row in rows)
-            assert all(row["Particle_size_px2"] == 300 for row in rows)
+            assert all(row["Particle_size_px2"] == minimum_area for row in rows)
             summary = read_sheet(book, "Images")[0]
-            assert summary["Nuclei_count"] == 2
-            assert summary["Border_nuclei_count"] == 0
+            assert summary["Nuclei_count_total"] == (3 if minimum_area == 200 else 2)
+            assert summary["Border_nuclei_count"] == (1 if minimum_area == 200 else 0)
+            assert summary["Non_border_nuclei_count"] == 2
+            assert summary["Area_px2_Mean"] == 754.5
             assert summary["Area_px2_Median"] == 754.5
             assert summary["Area_px2_IQR"] == 45.5
             with (exporter.output / "Nuclei_Morphology.csv").open(encoding="utf-8-sig") as handle:
@@ -233,6 +247,84 @@ def test_native_particle_masks_export_consistent_rows_and_qc(imagej_classes, exp
             book.close()
     finally:
         source.close()
+        mask.close()
+
+
+@pytest.mark.parametrize("border_only", [False, True])
+def test_border_exclusion_in_all_tables_and_statistics(exporter, border_only):
+    records = []
+    for index, (area, border) in enumerate(((1000, True), (10, False),
+                                           (20, False), (60, False)), start=1):
+        row = dict.fromkeys(morphology.METRICS, float(area))
+        row.update(Nucleus_ID=index, Area_px2=area, Touches_border=border)
+        records.append(row)
+    # An unavailable measurement must not cause the border value to enter the mean.
+    records[2]["Circularity"] = None
+    if border_only:
+        records = records[:1]
+    with patch.object(morphology, "measure_final_mask", return_value=(records, MagicMock())), \
+         patch.object(morphology, "jimport"), \
+         patch.object(morphology, "save_numbered_image") as preview:
+        exporter.add_image(MagicMock(), "WellA02_cell_StarDist_processed.tif", "final.tif")
+    # QC retains every original ID; only table rows and statistics are filtered.
+    assert preview.call_args.args[1] == records
+    assert exporter.save() == "complete"
+    book = load_workbook(exporter.output / "Nuclei_Morphology.xlsx")
+    try:
+        nuclei = read_sheet(book, "Nuclei")
+        summary = read_sheet(book, "Images")[0]
+        assert [row["Nucleus_ID"] for row in nuclei] == ([] if border_only else [2, 3, 4])
+        assert all(row["Touches_border"] is False for row in nuclei)
+        assert summary["Nuclei_count_total"] == (1 if border_only else 4)
+        assert summary["Border_nuclei_count"] == 1
+        assert summary["Non_border_nuclei_count"] == len(nuclei)
+        assert len(nuclei) == summary["Nuclei_count_total"] - summary["Border_nuclei_count"]
+        for metric in morphology.METRICS:
+            expected = (35.0, 35.0, 25.0) if metric == "Circularity" else (30.0, 20.0, 25.0)
+            for statistic, value in zip(("Mean", "Median", "IQR"), expected):
+                assert summary[f"{metric}_{statistic}"] == (None if border_only else value)
+        for sheet, filename in (("Nuclei", "Nuclei_Morphology.csv"),
+                                ("Images", "Nuclei_Images.csv")):
+            headers = list(next(book[sheet].values))
+            assert "Condition" not in headers
+            assert "Biological_replicate" not in headers
+            assert "Nuclei_count" not in headers
+            with (exporter.output / filename).open(encoding="utf-8-sig") as handle:
+                reader = csv.DictReader(handle)
+                assert reader.fieldnames == headers
+                csv_rows = list(reader)
+            xlsx_rows = read_sheet(book, sheet)
+            assert len(csv_rows) == len(xlsx_rows)
+            for csv_row, xlsx_row in zip(csv_rows, xlsx_rows):
+                for key, value in xlsx_row.items():
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        assert float(csv_row[key]) == pytest.approx(value)
+                    else:
+                        assert csv_row[key] == ("" if value is None else str(value))
+        info = {row["Parameter"]: row["Value"] for row in read_sheet(book, "Run_Info")}
+        assert "excluded" in info["Border_policy"]
+        assert "Condition_and_replicate" not in info
+    finally:
+        book.close()
+
+
+def test_native_all_edges_and_corner_are_counted_once(imagej_classes, exporter):
+    pixels = synthetic_objects()
+    pixels[-6:, 4:12] = 255
+    pixels[60:70, :7] = 255
+    pixels[10:17, -8:] = 255
+    pixels[-6:, -6:] = 255
+    mask = image_from_pixels(imagej_classes, pixels, inverted=True)
+    try:
+        exporter.add_image(mask, "cell_StarDist_processed.tif", "final.tif")
+        summary = exporter.images[0]
+        assert summary["Nuclei_count_total"] == 7
+        assert summary["Border_nuclei_count"] == 5
+        assert summary["Non_border_nuclei_count"] == 2
+        assert [row["Area_px2"] for row in exporter.nuclei] == [800, 709]
+        assert summary["Area_px2_Mean"] == 754.5
+        np.testing.assert_array_equal(morphology.processor_pixels(mask), pixels)
+    finally:
         mask.close()
 
 

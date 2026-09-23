@@ -18,16 +18,16 @@ METRICS = [
 ]
 IDENTIFIERS = [
     "Dataset", "Dataset_path", "Image_name", "Mask_name", "Well",
-    "Condition", "Biological_replicate", "Run_ID", "Particle_size_px2",
-    "StarDist_source",
+    "Run_ID", "Particle_size_px2", "StarDist_source",
 ]
 NUCLEI_COLUMNS = IDENTIFIERS + ["Nucleus_ID"] + METRICS + [
     "Orientation_deg", "Centroid_X_px", "Centroid_Y_px", "Touches_border",
     "Label_map", "Numbered_image",
 ]
 IMAGE_COLUMNS = IDENTIFIERS + [
-    "Status", "Error", "Nuclei_count", "Border_nuclei_count",
-] + [f"{metric}_{stat}" for metric in METRICS for stat in ("Median", "IQR")]
+    "Status", "Error", "Nuclei_count_total", "Border_nuclei_count",
+    "Non_border_nuclei_count",
+] + [f"{metric}_{stat}" for metric in METRICS for stat in ("Mean", "Median", "IQR")]
 
 
 def processor_pixels(imp):
@@ -181,7 +181,6 @@ class NucleiMorphologyExport:
             "Dataset": dataset.name, "Dataset_path": str(dataset),
             "Image_name": image_name, "Mask_name": mask_name,
             "Well": f"{well[1].upper()}{int(well[2])}" if well else "",
-            "Condition": "", "Biological_replicate": "",
             "Run_ID": self.output.name, "Particle_size_px2": self.particle_size,
             "StarDist_source": str(self.source),
         }
@@ -200,20 +199,25 @@ class NucleiMorphologyExport:
             save_numbered_image(mask, records, preview_path)
         finally:
             label_image.close()
+        # Exclude edge-touching nuclei from every measurement table and summary.
+        # Keep their IDs in QC images so the unchanged final mask remains traceable.
+        included_records = [row for row in records if not row["Touches_border"]]
         identifiers = self.identifiers(filename, mask_name)
         self.nuclei.extend({
             **identifiers, **row,
             "Label_map": str(label_path.relative_to(self.output)),
             "Numbered_image": str(preview_path.relative_to(self.output)),
-        } for row in records)
+        } for row in included_records)
         summary = {
             **identifiers, "Status": "complete", "Error": "",
-            "Nuclei_count": len(records),
-            "Border_nuclei_count": sum(row["Touches_border"] for row in records),
+            "Nuclei_count_total": len(records),
+            "Border_nuclei_count": len(records) - len(included_records),
+            "Non_border_nuclei_count": len(included_records),
         }
-        # Orientation is axial and is deliberately not summarized by a median.
+        # Orientation is axial and is deliberately not summarized by linear statistics.
         for metric in METRICS:
-            values = [row[metric] for row in records if row[metric] is not None]
+            values = [row[metric] for row in included_records if row[metric] is not None]
+            summary[f"{metric}_Mean"] = float(np.mean(values)) if values else None
             summary[f"{metric}_Median"] = float(np.median(values)) if values else None
             summary[f"{metric}_IQR"] = (
                 float(np.percentile(values, 75) - np.percentile(values, 25))
@@ -223,7 +227,8 @@ class NucleiMorphologyExport:
     def record_failure(self, filename, error, mask_name=""):
         self.images.append({**self.identifiers(filename, mask_name),
                             "Status": "failed", "Error": str(error),
-                            "Nuclei_count": None, "Border_nuclei_count": None})
+                            "Nuclei_count_total": None, "Border_nuclei_count": None,
+                            "Non_border_nuclei_count": None})
 
     def run_info(self):
         return [
@@ -246,12 +251,16 @@ class NucleiMorphologyExport:
             ("Eccentricity", "sqrt(1-(Minor_axis_px/Major_axis_px)^2)"),
             ("Orientation_deg", "ImageJ fitted-ellipse angle to the x axis (0-180)"),
             ("Centroid", "ImageJ pixel coordinates; origin at the top left"),
-            ("Border_policy", "Retained and flagged; no additional exclusion"),
-            ("Summary_population", "All measured final-mask nuclei, including border nuclei"),
-            ("Summary_statistics", "Per-image median and IQR; no hypothesis tests"),
+            ("Border_policy", "Nuclei touching any image edge are excluded from "
+             "per-nucleus tables and summary metrics; counted separately"),
+            ("Summary_population", "Final-mask nuclei that do not touch the image border"),
+            ("Non_border_nuclei_count", "Nuclei_count_total - Border_nuclei_count"),
+            ("Summary_statistics", "Per-image arithmetic mean, median and IQR; "
+             "blank if no non-border nuclei; no hypothesis tests"),
             ("Nucleus_ID", "Local to Image_name and Run_ID; matches Morphology_QC ID map"),
+            ("QC_population", "All final-mask nuclei, including border nuclei; "
+             "exported Nucleus_ID values may have gaps"),
             ("ID_compatibility", "Not guaranteed to match StarDist or quantify_foci IDs"),
-            ("Condition_and_replicate", "Blank for user annotation; not inferred"),
             ("Intensity_and_texture", "Not measured"),
             ("Missing_values", "Blank means unavailable; zero nuclei is recorded explicitly"),
         ]
