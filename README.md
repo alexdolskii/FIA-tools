@@ -163,15 +163,34 @@ Run with the default minimum nucleus area:
 generate_nuclei_mask -i input_paths.json
 ```
 
-This stage performs StarDist segmentation and subsequent mask processing. The default minimum nucleus area is **2500 pixels** in the processed image. Use `-p` or `--particle_size` to specify a different minimum area.
+This stage performs StarDist segmentation and subsequent mask processing. The default minimum nucleus area is **2500 pixels²** in the processed image. Use `-p` or `--particle_size` to specify a different minimum area.
 
-For example, the following command uses 2000 pixels:
+For example, the following command uses 2000 pixels²:
 
 ```bash
 generate_nuclei_mask -i input_paths.json -p 2000
 ```
 
 The example value is an optional setting; it is not the default. The `-p` option controls the area filter and does not set the StarDist probability threshold.
+
+#### Repeat the area filter using existing StarDist masks
+
+To try another minimum area, run the same command with a new `-p` value. For each input folder, the program searches for `foci_assay/Nuclei_StarDist_mask_processed_<timestamp>/` and checks mask filenames, completeness, TIFF readability, dimensions and data types. Hidden files and folders, including macOS `._*` entries, are excluded.
+
+If reusable results exist, the program lists their paths and mask counts, newest first, and offers these choices:
+
+- Enter a folder number, or press Enter to reuse the newest valid result.
+- Enter `n` to run StarDist again for this input folder.
+- Enter `a` to reuse the newest valid result for this and the remaining input folders. Inputs without reusable results still require a new StarDist run.
+- Enter `q` to cancel before starting new segmentation.
+
+New StarDist runs include `stardist_run.json`, which records the settings, source and mask SHA-256 checksums, and completion status. Incomplete runs, changed files and mismatched settings are not offered for reuse. Older folders without this metadata can be reused after structural checks and explicit confirmation that the original source images and StarDist settings have not changed; their provenance cannot be verified automatically.
+
+When results are reused, only the ImageJ stage runs with the requested `-p`. The StarDist model is not loaded if every input uses existing results. Both increasing and decreasing `-p` are supported because processing starts from the original StarDist masks.
+
+Every ImageJ run creates a new `Final_Nuclei_Mask_<timestamp>/` folder without overwriting previous masks. Its `nuclei_run.json` records the selected StarDist folder, minimum area in pixels², completion status, and processed/skipped filenames. A run interrupted before completion retains a `running` status. Folder timestamps identify separate runs; the `-p` value is recorded in the JSON file.
+
+`quantify_foci` selects the newest final nuclei-mask folder. Check that the new run completed successfully, then rerun quantification to use the new area filter; existing result tables are not updated automatically.
 
 ### Stage 3. Generate foci masks
 
