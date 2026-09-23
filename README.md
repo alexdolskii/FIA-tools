@@ -28,7 +28,7 @@ Use cases: punctate nuclear foci (Ki-67), pan-nuclear stains, and multi-marker c
 
 The following changes describe the installation, interface, and development infrastructure in `tech_dev`:
 
-- The software can be installed as a Python package, providing five named terminal commands, including an optional nuclear-intensity workflow.
+- The software can be installed as a Python package, providing six named terminal commands, including an optional nuclear-intensity workflow and its spreadsheet collector.
 - The analysis scripts are located in `fia-tools/`, with a package entry module in `fia-tools/__init__.py`.
 - A shared `environment.yaml` replaces the separate macOS and Linux environment files. The environment is named `fia_tools` and uses Python 3.10.
 - `pyproject.toml` defines the package dependencies and terminal commands. The `uv.lock` file from `main` is not included in this branch.
@@ -36,6 +36,7 @@ The following changes describe the installation, interface, and development infr
 - Stage 2 can reuse validated StarDist masks when changing the minimum nucleus area and exports pixel-based nuclear morphology for each final-mask run.
 - Native image width and height are preserved throughout processing and numbered QC exports; the former 1024 x 1024 resizing in stage 1 has been removed.
 - `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/marker/run selection and separate results for each combination.
+- `fia_collect_marker_intensity_results` collects nuclear morphology and marker-intensity spreadsheets into a separate folder beside the original images, with a combined per-nucleus table and per-image summaries.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
 | Stage | Script in `main` | Terminal command in `tech_dev` |
@@ -45,6 +46,7 @@ The following changes describe the installation, interface, and development infr
 | 3. Generate foci masks | `code/3_foci_mask_generation.py` | `generate_foci_mask` |
 | 4. Quantify foci | `code/4_foci_quantification.py` | `quantify_foci` |
 | Optional nuclear intensity after stage 2 | Not available | `quantify_nuclear_intensity` |
+| Collect morphology and marker-intensity tables | Not available | `fia_collect_marker_intensity_results` |
 
 Additional changes accompanying the revised protocol will be documented here as they are implemented.
 
@@ -118,6 +120,7 @@ generate_nuclei_mask --help
 generate_foci_mask --help
 quantify_foci --help
 quantify_nuclear_intensity --help
+fia_collect_marker_intensity_results --help
 ```
 
 These commands check that the entry points are available. Image processing requires the appropriate input data and dependencies. ImageJ initialization and the first StarDist model load may require internet access for downloads.
@@ -148,7 +151,7 @@ Replace the example paths with your own. Despite the key name, each entry refers
 
 ## Run the analysis
 
-For foci analysis, run the four stages in order and wait for each stage to finish before starting the next. For per-nucleus marker intensity (for example, phospho-Smad2), run stages 1 and 2, then the optional nuclear-intensity command described below; foci masks are not required. Several stages ask questions in the terminal. Review their output and log files before continuing.
+For foci analysis, run the four stages in order and wait for each stage to finish before starting the next. For per-nucleus marker intensity (for example, phospho-Smad2), run stages 1 and 2, then the optional nuclear-intensity command described below; foci masks are not required. Use `fia_collect_marker_intensity_results` afterward to gather spreadsheets for downstream analysis. Several stages ask questions in the terminal. Review their output and log files before continuing.
 
 ### Stage 1. Select and prepare image channels
 
@@ -266,6 +269,41 @@ The **Images** sheet reports `Nuclei_count_total`, `Border_nuclei_count`, `Non_b
 
 The **Run_Info** sheet documents units, policies and ImageJ/Bio-Formats versions. File size and modification time fingerprints are checked before and after measurement to detect input changes during the run; these are not a registration check or proof that an old mask came from an unchanged original. Keep source images aligned and unchanged when reusing masks. Tables are checkpointed after each image. An interrupted run remains `running`; image failures produce an `incomplete` run and a nonzero command exit status. Inspect status/errors before using results.
 
+### Collect nuclear morphology and marker-intensity spreadsheets
+
+```bash
+fia_collect_marker_intensity_results -i input_paths.json
+```
+
+This optional command collects **marker intensity**, not foci counts or colocalization results. It reads existing spreadsheets and run metadata; it does not initialize ImageJ or StarDist, read image pixels, resize images, or repeat measurements. It uses the same `paths_to_files` manifest.
+
+1. Select one experiment, several comma-separated numbers, or `all`.
+2. Choose the latest valid completed final-nuclei run per experiment, all valid runs, or a manual selection. Each selected experiment/nuclei-run pair gets a separate collection; different `-p` runs are never pooled.
+3. Select one marker, several, or `all`. Choose `none` for morphology only. Markers use their full folder names, such as `Foci_1_Channel_2`; biological names are not inferred. Enter `q` at a selection prompt to cancel.
+
+For each selected marker, the collector selects the latest valid completed intensity run that explicitly references the selected nuclei run. Incomplete or malformed candidates are skipped with a recorded reason. If a selected completed intensity run conflicts with morphology in dataset, image set, nucleus IDs, areas or counts, collection fails for that nuclei run instead of silently choosing older measurements. Legacy intensity runs without marker-folder metadata are labeled `Channel_N` and are kept separate from named marker folders. Hidden files/folders, including macOS `._*`, are ignored.
+
+Each collection is saved directly in the folder containing the original images:
+
+`FIA_Marker_Intensity_Combined_Results_<timestamp>/`
+
+Previous collections and source results are preserved. The new folder contains **only spreadsheets**, with no masks, images, ROIs, JSON files, or logs:
+
+| Files | Contents |
+| --- | --- |
+| `Nuclei_Morphology.xlsx`, `Nuclei_Morphology.csv`, **`Nuclei_Images.csv`**, `Nuclei_Run_Info.csv` | Unmodified copies from the selected final-nuclei run |
+| `Nuclear_Intensity_<marker>.xlsx`, `Nuclear_Intensity_<marker>.csv`, `Nuclear_Intensity_Images_<marker>.csv`, `Nuclear_Intensity_Run_Info_<marker>.csv` | Unmodified spreadsheet contents from each selected intensity run; filenames identify the marker, for example `Nuclear_Intensity_Foci_1_Channel_2.xlsx` |
+| `FIA_Marker_Intensity_Combined.xlsx` | Combined **Nuclei**, **Images**, and **Collection_Info** sheets |
+| `FIA_Marker_Intensity_Nuclei.csv`, `FIA_Marker_Intensity_Images.csv` | CSV copies of the combined measurement sheets |
+
+The combined **Nuclei** sheet has one row per non-border nucleus, with morphology and separate columns for each marker's six intensity measurements. Matching uses the recorded dataset, nuclei run, mask basename and `Nucleus_ID`; `Area_px2` must agree and is retained once. `Image_name` identifies the original TIFF/ND2 where resolvable; `Morphology_Image_name` preserves the prepared image name. If original identity cannot be resolved for morphology-only data, the original-name fields remain blank and the reason is recorded.
+
+The combined **Images** sheet preserves per-image morphology counts and summaries and adds per-marker intensity summaries. `Nuclei_Images.csv` is also copied separately as requested. Border nuclei remain excluded from per-nucleus rows and summary statistics; their counts remain available. No folder-wide averaging, condition assignments, biological-replicate assignments or statistical tests are added.
+
+Missing intensity is explicitly marked `MISSING`, with blank measurement cells rather than zeros; the collection status is `SUCCESS_WITH_MISSING_INTENSITY`. **Collection_Info** records selected and rejected runs, settings, source paths, source SHA-256 checksums and collection status. Copied spreadsheets are byte-for-byte unchanged; their paths still refer to the original analysis folders. Long `Run_Info` text may already be truncated at Excel's 32,767-character cell limit; the copied CSV retains its full value.
+
+The collector checks agreement between each source workbook and its CSV copies, then checks that source tables/metadata have not changed during collection. Results are prepared in a temporary folder and the combined workbook is published last as the completion indicator. A validation conflict creates a new folder containing only `Collection_Report.xlsx`, and the command returns a nonzero status; other selected nuclei runs continue. Review missing-data and diagnostic statuses before downstream analysis.
+
 ### Stage 3. Generate foci masks
 
 Run with the default intensity threshold:
@@ -302,12 +340,12 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 
 | Command | Option | Meaning | Default |
 | --- | --- | --- | --- |
-| All five commands | `-i`, `--input` | Path to the input JSON manifest | Required |
+| All six commands | `-i`, `--input` | Path to the input JSON manifest | Required |
 | `generate_nuclei_mask` | `-p`, `--particle_size` | Minimum nucleus area in processed-image pixels | `2500` |
 | `generate_foci_mask` | `-f`, `--foci_threshold` | Lower foci intensity threshold on processed 8-bit images | `150` |
 | `quantify_foci` | `-j`, `--jobs` | Number of worker processes | `4` |
 | `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack`, or `tiff-2d` | Interactive |
-| All five commands | `-h`, `--help` | Show command-line options | Not applicable |
+| All six commands | `-h`, `--help` | Show command-line options | Not applicable |
 
 The defaults document the implementation. Parameter selection should follow the experiment and the applicable protocol.
 
@@ -325,6 +363,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/Final_Nuclei_Mask_<timestamp>/Morphology_QC/` | Per-image nucleus ID label maps and numbered PNG previews |
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
+| `FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.

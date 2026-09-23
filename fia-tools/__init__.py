@@ -57,3 +57,12 @@ def quantify_nuclear_intensity():
     args = parser.parse_args()
     return _load_script("nuclear_intensity").main(
         args.input, mode=args.input_type)
+
+
+def fia_collect_marker_intensity_results():
+    parser = argparse.ArgumentParser(
+        description="Collect nuclear morphology and marker-intensity spreadsheets; no image analysis.")
+    parser.add_argument('-i', '--input', required=True,
+                        help="JSON manifest containing paths_to_files")
+    args = parser.parse_args()
+    return _load_script("collect_marker_intensity_results").main(args.input)
