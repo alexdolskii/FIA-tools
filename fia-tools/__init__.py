@@ -66,3 +66,7 @@ def fia_collect_marker_intensity_results():
                         help="JSON manifest containing paths_to_files")
     args = parser.parse_args()
     return _load_script("collect_marker_intensity_results").main(args.input)
+
+
+def fia_marker_intensity_report():
+    return _load_script("marker_intensity_report").main()

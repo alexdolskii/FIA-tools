@@ -28,7 +28,7 @@ Use cases: punctate nuclear foci (Ki-67), pan-nuclear stains, and multi-marker c
 
 The following changes describe the installation, interface, and development infrastructure in `tech_dev`:
 
-- The software can be installed as a Python package, providing six named terminal commands, including an optional nuclear-intensity workflow and its spreadsheet collector.
+- The software can be installed as a Python package, providing seven named terminal commands, including an optional nuclear-intensity workflow, spreadsheet collector and statistical report.
 - The analysis scripts are located in `fia-tools/`, with a package entry module in `fia-tools/__init__.py`.
 - A shared `environment.yaml` replaces the separate macOS and Linux environment files. The environment is named `fia_tools` and uses Python 3.10.
 - `pyproject.toml` defines the package dependencies and terminal commands. The `uv.lock` file from `main` is not included in this branch.
@@ -37,6 +37,7 @@ The following changes describe the installation, interface, and development infr
 - Native image width and height are preserved throughout processing and numbered QC exports; the former 1024 x 1024 resizing in stage 1 has been removed.
 - `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/marker/run selection and separate results for each combination.
 - `fia_collect_marker_intensity_results` collects nuclear morphology and marker-intensity spreadsheets into a separate folder beside the original images, with a combined per-nucleus table and per-image summaries.
+- `fia_marker_intensity_report` compares collected morphology and marker intensity using a 96-well plate map, with individual-nucleus intensity boxplots and optional nucleus- or well-based statistics.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
 | Stage | Script in `main` | Terminal command in `tech_dev` |
@@ -47,6 +48,7 @@ The following changes describe the installation, interface, and development infr
 | 4. Quantify foci | `code/4_foci_quantification.py` | `quantify_foci` |
 | Optional nuclear intensity after stage 2 | Not available | `quantify_nuclear_intensity` |
 | Collect morphology and marker-intensity tables | Not available | `fia_collect_marker_intensity_results` |
+| Report nuclear morphology and marker intensity | Not available | `fia_marker_intensity_report` |
 
 Additional changes accompanying the revised protocol will be documented here as they are implemented.
 
@@ -121,6 +123,7 @@ generate_foci_mask --help
 quantify_foci --help
 quantify_nuclear_intensity --help
 fia_collect_marker_intensity_results --help
+fia_marker_intensity_report --help
 ```
 
 These commands check that the entry points are available. Image processing requires the appropriate input data and dependencies. ImageJ initialization and the first StarDist model load may require internet access for downloads.
@@ -304,6 +307,79 @@ Missing intensity is explicitly marked `MISSING`, with blank measurement cells r
 
 The collector checks agreement between each source workbook and its CSV copies, then checks that source tables/metadata have not changed during collection. Results are prepared in a temporary folder and only the expected spreadsheets are moved, with the combined workbook published last as the completion indicator. Hidden files, including macOS `._*` companions, are never selected for transfer; companions that disappear automatically during rollback do not interrupt cleanup. A validation conflict creates a new folder containing only `Collection_Report.xlsx`, and the command returns a nonzero status; other selected nuclei runs continue. File-operation failures are reported as `IO_FAILED`, separately from `VALIDATION_FAILED`. Review missing-data and diagnostic statuses before downstream analysis.
 
+### Report nuclear morphology and marker intensity
+
+After collection, place your 96-well plate-map workbook inside each selected `FIA_Marker_Intensity_Combined_Results_<timestamp>/` folder, or supply its path with `--template`. The filename is arbitrary. The program identifies a plate map by its grid, excluding analytical workbooks, hidden files and Excel lock files (`~$*`). If several plate maps are present, use `--template` explicitly.
+
+```bash
+fia_marker_intensity_report -i input_paths.json --stats-unit nucleus
+```
+
+For well-based statistics:
+
+```bash
+fia_marker_intensity_report -i input_paths.json --stats-unit well
+```
+
+Omit `--stats-unit` for plots and descriptive tables without hypothesis tests. The report reads spreadsheets only: it does not start ImageJ, read image pixels, repeat segmentation or change upstream results. Archived collector spreadsheets suffice even if the original image-drive paths are no longer accessible.
+
+Select experiments, then the latest collection per experiment, all completed collections, or a manual selection. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Select one, several or all markers per collection, or none for morphology only. A legacy `Channel_N` result is excluded when a named `Foci_<index>_Channel_N` result exists. For example, `Foci_1_Channel_2` is used instead of `Channel_2`; these populations are never concatenated. Select at most one marker folder per original channel. The folder name is the marker identifier; no biological name is inferred.
+
+For a run without selection prompts:
+
+```bash
+fia_marker_intensity_report -i input_paths.json \
+  --all-experiments --collections latest --markers Foci_1_Channel_2 \
+  --stats-unit nucleus --template "/path/to/plate_map.xlsx"
+```
+
+`--markers` accepts comma-separated folder names, `all`, or `none`. `--collections all` reports every completed collection separately. An explicit `--template` applies to every selected collection; otherwise each collection supplies its own plate map. The manifest uses the same `paths_to_files` key as the preceding FIA commands.
+
+#### Plate-map convention
+
+- The first worksheet, or the worksheet named by `--sheet`, contains columns **1–12 in B1:M1**, rows **A–H in A2:A9**, and condition names in **B2:M9**.
+- Each imaged well must have a literal condition name. `A2` and `A02` normalize to `A02`; the report checks agreement with `Well...` and, where present, `Point...` filename tokens.
+- For statistics, a **direct solid cell fill** defines a comparison block. Exactly one condition per color must be **bold**, defining the control; every other condition of that color is compared with it. Wells of the same condition must have consistent fill and bold status. Conditional formatting, formulas and merged cells cannot define the comparison grid.
+- Unimaged annotated wells remain in the design with blank measurements. Groups without usable observations are retained, with a reason when a test cannot be performed. Biological replicates are not inferred.
+
+#### Plots and statistical units
+
+All plots are boxplots with every observation shown as a point, without subsampling. Boxes show the median and IQR; whiskers extend to the most extreme observations within 1.5 IQR. Outliers remain visible as individual points. A single observation is shown as a point; an empty group keeps its labeled position.
+
+| Measurement | Plot observations | `--stats-unit nucleus` | `--stats-unit well` |
+| --- | --- | --- | --- |
+| Non-border nuclei count | One point = non-border nuclei in one image | Images: the explicit exception to nucleus-level tests | One mean count per image per well |
+| `Marker_RawIntDen` per selected marker | One point = one non-border nucleus, in both statistics modes | Individual nuclei | One mean per well |
+| Other morphology and intensity metrics | No additional plots | Individual nuclei | One mean per well |
+
+For morphology and intensity in well mode, calculate the mean across usable nuclei **within each image**, then the mean of those image means **within each well**. Images receive equal weight within a well; wells receive equal weight in the test. These well means do not replace individual nuclei on plots. A zero-nucleus image contributes zero to count analysis and no value to morphology/intensity means. Missing marker measurements stay blank, not zero.
+
+The tested metrics are:
+
+- `Non_border_nuclei_count` = `Nuclei_count_total - Border_nuclei_count`.
+- Morphology: `Area_px2`, `Perimeter_px`, `Circularity`, `Aspect_ratio`, `Solidity`, `Major_axis_px`, `Minor_axis_px`, `Feret_max_px`, `Feret_min_px`, `Equivalent_diameter_px`, `Roundness`, `Eccentricity`.
+- Each selected marker: `Marker_Mean`, `Marker_Median`, `Marker_StdDev`, `Marker_Min`, `Marker_Max`, `Marker_RawIntDen`.
+
+Existing image-summary `Median` and `IQR` columns remain descriptive, without separate hypothesis tests. Border nuclei are excluded from nucleus-level tables and all morphology/intensity summaries and tests. Image tables preserve total and border counts for traceability. Intensity stays raw and unnormalized: integrated density sums original marker-channel pixel values within the nucleus, without background subtraction. Area remains `Area_px2`; no pixel-size conversion is introduced.
+
+Tests are **two-sided Welch t-tests** against the control. **Holm correction** covers all planned treatment-versus-control comparisons across count, morphology and all selected markers **within each color block**, including comparisons that cannot be tested. With one marker and two treatments, the family contains `(1 + 12 + 6) × 2 = 38` comparisons. Outputs include raw/adjusted p-values, sample sizes, contributing images/wells/nuclei, treatment-minus-control differences and nominal 95% Welch confidence intervals. Confidence intervals are not adjusted for multiplicity. Plot brackets show Holm-adjusted p-values or `Not tested`.
+
+Tests need at least two usable observations per condition in the selected unit. **One well per condition gives no well-based p-values**, while retaining plots and descriptive results. Both groups constant also gives `NOT_TESTED`. Nucleus/image tests are exploratory: observations within a well are dependent, and Welch/Holm do not model that clustering. Wells within a plate are not automatically independent biological replicates. Separate experiments and mask runs are never pooled.
+
+#### Report outputs and validation
+
+Each report is saved beside the original images in a new `FIA_Marker_Intensity_Report_<timestamp>/` folder. Previous reports and collector folders are preserved.
+
+| Output | Contents |
+| --- | --- |
+| `FIA_Marker_Intensity_Report.xlsx` | Overview, Statistics, Summary, Nuclei, Images, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Info, Run_Info, Source_Files and embedded Plots |
+| Corresponding `.csv` tables | Data, aggregation values, statistics and provenance |
+| `Plots/` | One count boxplot and one integrated-density boxplot per selected marker, in PNG format |
+| `Inputs/` | Byte-preserved input spreadsheets, plate map and input manifest |
+| `report.log`, `report_status.json` | Progress, errors, selected settings and completion status |
+
+Validation checks archived source SHA-256 hashes, workbook/CSV agreement, nucleus identities, areas, counts, run/marker identities and image summaries. Exported workbook/CSV agreement and unchanged inputs are verified before **`SUCCESS`** is written to `report_status.json`. Incomplete collector folders are skipped during discovery. If a selected completed collection is inconsistent, its report fails rather than silently falling back to older data. A failed report has `FAILED` status and `Report_Diagnostics.xlsx`; incomplete outputs must not be used. Other selected collections continue. The command returns nonzero if any selected report fails or a selected experiment has no completed collections.
+
 ### Stage 3. Generate foci masks
 
 Run with the default intensity threshold:
@@ -340,12 +416,17 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 
 | Command | Option | Meaning | Default |
 | --- | --- | --- | --- |
-| All six commands | `-i`, `--input` | Path to the input JSON manifest | Required |
+| All seven commands | `-i`, `--input` | Path to the input JSON manifest | Required |
 | `generate_nuclei_mask` | `-p`, `--particle_size` | Minimum nucleus area in processed-image pixels | `2500` |
 | `generate_foci_mask` | `-f`, `--foci_threshold` | Lower foci intensity threshold on processed 8-bit images | `150` |
 | `quantify_foci` | `-j`, `--jobs` | Number of worker processes | `4` |
 | `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack`, or `tiff-2d` | Interactive |
-| All six commands | `-h`, `--help` | Show command-line options | Not applicable |
+| `fia_marker_intensity_report` | `--stats-unit` | `nucleus` or `well` | No hypothesis tests |
+| `fia_marker_intensity_report` | `--template`, `--sheet` | Plate-map XLSX and worksheet | Discover workbook; first worksheet |
+| `fia_marker_intensity_report` | `--collections` | `ask`, `latest`, or `all` | `ask` |
+| `fia_marker_intensity_report` | `--markers` | Folder names separated by commas, `all`, or `none` | Interactive |
+| `fia_marker_intensity_report` | `--all-experiments` | Select all manifest experiments without prompting | Interactive |
+| All seven commands | `-h`, `--help` | Show command-line options | Not applicable |
 
 The defaults document the implementation. Parameter selection should follow the experiment and the applicable protocol.
 
@@ -364,6 +445,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
 | `FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
+| `FIA_Marker_Intensity_Report_<timestamp>/` | Separate marker-intensity/morphology report with statistics, boxplots, input snapshots and completion status |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.
