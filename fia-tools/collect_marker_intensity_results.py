@@ -585,17 +585,35 @@ def create_output(root):
             stamp += timedelta(seconds=1)
 
 
-def publish_staging(staging, root, final_name):
-    """Publish the completion workbook last; all visible files are spreadsheets."""
+def ignore_missing_sidecar(function, path, exc_info):
+    """macOS may remove an AppleDouble companion when its main file is deleted."""
+    if isinstance(exc_info[1], FileNotFoundError) and Path(path).name.startswith('._'):
+        return
+    raise exc_info[1]
+
+
+def publish_staging(staging, root, final_name, filenames):
+    """Move only the expected spreadsheets, with the completion workbook last."""
+    names = list(filenames)
+    if (final_name not in names or len(set(names)) != len(names)
+            or any(name.startswith('.') or Path(name).name != name
+                   or Path(name).suffix not in ('.csv', '.xlsx') for name in names)):
+        raise ValidationError('Invalid publication file list')
+    paths = sorted((staging / name for name in names), key=lambda path: path.name == final_name)
     output = create_output(root)
     try:
-        paths = sorted(staging.iterdir(), key=lambda path: path.name == final_name)
         for path in paths:
+            if path.is_symlink() or not path.is_file():
+                raise FileNotFoundError(f'Missing or nonregular expected spreadsheet: {path}')
             path.replace(output / path.name)
         return output
     except BaseException:
         # Only remove this newly allocated collector output, never a previous run.
-        shutil.rmtree(output)
+        try:
+            shutil.rmtree(output, onerror=ignore_missing_sidecar)
+        except OSError as cleanup_error:
+            # Preserve the publication error even if rollback also fails.
+            print(f'Could not fully remove incomplete output {output}: {cleanup_error}')
         raise
 
 
@@ -648,19 +666,22 @@ def collect_one(morphology, context, markers, manifest):
             for path, data in snapshots.items():
                 if path.is_symlink() or path.read_bytes() != data:
                     raise ValidationError(f'Source changed during collection: {path}')
-            output = publish_staging(staging, root, COMBINED_NAME)
+            filenames = [target for _, target in copies] + [
+                'FIA_Marker_Intensity_Nuclei.csv', 'FIA_Marker_Intensity_Images.csv', COMBINED_NAME]
+            output = publish_staging(staging, root, COMBINED_NAME, filenames)
         print(f'{status}: {output}')
         return True, output
     except (OSError, ValueError, csv.Error, KeyError) as error:
         checks = [row for row in checks if not (row['Category'] == 'Collection' and row['Item'] == 'Status')
                   and row['Category'] != 'Copied spreadsheet']
-        checks.append(info_row('Collection', 'Status', 'VALIDATION_FAILED', morphology['run'], error))
+        status = 'IO_FAILED' if isinstance(error, OSError) else 'VALIDATION_FAILED'
+        checks.append(info_row('Collection', 'Status', status, morphology['run'], error))
         # A failed collection contains a diagnostic spreadsheet only.
         with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=root) as temporary:
             staging = Path(temporary)
             write_workbook(staging / 'Collection_Report.xlsx', {'Collection_Info': (INFO_COLUMNS, checks)})
-            output = publish_staging(staging, root, 'Collection_Report.xlsx')
-        print(f'VALIDATION_FAILED: {error}. Report: {output}')
+            output = publish_staging(staging, root, 'Collection_Report.xlsx', ['Collection_Report.xlsx'])
+        print(f'{status}: {error}. Report: {output}')
         return False, output
 
 

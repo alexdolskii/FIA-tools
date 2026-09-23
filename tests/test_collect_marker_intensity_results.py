@@ -1,7 +1,9 @@
 """Collector checks using the actual morphology/intensity spreadsheet exporters."""
 
 import csv
+import errno
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -297,3 +299,136 @@ sys.path.insert(0, {str(Path(collector.__file__).parent)!r})
 import collect_marker_intensity_results
 '''
     subprocess.run([sys.executable, '-c', code], check=True)
+
+
+@pytest.fixture
+def appledouble_filesystem(monkeypatch):
+    """Model paired sidecar rename/unlink behavior independently of the host OS."""
+    original_replace, original_unlink = Path.replace, os.unlink
+    original_scandir, original_workbook = os.scandir, collector.write_workbook
+    events = {'moves': [], 'missing_unlinks': []}
+
+    def save_with_sidecars(path, tables):
+        original_workbook(path, tables)
+        for spreadsheet in path.parent.iterdir():
+            if not spreadsheet.name.startswith('.') and spreadsheet.is_file():
+                spreadsheet.with_name('._' + spreadsheet.name).write_bytes(b'AppleDouble test metadata')
+        (path.parent / '.DS_Store').write_bytes(b'Finder test metadata')
+        (path.parent / 'unrelated.csv').write_text('Not part of the collection')
+
+    def replace_with_sidecar(path, target):
+        events['moves'].append(path.name)
+        result = original_replace(path, target)
+        sidecar = path.with_name('._' + path.name)
+        if not path.name.startswith('._') and sidecar.exists():
+            original_replace(sidecar, Path(target).with_name('._' + Path(target).name))
+        return result
+
+    def unlink_with_sidecar(path, *, dir_fd=None):
+        try:
+            result = original_unlink(path, dir_fd=dir_fd)
+        except FileNotFoundError:
+            events['missing_unlinks'].append(Path(path).name)
+            raise
+        path = Path(path)
+        if not path.name.startswith('._'):
+            try:
+                original_unlink(str(path.with_name('._' + path.name)), dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+        return result
+
+    class PairedScan:
+        def __init__(self, path):
+            with original_scandir(path) as scan:
+                self.entries = sorted(scan, key=lambda entry: (
+                    entry.name.removeprefix('._'), entry.name.startswith('._')))
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(collector, 'write_workbook', save_with_sidecars)
+    monkeypatch.setattr(Path, 'replace', replace_with_sidecar)
+    monkeypatch.setattr(os, 'unlink', unlink_with_sidecar)
+    monkeypatch.setattr(os, 'scandir', PairedScan)
+    return events
+
+
+def test_collection_ignores_sidecars_created_during_export(tmp_path, appledouble_filesystem):
+    morph = create_morphology(tmp_path / 'experiment')
+    create_intensity(morph)
+    appledouble_filesystem['moves'].clear()
+    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    assert ok
+    events = appledouble_filesystem
+    assert all(not name.startswith('.') for name in events['moves'])
+    assert events['moves'][-1] == collector.COMBINED_NAME
+    assert len(events['moves']) == 11
+    assert not (output / 'unrelated.csv').exists()
+    assert not (output / '.DS_Store').exists()
+    assert (output / 'Nuclei_Images.csv').read_bytes() == (morph[0] / 'Nuclei_Images.csv').read_bytes()
+    assert len(sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')) == 2
+    assert not list(output.parent.glob('.fia_marker_collection_*'))
+
+
+def test_failed_transfer_cleans_disappearing_sidecars_and_reports_original_error(
+        tmp_path, monkeypatch, appledouble_filesystem):
+    morph = create_morphology(tmp_path / 'experiment')
+    create_intensity(morph)
+    previous = morph[2].parent / (collector.OUTPUT_PREFIX + '20000101_000000')
+    previous.mkdir()
+    (previous / 'preserved.csv').write_bytes(b'previous result')
+    paired_replace = Path.replace
+
+    def fail_real_spreadsheet(path, target):
+        if path.name == 'Nuclei_Images.csv':
+            raise OSError(errno.EIO, 'Simulated spreadsheet write failure', str(path))
+        return paired_replace(path, target)
+
+    monkeypatch.setattr(Path, 'replace', fail_real_spreadsheet)
+    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    assert not ok
+    assert '._Nuclei_Morphology.csv' in appledouble_filesystem['missing_unlinks']
+    assert [path.name for path in output.iterdir() if not path.name.startswith('.')] == ['Collection_Report.xlsx']
+    rows = sheet_rows(output / 'Collection_Report.xlsx', 'Collection_Info')
+    status, = [row for row in rows if row['Category'] == 'Collection' and row['Item'] == 'Status']
+    assert status['Status'] == 'IO_FAILED'
+    assert 'Simulated spreadsheet write failure' in status['Details']
+    assert set(output.parent.glob(collector.OUTPUT_PREFIX + '*')) == {previous, output}
+    assert (previous / 'preserved.csv').read_bytes() == b'previous result'
+    assert not list(output.parent.glob('.fia_marker_collection_*'))
+
+
+def test_missing_expected_spreadsheet_is_not_silently_ignored(tmp_path):
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    (staging / collector.COMBINED_NAME).write_bytes(b'test workbook')
+    with pytest.raises(FileNotFoundError, match='Nuclei_Images.csv'):
+        collector.publish_staging(staging, tmp_path, collector.COMBINED_NAME,
+                                  ['Nuclei_Images.csv', collector.COMBINED_NAME])
+    assert not list(tmp_path.glob(collector.OUTPUT_PREFIX + '*'))
+    assert (staging / collector.COMBINED_NAME).exists()
+
+
+@pytest.mark.parametrize('cleanup_error', [PermissionError('denied'), FileNotFoundError('missing real file')])
+def test_cleanup_errors_do_not_mask_the_original_publication_failure(tmp_path, monkeypatch, capsys, cleanup_error):
+    staging = tmp_path / 'staging'
+    staging.mkdir()
+    (staging / collector.COMBINED_NAME).write_bytes(b'test workbook')
+    publication_error = OSError(errno.ENOSPC, 'No space for the spreadsheet')
+
+    def fail_transfer(path, target):
+        raise publication_error
+
+    def fail_cleanup(path, onerror):
+        onerror(os.unlink, str(path / 'real.csv'), (type(cleanup_error), cleanup_error, None))
+
+    monkeypatch.setattr(Path, 'replace', fail_transfer)
+    monkeypatch.setattr(collector.shutil, 'rmtree', fail_cleanup)
+    with pytest.raises(OSError) as caught:
+        collector.publish_staging(staging, tmp_path, collector.COMBINED_NAME, [collector.COMBINED_NAME])
+    assert caught.value is publication_error
+    assert 'Could not fully remove incomplete output' in capsys.readouterr().out
