@@ -14,7 +14,7 @@ import marker_intensity_report as report
 import marker_report_data as data_tools
 import numpy as np
 import pytest
-from marker_report_plots import plot_rows
+from marker_report_plots import plot_rows, plot_specs, render_plots
 from marker_report_statistics import calculate_statistics, holm_adjust, observations
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
@@ -62,12 +62,13 @@ def collection(tmp_path, empty=False, legacy=False, missing=False):
     return path
 
 
-def annotated():
+def annotated(populations=None):
     """Unequal image populations deliberately distinguish pooled and equal-image means."""
     images, nuclei = [], []
     design = [{'Well': well, 'Group': group} for well, group in
               [('A02', 'Control'), ('A03', 'Control'), ('A04', 'Treatment'), ('A05', 'Treatment')]]
-    populations = [('A02', [1] * 100), ('A02', [11]), ('A03', [5, 7]), ('A04', [20, 40]), ('A05', [60, 90])]
+    if populations is None:
+        populations = [('A02', [1] * 100), ('A02', [11]), ('A03', [5, 7]), ('A04', [20, 40]), ('A05', [60, 90])]
     specs = data_tools.metric_specs([MARKER])
     for index, (well, values) in enumerate(populations):
         identity = {'Well': well, 'Group': 'Control' if well in ('A02', 'A03') else 'Treatment',
@@ -411,3 +412,69 @@ def test_missing_morphology_workbook_prevents_success(tmp_path, monkeypatch):
     assert not ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'FAILED' and status['Stage'] == 'final verification'
+
+
+@pytest.mark.parametrize('adjusted,status,unit,expected', [
+    (0.0499, 'TESTED', 'nucleus', True),
+    (0.0499, 'TESTED', 'well', True),
+    (0.05, 'TESTED', 'nucleus', False),
+    (0.2, 'TESTED', 'nucleus', False),
+    (None, 'NOT_TESTED', 'well', False),
+    (0.01, 'NOT_TESTED', 'nucleus', False),
+    (0.01, 'TESTED', None, False),
+])
+def test_morphology_plot_requires_significant_adjusted_test(adjusted, status, unit, expected):
+    data = annotated()
+    data['stats_unit'] = unit
+    data['statistics'] = [{'Category': 'Morphology', 'Metric': 'Circularity',
+                           'Status': status, 'P_raw': 0.00001, 'P_Holm': adjusted}]
+    names = [spec[0] for spec in plot_specs(data)]
+    assert names[:2] == ['Nuclei_count', MARKER + '_Integrated_density']
+    assert ('Morphology_Circularity' in names) == expected
+    assert len(names) == (3 if expected else 2)
+
+
+def test_morphology_plot_selection_follows_statistics_unit_without_changing_tables():
+    data = annotated([('A02', [1, 2, 1, 2]), ('A04', [10, 11, 10, 11])])
+    calculate_statistics(data)
+    assert len(plot_specs(data)) == 14
+    assert {spec[1] for spec in plot_specs(data)[2:]} == set(collector.MORPH_METRICS)
+    before = deepcopy(data['statistics'])
+    assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
+    assert data['statistics'] == before
+    data['stats_unit'] = 'well'
+    calculate_statistics(data)
+    assert all(r['Status'] == 'NOT_TESTED' for r in data['statistics'])
+    assert len(plot_specs(data)) == 2
+    assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
+    assert all(r['Family_size_planned'] == 19 for r in data['statistics'])
+
+
+def test_significant_morphology_render_has_all_nuclei_and_comparisons(tmp_path):
+    data = annotated()
+    calculate_statistics(data)
+    data['groups'].append('Other condition')
+    data['counts_by_group']['Other condition'] = {'Nuclei': 0, 'Images': 0, 'Wells': 0}
+    # Simulate one significant and one nonsignificant contrast for the same metric.
+    circularity = next(row for row in data['statistics'] if row['Metric'] == 'Circularity')
+    circularity.update(Status='TESTED', P_Holm=0.01)
+    other = dict(circularity, Treatment='Other condition', P_Holm=0.6)
+    data['statistics'].append(other)
+    for row in data['statistics']:
+        if row['Category'] == 'Morphology' and row['Metric'] != 'Circularity':
+            row['P_Holm'] = 1.0
+    original = deepcopy(data['statistics'])
+    render_plots(data, tmp_path / 'Plots')
+    assert [p['Plot'] for p in data['plots']] == ['Nuclei_count', MARKER + '_Integrated_density', 'Morphology_Circularity']
+    plot = data['plots'][-1]
+    assert plot['Observation'] == 'nucleus' and plot['Points'] == 107
+    assert 'Holm-adjusted p < 0.05' in plot['Caption']
+    rows = [r for r in data['plot_data'] if r['Metric'] == 'Circularity']
+    assert len(rows) == 107 and {r['Group'] for r in rows} == {'Control', 'Treatment'}
+    assert data['statistics'] == original
+    assert (tmp_path / plot['File']).is_file()
+    tables = {'Plot_Info': report.as_table(data['plots']), 'Plot_Data': report.as_table(data['plot_data'])}
+    report.write_workbook(tmp_path, tables, data['plots'])
+    with ZipFile(tmp_path / report.WORKBOOK) as archive:
+        assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 3
+    assert sheet_rows(tmp_path / report.WORKBOOK, 'Plot_Info')[-1]['Metric'] == 'Circularity'

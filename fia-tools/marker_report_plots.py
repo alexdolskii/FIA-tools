@@ -7,18 +7,35 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-from marker_report_data import COUNT
+from marker_report_data import COUNT, metric_specs
 
 PLOT_COLUMNS = ['Plot', 'Metric', 'Observation', 'Group', 'Well', 'Image_name', 'Mask_name',
                 'Nucleus_ID', 'Value']
 
 
+def plot_specs(data):
+    """Always plot the primary endpoints; add morphology only after a significant adjusted test."""
+    specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
+    specs += [(marker + '_Integrated_density', marker + '_Marker_RawIntDen',
+               marker + ': nuclear integrated density', 'Raw integrated density (sum of pixel values)', 'nucleus')
+              for marker in data['markers']]
+    significant = set()
+    if data['stats_unit'] is not None:
+        significant = {row['Metric'] for row in data.get('statistics', [])
+                       if row['Category'] == 'Morphology' and row['Status'] == 'TESTED'
+                       and row['P_Holm'] is not None and 0 <= row['P_Holm'] < 0.05}
+    for category, _, field, unit in metric_specs([]):
+        if category == 'Morphology' and field in significant:
+            label = field.removesuffix('_px2').removesuffix('_px').replace('_', ' ').capitalize()
+            ylabel = label + (' (px²)' if unit == 'px2' else f' ({unit})')
+            specs.append(('Morphology_' + field, field, 'Nuclear morphology: ' + label, ylabel, 'nucleus'))
+    return specs
+
+
 def plot_rows(data):
     rows = []
-    specs = [('Nuclei_count', COUNT, data['images'], 'image')]
-    specs += [(marker + '_Integrated_density', marker + '_Marker_RawIntDen', data['nuclei'], 'nucleus')
-              for marker in data['markers']]
-    for name, field, population, observation in specs:
+    for name, field, _, _, observation in plot_specs(data):
+        population = data['images'] if observation == 'image' else data['nuclei']
         for row in population:
             if row[field] is None:
                 continue
@@ -40,12 +57,8 @@ def p_label(row):
 def render_plots(data, folder):
     folder.mkdir(exist_ok=True)
     data['plot_data'] = plot_rows(data)
-    specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
-    specs += [(marker + '_Integrated_density', marker + '_Marker_RawIntDen',
-               marker + ': nuclear integrated density', 'Raw integrated density (sum of pixel values)', 'nucleus')
-              for marker in data['markers']]
     plots = []
-    for name, field, title, ylabel, observation in specs:
+    for name, field, title, ylabel, observation in plot_specs(data):
         points = [row for row in data['plot_data'] if row['Plot'] == name]
         comparisons = [row for row in data['statistics'] if row['Metric'] == field]
         width = max(9, 1.1 * len(data['groups']))
@@ -96,6 +109,8 @@ def render_plots(data, folder):
                 note += ' Nucleus/image tests are exploratory; within-well dependence is not modeled.'
             if any(row['P_Holm'] is None for row in comparisons):
                 note += ' Not tested: see Statistics for the reason.'
+            if name.startswith('Morphology_'):
+                note += ' Shown because at least one morphology comparison has Holm-adjusted p < 0.05.'
             caption = textwrap.fill(note, max(90, int(width * 14)))
             bottom_margin = 0.07 + 0.022 * (caption.count('\n') + 1)
             fig.text(0.04, 0.02, caption, fontsize=8, va='bottom')
