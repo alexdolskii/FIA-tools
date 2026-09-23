@@ -15,14 +15,16 @@ import numpy as np
 import openpyxl
 import scipy
 from marker_report_plots import PLOT_COLUMNS, render_plots
-from marker_report_statistics import STAT_COLUMNS, calculate_statistics
+from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Report_'
 WORKBOOK = 'FIA_Marker_Intensity_Report.xlsx'
+MORPHOLOGY_WORKBOOK = 'Nuclei_Morphology_Summary.xlsx'
+MORPHOLOGY_SHEETS = ('Morphology_By_Condition', 'Morphology_Comparisons')
 
 
 def create_output(root):
@@ -112,6 +114,36 @@ def as_table(rows, columns=()):
     return list(columns) or list(dict.fromkeys(key for row in rows for key in row)), rows
 
 
+def morphology_tables(data):
+    """Present morphology separately, using the same observations and tests as the report."""
+    statistics = ('N', 'Mean', 'SD', 'Median', 'IQR')
+    columns = ['Metric', 'Unit', 'Observation_unit']
+    columns += [f'{group}: {stat}' for group in data['groups'] for stat in statistics]
+    rows = []
+    for category, _, field, unit in inputs.metric_specs([]):
+        if category != 'Morphology':
+            continue
+        row = {'Metric': field, 'Unit': unit,
+               'Observation_unit': 'well' if data['stats_unit'] == 'well' else 'nucleus'}
+        for group in data['groups']:
+            values, _ = observations(data, field, group)
+            summaries = {
+                'N': len(values),
+                'Mean': float(np.mean(values)) if values else None,
+                'SD': float(np.std(values, ddof=1)) if len(values) >= 2 else None,
+                'Median': float(np.median(values)) if values else None,
+                'IQR': float(np.percentile(values, 75) - np.percentile(values, 25)) if values else None,
+            }
+            row.update({f'{group}: {stat}': summaries[stat] for stat in statistics})
+        rows.append(row)
+    # Reuse the full report's Holm results without creating a new test family.
+    comparison_columns = [column for column in STAT_COLUMNS if column not in ('Category', 'Marker')]
+    comparisons = [{column: row[column] for column in comparison_columns}
+                   for row in data['statistics'] if row['Category'] == 'Morphology']
+    return {MORPHOLOGY_SHEETS[0]: (columns, rows),
+            MORPHOLOGY_SHEETS[1]: (comparison_columns, comparisons)}
+
+
 def report_tables(data, output, manifest):
     unit = data['stats_unit'] or 'disabled'
     notes = [
@@ -129,6 +161,7 @@ def report_tables(data, output, manifest):
         ('Dependence', 'Nucleus/image tests are exploratory and do not account for within-well clustering. Holm does not correct this dependence.'),
         ('Replicates', 'Wells are within-plate observations, not inferred biological replicates; experiments and runs are never pooled.'),
         ('Summary fields', 'Median and IQR columns describe distributions; no separate tests of these summary columns.'),
+        ('Morphology summary', 'Nuclei_Morphology_Summary.xlsx contains the 12 morphology metrics side by side by condition, existing control comparisons and Run_Info. No additional plots or tests.'),
         ('Size units', 'Area_px2 and pixel-based morphology; no rescaling or conversion to micrometers.'),
         ('Marker identity', 'Selected folder names are used verbatim. No inferred biological marker names or legacy alias merging.'),
         ('Completion', 'Use this report only when report_status.json says SUCCESS.'),
@@ -153,12 +186,19 @@ def report_tables(data, output, manifest):
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
         'Requested_statistics_unit': unit, 'Non_border_nuclei': len(data['nuclei']),
+        'Morphology_summary_observation_unit': 'well' if data['stats_unit'] == 'well' else 'nucleus',
+        'Morphology_summary_population': 'Non-border nuclei only; no additional filtering.',
+        'Morphology_summary_N': 'Usable observations for each metric, in Morphology_summary_observation_unit.',
+        'Morphology_summary_SD': 'Sample standard deviation (ddof=1); blank for fewer than two observations.',
+        'Morphology_summary_well_values': 'Mean of usable per-image nucleus means within each well; equal image weight.',
+        'Morphology_summary_tests': 'Existing Welch/Holm results from Statistics, including its full planned family across count, morphology and selected markers. No tests when Requested_statistics_unit is disabled.',
         'Images': len(data['images']), 'Python': sys.version.split()[0],
         'NumPy': np.__version__, 'SciPy': scipy.__version__, 'Matplotlib': matplotlib.__version__,
         'openpyxl': openpyxl.__version__,
     }
     return {
         'Overview': as_table([{'Item': key, 'Description': value} for key, value in notes]),
+        **morphology_tables(data),
         'Statistics': as_table(data['statistics'], STAT_COLUMNS),
         'Summary': as_table(data['summary']),
         'Nuclei': as_table(data['nuclei'], data['nuclei_columns'] + ['Group']),
@@ -173,13 +213,13 @@ def report_tables(data, output, manifest):
     }
 
 
-def write_workbook(output, tables, plots):
+def write_workbook(output, tables, plots, filename=WORKBOOK):
     book = openpyxl.Workbook(write_only=True)
     for title, (columns, rows) in tables.items():
         if len(columns) > 16384 or len(rows) + 1 > 1048576:
             raise inputs.ValidationError(f'Table exceeds Excel limits: {title}')
         sheet = book.create_sheet(title)
-        sheet.freeze_panes = 'A2'
+        sheet.freeze_panes = 'D2' if title == MORPHOLOGY_SHEETS[0] else 'A2'
         sheet.auto_filter.ref = f'A1:{get_column_letter(len(columns))}{len(rows) + 1}'
         for index, column in enumerate(columns, 1):
             sheet.column_dimensions[get_column_letter(index)].width = min(45, max(14, len(column) + 2))
@@ -189,7 +229,11 @@ def write_workbook(output, tables, plots):
             cell.data_type = 's'
             cell.font = Font(bold=True, color='FFFFFF')
             cell.fill = PatternFill('solid', fgColor='234F68')
+            if title in MORPHOLOGY_SHEETS:
+                cell.alignment = Alignment(wrap_text=True, vertical='center')
             cells.append(cell)
+        if title in MORPHOLOGY_SHEETS:
+            sheet.row_dimensions[1].height = 42
         sheet.append(cells)
         for row in rows:
             cells = []
@@ -200,20 +244,23 @@ def write_workbook(output, tables, plots):
                 cell = WriteOnlyCell(sheet, value)
                 if isinstance(value, str):
                     cell.data_type = 's'
+                elif title == MORPHOLOGY_SHEETS[0] and value is not None:
+                    cell.number_format = '0' if column.endswith(': N') else '0.000'
                 cells.append(cell)
             sheet.append(cells)
-    sheet = book.create_sheet('Plots')
-    anchor = 1
-    for plot in plots:
-        image = Image(output / plot['File'])
-        height = image.height * min(1, 1050 / image.width)
-        image.width = min(1050, image.width)
-        image.height = height
-        sheet.add_image(image, f'A{anchor}')
-        anchor += int(height / 20) + 3
-    temporary = output / '.report.partial.xlsx'
+    if plots:
+        sheet = book.create_sheet('Plots')
+        anchor = 1
+        for plot in plots:
+            image = Image(output / plot['File'])
+            height = image.height * min(1, 1050 / image.width)
+            image.width = min(1050, image.width)
+            image.height = height
+            sheet.add_image(image, f'A{anchor}')
+            anchor += int(height / 20) + 3
+    temporary = output / ('.' + filename + '.partial.xlsx')
     book.save(temporary)
-    temporary.replace(output / WORKBOOK)
+    temporary.replace(output / filename)
 
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None):
@@ -251,11 +298,15 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         for title, table in tables.items():
             collect.write_csv(output / (title + '.csv'), *table)
         write_workbook(output, tables, data['plots'])
+        morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
+        write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
         # Verify exact published tables and unchanged inputs before marking success.
         stage = 'final verification'
         exported = {title: collect.csv_snapshot(output / (title + '.csv'), {}, columns)
                     for title, (columns, _) in tables.items()}
         collect.verify_workbook(output / WORKBOOK, {}, exported)
+        collect.verify_workbook(output / MORPHOLOGY_WORKBOOK, {},
+                                {title: exported[title] for title in morphology})
         for path, content in data['files'].items():
             if path.is_symlink() or path.read_bytes() != content:
                 raise inputs.ValidationError(f'Input changed during report generation: {path}')

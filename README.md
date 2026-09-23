@@ -372,11 +372,16 @@ Each report is saved beside the original images in a new `FIA_Marker_Intensity_R
 
 | Output | Contents |
 | --- | --- |
-| `FIA_Marker_Intensity_Report.xlsx` | Overview, Statistics, Summary, Nuclei, Images, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Info, Run_Info, Source_Files and embedded Plots |
+| `FIA_Marker_Intensity_Report.xlsx` | Overview, Morphology_By_Condition, Morphology_Comparisons, Statistics, Summary, Nuclei, Images, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Info, Run_Info, Source_Files and embedded Plots |
+| `Nuclei_Morphology_Summary.xlsx` | Separate morphology workbook: Morphology_By_Condition, Morphology_Comparisons and Run_Info; no plots |
 | Corresponding `.csv` tables | Data, aggregation values, statistics and provenance |
 | `Plots/` | One count boxplot and one integrated-density boxplot per selected marker, in PNG format |
 | `Inputs/` | Byte-preserved input spreadsheets, plate map and input manifest |
 | `report.log`, `report_status.json` | Progress, errors, selected settings and completion status |
+
+`Morphology_By_Condition` has one row for each of the 12 morphology metrics, including circularity, area, aspect ratio, solidity, roundness and eccentricity. Conditions appear side by side, with numeric `N`, `Mean`, sample `SD`, `Median` and `IQR` columns. In `nucleus` mode, these describe individual non-border nuclei. In `well` mode, they describe the same equal-image-weight well means used in the tests. `N` counts usable observations for that metric in the stated `Observation_unit`; sample SD is blank when fewer than two observations are available. Empty conditions retain `N=0` and blank descriptive statistics. Without `--stats-unit`, the table describes nuclei and the comparison sheet contains headers only.
+
+`Morphology_Comparisons` contains the morphology rows from the existing `Statistics` table: treatment-versus-control means, differences, nominal 95% confidence intervals, raw and Holm-adjusted p-values, sample sizes and explicit reasons for unavailable tests. It preserves the original Holm family across count, all morphology metrics and selected markers; exporting this table does not recalculate or narrow the correction. These two morphology sheets are also included in the main report, with matching `Morphology_By_Condition.csv` and `Morphology_Comparisons.csv`. The additional workbook uses the same completion status as the main report. Existing graphs and statistical comparisons are unchanged.
 
 Validation checks archived source SHA-256 hashes, workbook/CSV agreement, nucleus identities, areas, counts, run/marker identities and image summaries. Exported workbook/CSV agreement and unchanged inputs are verified before **`SUCCESS`** is written to `report_status.json`. Incomplete collector folders are skipped during discovery. If a selected completed collection is inconsistent, its report fails rather than silently falling back to older data. A failed report has `FAILED` status and `Report_Diagnostics.xlsx`; incomplete outputs must not be used. Other selected collections continue. The command returns nonzero if any selected report fails or a selected experiment has no completed collections.
 

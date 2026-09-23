@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
 from zipfile import ZipFile
 
@@ -254,6 +255,16 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
     assert status['Planned_comparisons'] == 19
     assert len(sheet_rows(output / report.WORKBOOK, 'Nuclei')) == 2
     assert len(sheet_rows(output / report.WORKBOOK, 'Statistics')) == 19
+    by_condition = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
+    comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
+    assert len(by_condition) == 12 and len(comparisons) == 12
+    assert {r['Metric'] for r in by_condition} == set(collector.MORPH_METRICS)
+    assert by_condition == sheet_rows(output / report.WORKBOOK, report.MORPHOLOGY_SHEETS[0])
+    assert comparisons == sheet_rows(output / report.WORKBOOK, report.MORPHOLOGY_SHEETS[1])
+    for title in report.MORPHOLOGY_SHEETS:
+        assert (output / (title + '.csv')).is_file()
+    with ZipFile(output / report.MORPHOLOGY_WORKBOOK) as archive:
+        assert not any(name.startswith('xl/media/') for name in archive.namelist())
     assert len(list((output / 'Plots').glob('*.png'))) == 2
     assert [r['Points'] for r in sheet_rows(output / report.WORKBOOK, 'Plot_Info')] == [1, 2]
     with ZipFile(output / report.WORKBOOK) as archive:
@@ -268,6 +279,11 @@ def test_empty_nuclei_are_zero_counts_not_zero_intensities(tmp_path):
     ok, output = report.create_report(path, path.parent, markers='all', stats_unit='well')
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Nuclei') == []
+    summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
+    assert len(summary) == 12
+    assert all(r['Control: N'] == 0 and r['Control: Mean'] is None and r['Control: SD'] is None for r in summary)
+    comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
+    assert all(r['Status'] == 'NOT_TESTED' and r['P_Holm'] is None for r in comparisons)
     points = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
     assert len(points) == 1 and points[0]['Value'] == 0 and points[0]['Observation'] == 'image'
     with (output / 'Nuclei.csv').open(encoding='utf-8-sig') as handle:
@@ -306,6 +322,9 @@ def test_formula_like_group_is_literal_in_workbook(tmp_path):
         assert '=Control' in [r['Group'] for r in sheet_rows(output / report.WORKBOOK, 'Nuclei')]
     finally:
         book.close()
+    assert sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1]) == []
+    summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
+    assert summary[0]['=Control: N'] == 2
 
 
 def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
@@ -332,3 +351,63 @@ def test_discovery_ignores_unfinished_and_hidden_collections(tmp_path):
     (path.parent / ('._' + path.name)).mkdir()
     selected, missing = report.choose_collections([path.parent], 'latest')
     assert selected == [path] and missing == []
+
+
+@pytest.mark.parametrize('unit', ['nucleus', 'well', None])
+def test_morphology_summary_matches_analysis_unit_and_preserves_statistics(unit):
+    data = annotated()
+    data['stats_unit'] = unit
+    calculate_statistics(data)
+    original = deepcopy(data)
+    plots = plot_rows(data)
+    tables = report.morphology_tables(data)
+    columns, summary = tables[report.MORPHOLOGY_SHEETS[0]]
+    assert len(summary) == 12 and len(columns) == 13
+    assert {r['Metric'] for r in summary} == set(collector.MORPH_METRICS)
+    circularity = next(r for r in summary if r['Metric'] == 'Circularity')
+    expected = [6.0, 6.0] if unit == 'well' else [1] * 100 + [11, 5, 7]
+    assert circularity['Observation_unit'] == (unit or 'nucleus')
+    assert circularity['Control: N'] == len(expected)
+    assert circularity['Control: Mean'] == pytest.approx(np.mean(expected))
+    assert circularity['Control: SD'] == pytest.approx(np.std(expected, ddof=1))
+    assert circularity['Control: Median'] == pytest.approx(np.median(expected))
+    assert circularity['Control: IQR'] == pytest.approx(np.percentile(expected, 75) - np.percentile(expected, 25))
+    comparison_columns, comparisons = tables[report.MORPHOLOGY_SHEETS[1]]
+    expected_tests = [r for r in data['statistics'] if r['Category'] == 'Morphology']
+    assert comparisons == [{key: row[key] for key in comparison_columns} for row in expected_tests]
+    if unit is not None:
+        assert all(row['Family_size_planned'] == 19 for row in comparisons)
+    assert data == original and plot_rows(data) == plots
+
+
+def test_morphology_summary_keeps_unobserved_groups_and_metric_specific_missing_values():
+    data = annotated()
+    data['groups'].append('No observations')
+    # One valid circularity value remains in Control; other morphology fields stay present.
+    control = [r for r in data['nuclei'] if r['Group'] == 'Control']
+    for nucleus in control[1:]:
+        nucleus['Circularity'] = None
+    data['stats_unit'] = None
+    calculate_statistics(data)
+    _, rows = report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]]
+    circularity = next(r for r in rows if r['Metric'] == 'Circularity')
+    area = next(r for r in rows if r['Metric'] == 'Area_px2')
+    assert circularity['Control: N'] == 1 and circularity['Control: Mean'] == 1
+    assert circularity['Control: SD'] is None
+    assert area['Control: N'] == 103
+    assert all(row['No observations: N'] == 0 and row['No observations: Mean'] is None for row in rows)
+
+
+def test_missing_morphology_workbook_prevents_success(tmp_path, monkeypatch):
+    path = collection(tmp_path)
+    original = report.write_workbook
+
+    def skip_morphology(output, tables, plots, filename=report.WORKBOOK):
+        if filename != report.MORPHOLOGY_WORKBOOK:
+            original(output, tables, plots, filename)
+
+    monkeypatch.setattr(report, 'write_workbook', skip_morphology)
+    ok, output = report.create_report(path, path.parent, markers='all')
+    assert not ok
+    status = json.loads((output / 'report_status.json').read_text())
+    assert status['Status'] == 'FAILED' and status['Stage'] == 'final verification'
