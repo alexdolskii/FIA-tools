@@ -9,6 +9,7 @@ dependencies = [
     "pyimagej>=0.3.2",
     "numpy==1.26.4",
     "openpyxl>=3.1",
+    "pillow>=10",
     "scikit-image>=0.25.2",
     "setuptools<82.0.0",
     "scyjava==1.10.0",
@@ -27,3 +28,4 @@ select_channels = "fia_tools:select_channels"
 generate_nuclei_mask = "fia_tools:generate_nuclei_mask"
 generate_foci_mask = "fia_tools:generate_foci_mask"
 quantify_foci = "fia_tools:quantify_foci"
+quantify_nuclear_intensity = "fia_tools:quantify_nuclear_intensity"

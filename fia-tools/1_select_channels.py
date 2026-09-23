@@ -236,6 +236,9 @@ def process_image(valid_folders: list) -> None:
 
             # Write an entry for this image to the metadata file
             metadata_file.write(f"Image Name: {filename}\n")
+            metadata_file.write(f"  Width: {width}\n")
+            metadata_file.write(f"  Height: {height}\n")
+            metadata_file.write("  XY processing: native dimensions; no resizing\n")
             metadata_file.write(f"  Pixel Width: {pixel_width}\n")
             metadata_file.write(f"  Pixel Height: {pixel_height}\n")
             metadata_file.write(f"  Pixel Depth: {pixel_depth}\n")
@@ -271,8 +274,7 @@ def process_image(valid_folders: list) -> None:
                 zp_nuclei.doProjection()
                 nuclei_proj = zp_nuclei.getProjection()
 
-                # Resize & convert to 8-bit
-                nuclei_proj = nuclei_proj.resize(1024, 1024, 1, "bilinear")
+                # Preserve native XY dimensions; convert segmentation input to 8-bit.
                 IJ.run(nuclei_proj, "8-bit", "")
 
                 # Save
@@ -299,8 +301,7 @@ def process_image(valid_folders: list) -> None:
                     zp_foci.doProjection()
                     foci_proj = zp_foci.getProjection()
 
-                    # Resize & convert
-                    foci_proj = foci_proj.resize(1024, 1024, 1, "bilinear")
+                    # Preserve native XY dimensions; convert segmentation input to 8-bit.
                     IJ.run(foci_proj, "8-bit", "")
 
                     # Save to the corresponding Foci folder
@@ -338,7 +339,6 @@ def process_image(valid_folders: list) -> None:
                 print(f"Extracting nuclei channel "
                       f"{nuclei_channel} from 2D TIFF.")
                 imp_nuclei = splitted_channels[nuclei_channel - 1]
-                imp_nuclei = imp_nuclei.resize(1024, 1024, 1, "bilinear")
                 IJ.run(imp_nuclei, "8-bit", "")
 
                 base_name = os.path.splitext(filename)[0]
@@ -353,7 +353,6 @@ def process_image(valid_folders: list) -> None:
                     print(f"Extracting foci channel "
                           f"{foci_channel} from 2D TIFF.")
                     imp_foci = splitted_channels[foci_channel - 1]
-                    imp_foci = imp_foci.resize(1024, 1024, 1, "bilinear")
                     IJ.run(imp_foci, "8-bit", "")
 
                     # Save to the corresponding Foci folder

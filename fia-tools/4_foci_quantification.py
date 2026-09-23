@@ -10,9 +10,9 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw
 from skimage import io, measure
 from validate_folders import validate_input_file
 
@@ -162,27 +162,21 @@ def get_latest_foci_folders(foci_assay_folder: str) -> dict:
 
 def save_labeled_image(image, output_path, title, labels=None):
     """
-    Saves an image (TIFF/PNG) with labeled nuclei.
-    If labels is None, it just saves the image as 16-bit TIFF.
-    If labels is a dict {label: (centroid_y, centroid_x)},
-    it draws those labels in the image.
+    Save a native-size numbered preview or an unchanged 16-bit TIFF.
+    PNG previews use display scaling only. A labels dictionary maps each
+    nucleus ID to (centroid_y, centroid_x); labels never alter geometry.
     """
-    if labels:
-        fig, ax = plt.subplots()
-        ax.imshow(image, cmap='gray')
-        for lbl, (cy, cx) in labels.items():
-            ax.text(cx, cy, str(lbl),
-                    color='red',
-                    fontsize=8,
-                    ha='center',
-                    va='center')
-        ax.set_title(title)
-        ax.axis('off')
-        plt.savefig(output_path,
-                    bbox_inches='tight',
-                    pad_inches=0,
-                    dpi=150)
-        plt.close()
+    if labels is not None or Path(output_path).suffix.lower() == ".png":
+        # Display scaling changes brightness only, never the pixel grid.
+        pixels = np.asarray(image, dtype=float)
+        low, high = float(np.min(pixels)), float(np.max(pixels))
+        display = ((pixels - low) * 255 / (high - low)
+                   if high > low else np.zeros_like(pixels))
+        preview = Image.fromarray(display.astype(np.uint8)).convert("RGB")
+        draw = ImageDraw.Draw(preview)
+        for lbl, (cy, cx) in (labels or {}).items():
+            draw.text((float(cx), float(cy)), str(lbl), fill="red", anchor="mm")
+        preview.save(output_path)
     else:
         io.imsave(output_path, image.astype(np.uint16))
     logging.info(f"Saved image {title} to {output_path}.")
