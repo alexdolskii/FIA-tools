@@ -64,9 +64,18 @@ def make_experiment(tmp_path, shape=(37, 1031)):
     (run / 'nuclei_run.json').write_text(json.dumps(metadata))
     (root / ('._' + raw.name)).write_bytes(b'AppleDouble')
     (run / ('._' + stem + '.tif')).write_bytes(b'AppleDouble')
+    marker_folder = run.parent / 'Foci' / 'Foci_1_Channel_2'
+    marker_folder.mkdir(parents=True)
+    # Catalog contents must never be opened for intensity measurements.
+    (marker_folder / 'prepared.tif').write_bytes(b'catalog only')
     manifest = tmp_path / 'input_paths.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(root)]}))
     return manifest, raw, run, pixels, labels
+
+
+def marker_for(run, name='Foci_1_Channel_2'):
+    return {'name': name, 'channel': int(name.rsplit('_', 1)[1]),
+            'folder': run.parent / 'Foci' / name}
 
 
 def test_selection_all_several_deduplicate_and_cancel():
@@ -94,7 +103,7 @@ def test_discovery_hidden_files_missing_paths_and_duplicate_folders(tmp_path):
 
 
 def test_select_latest_all_manual_excludes_incompatible(monkeypatch):
-    records = [{'dataset': Path(root), 'path': Path(name), 'eligible': valid, 'metadata': {}}
+    records = [{'dataset': Path(root), 'path': Path(name), 'eligible': valid, 'metadata': {}, 'marker': {'name': 'Foci_1_Channel_2'}}
                for root, name, valid in [('A', '20260101', True), ('A', '20260103', False),
                                          ('A', '20260102', True), ('B', '20260101', True)]]
     monkeypatch.setattr('builtins.input', lambda _: '1')
@@ -109,7 +118,7 @@ def test_select_latest_all_manual_excludes_incompatible(monkeypatch):
 def test_native_max_intensity_ids_zeros_and_border_exclusion(tmp_path, engine):
     manifest, raw, run, pixels, labels = make_experiment(tmp_path)
     experiment = app.discover(manifest)[0]
-    record = app.inspect_run(experiment, run, 'tiff-stack', 2, engine, {})
+    record = app.inspect_run(experiment, run, 'tiff-stack', marker_for(run), engine, {})
     assert record['eligible'], record['errors']
     pair = record['pairs'][0]
     marker = engine.marker(raw, 'tiff-stack', 2, pair['info'])
@@ -161,21 +170,21 @@ def test_native_2d_float_channel_preserves_values(tmp_path, engine):
 def test_native_incompatible_dimensions_incomplete_and_ambiguous(tmp_path, engine):
     manifest, raw, run, _pixels, labels = make_experiment(tmp_path)
     experiment = app.discover(manifest)[0]
-    assert not app.inspect_run(experiment, run, 'tiff-2d', 2, engine, {})['eligible']
+    assert not app.inspect_run(experiment, run, 'tiff-2d', marker_for(run), engine, {})['eligible']
     id_map = next((run / 'Morphology_QC').glob('*.tif'))
     tifffile.imwrite(id_map, labels[:, :-1])
-    record = app.inspect_run(experiment, run, 'tiff-stack', 2, engine, {})
+    record = app.inspect_run(experiment, run, 'tiff-stack', marker_for(run), engine, {})
     assert not record['eligible'] and 'dimensions differ' in str(record['errors'])
     tifffile.imwrite(id_map, labels)
     copy = raw.with_suffix('.tiff')
     copy.write_bytes(raw.read_bytes())
     experiment = app.discover(manifest)[0]
-    record = app.inspect_run(experiment, run, 'tiff-stack', 2, engine, {})
+    record = app.inspect_run(experiment, run, 'tiff-stack', marker_for(run), engine, {})
     assert not record['eligible'] and 'found 2' in str(record['errors'])
     metadata = json.loads((run / 'nuclei_run.json').read_text())
     metadata['status'] = 'running'
     (run / 'nuclei_run.json').write_text(json.dumps(metadata))
-    incomplete = app.inspect_run(experiment, run, 'tiff-stack', 2, engine, {})
+    incomplete = app.inspect_run(experiment, run, 'tiff-stack', marker_for(run), engine, {})
     assert not incomplete['eligible']
     assert incomplete['mask_count'] == 1
 
@@ -204,9 +213,9 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
     before = {p: p.read_bytes() for p in run.rglob('*') if p.is_file()}
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     for unused in range(2):
-        answers = iter(['all', '1'])
+        answers = iter(['all', 'all', '1'])
         monkeypatch.setattr('builtins.input', lambda _, answers=answers: next(answers))
-        assert app.main(manifest, 2, 'tiff-stack') == 0
+        assert app.main(manifest, mode='tiff-stack') == 0
     outputs = list(run.parent.glob('Nuclear_Intensity_*'))
     assert len(outputs) == 2
     for output in outputs:
@@ -214,6 +223,9 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
             rows = list(csv.DictReader(handle))
         assert len(rows) == 2 and rows[0]['Image_name'] == raw.name
         assert rows[0]['Dataset'] == 'experiment, A'
+        assert rows[0]['Marker_folder'] == 'Foci_1_Channel_2'
+        assert rows[0]['Marker_channel'] == '2'
+        assert output.name.startswith('Nuclear_Intensity_Foci_1_Channel_2_')
         book = load_workbook(output / 'Nuclear_Intensity.xlsx')
         assert book.sheetnames == ['Nuclei', 'Images', 'Run_Info']
         headers, row = list(book['Images'].values)
@@ -240,10 +252,10 @@ def test_empty_population_has_blank_statistics_and_failure_is_not_zero(tmp_path)
 
 def test_native_changed_input_after_selection_is_not_measured(tmp_path, engine):
     manifest, raw, run, _, _ = make_experiment(tmp_path)
-    record = app.inspect_run(app.discover(manifest)[0], run, 'tiff-stack', 2, engine, {})
+    record = app.inspect_run(app.discover(manifest)[0], run, 'tiff-stack', marker_for(run), engine, {})
     raw.write_bytes(raw.read_bytes() + b'changed')
     output = app.new_output(run.parent, 'Nuclear_Intensity_')
-    assert app.analyze_run(record, output, 'tiff-stack', 2, engine, tmp_path / 'batch.json') == 'incomplete'
+    assert app.analyze_run(record, output, 'tiff-stack', engine, tmp_path / 'batch.json') == 'incomplete'
     with (output / 'Nuclear_Intensity_Images.csv').open(encoding='utf-8-sig') as handle:
         row = next(csv.DictReader(handle))
     assert row['Nuclei_count_total'] == ''
@@ -381,3 +393,150 @@ def test_stage1_native_channel_exports(tmp_path, engine, monkeypatch, mode):
         assert prepared.dtype == np.uint8
     metadata = (root / 'foci_assay' / 'image_metadata.txt').read_text()
     assert 'Width: 1301' in metadata and 'Height: 73' in metadata
+
+
+def test_marker_catalog_filters_counts_and_preserves_full_folder_identity(tmp_path, capsys):
+    roots = [tmp_path / 'A', tmp_path / 'B']
+    for root in roots:
+        foci = root / 'foci_assay' / 'Foci'
+        for name in ('Foci_1_Channel_2', 'Foci_2_Channel_1', 'Foci_10_Channel_3',
+                     '._Foci_3_Channel_4', 'Foci_4_Channel_0', 'Foci_5_Channel_2_old'):
+            folder = foci / name
+            folder.mkdir(parents=True)
+            (folder / '._image.tif').write_bytes(b'AppleDouble')
+            (folder / '.hidden.tif').touch()
+            (folder / 'notes.csv').touch()
+        for name in ('Foci_1_Channel_2', 'Foci_10_Channel_3'):
+            (foci / name / 'image.TIFF').touch()
+        (foci / 'Foci_1_Channel_2' / 'directory.tif').mkdir()
+    (roots[1] / 'foci_assay' / 'Foci' / 'Foci_1_Channel_2' / 'image.TIFF').unlink()
+    catalog = app.discover_markers([{'root': root} for root in roots])
+    assert [marker['name'] for marker in catalog] == ['Foci_1_Channel_2', 'Foci_10_Channel_3']
+    assert [marker['channel'] for marker in catalog] == [2, 3]
+    assert catalog[0]['folders'] == {roots[0]: {
+        'path': roots[0] / 'foci_assay' / 'Foci' / 'Foci_1_Channel_2', 'image_count': 1}}
+    assert len(catalog[1]['folders']) == 2
+    assert 'without visible TIFF images' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('selection, expected', [
+    ('1', {'Foci_1_Channel_2': 2}),
+    ('2', {'Foci_2_Channel_1': 1}),
+    ('2,1', {'Foci_1_Channel_2': 2, 'Foci_2_Channel_1': 1}),
+    ('all', {'Foci_1_Channel_2': 2, 'Foci_2_Channel_1': 1}),
+])
+def test_native_marker_selection_reads_matching_original_channels(
+        tmp_path, engine, monkeypatch, selection, expected):
+    manifest, _, run, pixels, labels = make_experiment(tmp_path)
+    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second.mkdir()
+    (second / 'prepared.tif').write_bytes(b'not an intensity input')
+    answers = iter(['all', selection, '1'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
+    assert app.main(manifest, mode='tiff-stack') == 0
+    outputs = list(run.parent.glob('Nuclear_Intensity_*'))
+    assert len(outputs) == len(expected)
+    for output in outputs:
+        metadata = json.loads((output / 'intensity_run.json').read_text())
+        folder, channel = metadata['Marker_folder'], metadata['Marker_channel']
+        assert expected[folder] == channel
+        assert output.name.startswith(f'Nuclear_Intensity_{folder}_')
+        assert metadata['Marker_folder_path'] == str(run.parent / 'Foci' / folder)
+        saved = tifffile.imread(output / 'image_0001' / 'marker.tif')
+        assert np.array_equal(saved, pixels[:, channel - 1].max(axis=0))
+        with (output / 'Nuclear_Intensity.csv').open(encoding='utf-8-sig') as handle:
+            rows = list(csv.DictReader(handle))
+        assert {row['Marker_folder'] for row in rows} == {folder}
+        assert {row['Marker_channel'] for row in rows} == {str(channel)}
+        assert [int(row['Nucleus_ID']) for row in rows] == [19, 31]
+        for row in rows:
+            values = saved[labels == int(row['Nucleus_ID'])]
+            assert float(row['Marker_Mean']) == pytest.approx(values.mean())
+    journal = json.loads(next(tmp_path.glob('Nuclear_Intensity_Batch_*/batch.json')).read_text())
+    assert {row['marker']: row['channel'] for row in journal['runs']} == expected
+
+
+def test_native_all_markers_and_all_mask_runs_remain_separate(tmp_path, engine, monkeypatch):
+    import shutil
+    manifest, _, run, _, _ = make_experiment(tmp_path)
+    newer = run.with_name('Final_Nuclei_Mask_20260923_130000')
+    shutil.copytree(run, newer)
+    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second.mkdir()
+    (second / 'prepared.tif').touch()
+    answers = iter(['all', 'all', '2'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
+    assert app.main(manifest, mode='tiff-stack') == 0
+    outputs = list(run.parent.glob('Nuclear_Intensity_*'))
+    assert len(outputs) == 4
+    identities = set()
+    for output in outputs:
+        metadata = json.loads((output / 'intensity_run.json').read_text())
+        identities.add((metadata['Marker_folder'], metadata['Nuclei_run']))
+    assert identities == {(marker, str(mask_run)) for marker in
+                          ('Foci_1_Channel_2', 'Foci_2_Channel_1') for mask_run in (run, newer)}
+
+
+def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
+        tmp_path, engine, monkeypatch, capsys):
+    roots = []
+    for name in ('A', 'B'):
+        parent = tmp_path / name
+        parent.mkdir()
+        _, raw, run, _, _ = make_experiment(parent)
+        roots.append(raw.parent)
+        if name == 'B':
+            (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_2_Channel_1')
+    manifest = tmp_path / 'both.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(root) for root in roots]}))
+    answers = iter(['all', 'all', '1'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
+    assert app.main(manifest, mode='tiff-stack') == 0
+    journal = json.loads(next(tmp_path.glob('Nuclear_Intensity_Batch_*/batch.json')).read_text())
+    assert len(journal['runs']) == 2
+    assert len(journal['skipped_markers']) == 2
+    assert {(Path(row['source']).parent.parent, row['marker'], row['channel'])
+            for row in journal['runs']} == {
+                (roots[0], 'Foci_1_Channel_2', 2), (roots[1], 'Foci_2_Channel_1', 1)}
+    assert 'Selected marker folder is missing' in capsys.readouterr().out
+
+
+def test_native_marker_channel_outside_source_is_rejected(tmp_path, engine, monkeypatch, capsys):
+    manifest, _, run, _, _ = make_experiment(tmp_path)
+    (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_1_Channel_9')
+    answers = iter(['all', 'all'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
+    assert app.main(manifest, mode='tiff-stack') == 1
+    assert 'Channel 9 is outside 1-2' in capsys.readouterr().out
+    assert not list(run.parent.glob('Nuclear_Intensity_*'))
+
+
+def test_marker_selection_cancel_precedes_imagej_and_outputs(tmp_path, monkeypatch):
+    manifest, _, run, _, _ = make_experiment(tmp_path)
+    answers = iter(['all', 'q'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    initialization = MagicMock()
+    monkeypatch.setattr(app, 'ImageJEngine', initialization)
+    assert app.main(manifest, mode='tiff-stack') == 130
+    initialization.assert_not_called()
+    assert not list(run.parent.glob('Nuclear_Intensity_*'))
+
+
+@pytest.mark.parametrize('removed_option', ['-c', '--channel'])
+def test_cli_rejects_removed_manual_channel_option(monkeypatch, removed_option):
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location('intensity_entry', Path(app.__file__).with_name('__init__.py'))
+    entry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(entry)
+    loader = MagicMock()
+    monkeypatch.setattr(entry, '_load_script', loader)
+    monkeypatch.setattr(sys, 'argv', ['quantify_nuclear_intensity', '-i', 'input_paths.json', removed_option, '2'])
+    with pytest.raises(SystemExit) as error:
+        entry.quantify_nuclear_intensity()
+    assert error.value.code == 2
+    loader.assert_not_called()

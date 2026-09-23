@@ -13,12 +13,14 @@ from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 
 RUN_PATTERN = re.compile(r'^Final_Nuclei_Mask_(\d{8}_\d{6})$')
+MARKER_PATTERN = re.compile(r'^Foci_([1-9][0-9]*)_Channel_([1-9][0-9]*)$')
 MASK_SUFFIX = '_nuclei_projection_StarDist_processed_processed'
 INPUT_MODES = ('nd2', 'tiff-stack', 'tiff-2d')
 IDENTIFIERS = [
     'Dataset', 'Dataset_path', 'Image_name', 'Source_file', 'Mask_file', 'ID_map',
     'Nuclei_run_ID', 'Intensity_run_ID', 'Particle_size_px2', 'StarDist_source',
-    'Marker_channel', 'Input_type', 'Projection', 'Z_planes', 'Width_px', 'Height_px',
+    'Marker_folder', 'Marker_folder_path', 'Marker_channel',
+    'Input_type', 'Projection', 'Z_planes', 'Width_px', 'Height_px',
     'Pixel_type',
 ]
 COUNTS = ['Nuclei_count_total', 'Border_nuclei_count', 'Non_border_nuclei_count',
@@ -64,6 +66,52 @@ def discover(input_path):
     return experiments
 
 
+def discover_markers(experiments):
+    """Use visible nonempty Foci folders as the channel catalog, never as pixel inputs."""
+    catalog = {}
+    for experiment in experiments:
+        root = experiment['root']
+        foci = root / 'foci_assay' / 'Foci'
+        if not foci.is_dir():
+            print(f'No Foci marker catalog: {foci}')
+            continue
+        for folder in sorted(foci.iterdir()):
+            if folder.name.startswith('.') or not folder.is_dir():
+                continue
+            match = MARKER_PATTERN.fullmatch(folder.name)
+            if match is None:
+                print(f'Skipping unrecognized marker folder: {folder}')
+                continue
+            count = len(visible_files(folder, {'.tif', '.tiff'}))
+            if count == 0:
+                print(f'Skipping marker folder without visible TIFF images: {folder}')
+                continue
+            marker = catalog.setdefault(folder.name, {
+                'name': folder.name, 'index': int(match[1]),
+                'channel': int(match[2]), 'folders': {},
+            })
+            marker['folders'][root] = {'path': folder, 'image_count': count}
+    return sorted(catalog.values(), key=lambda marker: (
+        marker['index'], marker['channel'], marker['name']))
+
+
+def select_markers(experiments):
+    catalog = discover_markers(experiments)
+    if not catalog:
+        raise ValueError('No nonempty Foci_<index>_Channel_<channel> folders were found. '
+                         'Prepare marker channels with stage 1 first.')
+    print('\nAvailable markers (Channel_N selects channel N in the original image):')
+    for index, marker in enumerate(catalog, 1):
+        print(f"{index}. {marker['name']} | original channel {marker['channel']}")
+        for experiment in experiments:
+            root = experiment['root']
+            folder = marker['folders'].get(root)
+            availability = f"{folder['image_count']} TIFF images" if folder else 'unavailable or empty'
+            print(f'   {root}: {availability}')
+    return [catalog[index] for index in choose(
+        'Select marker numbers (e.g. 1,3), all, or q: ', len(catalog))]
+
+
 def parse_selection(answer, count):
     answer = answer.strip().lower()
     if answer == 'q':
@@ -92,9 +140,10 @@ def fingerprint(path):
     return {'size_bytes': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
 
 
-def inspect_run(experiment, run, mode, channel, engine, cache):
+def inspect_run(experiment, run, mode, marker, engine, cache):
+    channel = marker['channel']
     record = {'dataset': experiment['root'], 'path': run, 'pairs': [],
-              'metadata': {}, 'errors': [], 'mask_count': 0}
+              'metadata': {}, 'errors': [], 'mask_count': 0, 'marker': marker}
     try:
         masks = visible_files(run, {'.tif', '.tiff'})
         record['mask_count'] = len(masks)
@@ -157,7 +206,7 @@ def select_runs(records):
     eligible = [record for record in records if record['eligible']]
     if not eligible:
         raise ValueError('No completed compatible runs. See validation reasons above.')
-    print('\nChoose mask runs: 1 = latest compatible per experiment; '
+    print('\nChoose mask runs: 1 = latest compatible per experiment and marker; '
           '2 = all compatible; 3 = manual; q = cancel.')
     while True:
         answer = input('Mask-run selection: ').strip().lower()
@@ -166,15 +215,15 @@ def select_runs(records):
         if answer == '1':
             latest = {}
             for record in eligible:
-                root = record['dataset']
-                if root not in latest or record['path'].name > latest[root]['path'].name:
-                    latest[root] = record
+                key = (record['dataset'], record['marker']['name'])
+                if key not in latest or record['path'].name > latest[key]['path'].name:
+                    latest[key] = record
             return list(latest.values())
         if answer == '2':
             return eligible
         if answer == '3':
             for index, record in enumerate(eligible, 1):
-                print(f"{index}. {record['dataset']} / {record['path'].name} "
+                print(f"{index}. {record['dataset']} / {record['marker']['name']} / {record['path'].name} "
                       f"(-p {record['metadata'].get('particle_size_pixels_squared')})")
             return [eligible[index] for index in choose(
                 'Select run numbers (e.g. 1,3), all, or q: ', len(eligible))]
@@ -242,14 +291,19 @@ def summarize(rows):
     return summary
 
 
-def analyze_run(record, output, mode, channel, engine, batch_path):
+def analyze_run(record, output, mode, engine, batch_path):
+    channel = record['marker']['channel']
+    marker_identity = {'Marker_folder': record['marker']['name'],
+                       'Marker_folder_path': str(record['marker']['folder']),
+                       'Marker_channel': channel}
     nuclei, images = [], []
     info = {
-        'Schema_version': 1, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
+        'Schema_version': 2, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
         'Nuclei_run': str(record['path']), 'Intensity_run': str(output),
         'Particle_size_px2': record['metadata']['particle_size_pixels_squared'],
         'StarDist_source': record['metadata'].get('stardist_folder', ''),
-        'Marker_channel': channel, 'Input_type': mode,
+        **marker_identity, 'Input_type': mode,
+        'Channel_selection': 'Channel_N parsed from the selected Foci folder; no manual channel override',
         'Projection': 'Already projected (assumed MAX)' if mode == 'tiff-2d' else 'MAX over all Z planes',
         'ImageJ_version': engine.version, 'BioFormats_version': engine.bioformats_version,
         'Batch_journal': str(batch_path),
@@ -279,13 +333,14 @@ def analyze_run(record, output, mode, channel, engine, batch_path):
                 'Mask_file': str(pair['mask']), 'ID_map': str(pair['ids']),
                 'Nuclei_run_ID': record['path'].name, 'Intensity_run_ID': output.name,
                 'Particle_size_px2': info['Particle_size_px2'], 'StarDist_source': info['StarDist_source'],
-                'Marker_channel': channel, 'Input_type': mode, 'Projection': info['Projection'],
+                **marker_identity, 'Input_type': mode, 'Projection': info['Projection'],
                 **{key: pair['info'][key] for key in ('Width_px', 'Height_px', 'Z_planes', 'Pixel_type')},
             }
             marker = None
             counts = dict.fromkeys(COUNTS)
             image_folder = output / f'image_{index:04d}'
-            print(f"Measuring {pair['source'].name} with {record['path'].name}...")
+            print(f"Measuring {pair['source'].name}, {marker_identity['Marker_folder']}, "
+                  f"with {record['path'].name}...")
             try:
                 if fingerprint(record['path'] / 'nuclei_run.json') != record['metadata_fingerprint']:
                     raise ValueError('Nucleus run metadata changed after selection.')
@@ -335,7 +390,7 @@ def analyze_run(record, output, mode, channel, engine, batch_path):
         handler.close()
 
 
-def main(input_path, channel=None, mode=None):
+def main(input_path, mode=None):
     """Interactive planning precedes output creation; failures return a nonzero status."""
     try:
         experiments = discover(input_path)
@@ -346,6 +401,7 @@ def main(input_path, channel=None, mode=None):
                   f"| final-mask runs: {len(experiment['runs'])}")
         selected = [experiments[index] for index in choose(
             'Select experiment numbers (e.g. 1,3), all, or q: ', len(experiments))]
+        markers = select_markers(selected)
         if mode is None:
             print('Input type: 1 = ND2 Z-stack; 2 = multichannel TIFF Z-stack; '
                   '3 = 2D multichannel TIFF (assumed MAX projection).')
@@ -357,51 +413,55 @@ def main(input_path, channel=None, mode=None):
                     mode = INPUT_MODES[int(answer) - 1]
         if mode not in INPUT_MODES:
             raise ValueError('Invalid input type.')
-        if channel is None:
-            while channel is None:
-                answer = input('Marker channel (starting from 1, q to cancel): ').strip().lower()
-                if answer == 'q':
-                    raise Cancelled()
-                try:
-                    if int(answer) > 0:
-                        channel = int(answer)
-                except ValueError:
-                    pass
-        if channel < 1:
-            raise ValueError('Marker channel must be positive (1-based).')
         print('Initializing ImageJ and validating candidate mask runs...')
         engine = ImageJEngine()
-        records, cache = [], {}
+        records, cache, skipped = [], {}, []
         for experiment in selected:
             if not experiment['runs']:
                 print(f"No final-mask runs: {experiment['root']}")
-            for run in experiment['runs']:
-                record = inspect_run(experiment, run, mode, channel, engine, cache)
-                records.append(record)
-                print(f"{run} | -p {record['metadata'].get('particle_size_pixels_squared', '?')} "
-                      f"| masks: {record['mask_count']} | compatible pairs: {len(record['pairs'])} "
-                      f"| {'READY' if record['eligible'] else 'UNAVAILABLE'}")
-                for error in record['errors']:
-                    print(f'  {error}')
+            for choice in markers:
+                folder = choice['folders'].get(experiment['root'])
+                if folder is None:
+                    reason = 'Selected marker folder is missing or has no visible TIFF images'
+                    skipped.append({'dataset': str(experiment['root']), 'marker': choice['name'],
+                                    'channel': choice['channel'], 'reason': reason})
+                    print(f"Skipping {experiment['root']} / {choice['name']}: {reason}.")
+                    continue
+                marker = {'name': choice['name'], 'channel': choice['channel'], 'folder': folder['path']}
+                for run in experiment['runs']:
+                    record = inspect_run(experiment, run, mode, marker, engine, cache)
+                    records.append(record)
+                    print(f"{run} | {marker['name']} | original channel {marker['channel']} "
+                          f"| -p {record['metadata'].get('particle_size_pixels_squared', '?')} "
+                          f"| masks: {record['mask_count']} | compatible pairs: {len(record['pairs'])} "
+                          f"| {'READY' if record['eligible'] else 'UNAVAILABLE'}")
+                    for error in record['errors']:
+                        print(f'  {error}')
         runs = select_runs(records)
-        print(f"\nSelected {len(runs)} mask runs, {sum(len(r['pairs']) for r in runs)} image/run pairs; "
-              f"marker channel {channel}, input type {mode}. Each run gets separate results.")
+        print(f"\nSelected {len(runs)} experiment/marker/mask-run combinations, "
+              f"{sum(len(r['pairs']) for r in runs)} image measurements; input type {mode}. "
+              'Each combination gets separate results.')
         for record in runs:
-            print(f"  {record['path']}")
+            print(f"  {record['path']} | {record['marker']['name']} "
+                  f"| original channel {record['marker']['channel']}")
         batch = new_output(Path(input_path).expanduser().resolve().parent, 'Nuclear_Intensity_Batch_')
         journal_path = batch / 'batch.json'
         journal = {'status': 'running', 'input_manifest': str(Path(input_path).resolve()),
-                   'channel': channel, 'input_type': mode,
-                   'validation': [{'run': str(r['path']), 'eligible': r['eligible'], 'errors': r['errors']}
+                   'input_type': mode, 'skipped_markers': skipped,
+                   'selected_markers': [{'folder': marker['name'], 'channel': marker['channel']} for marker in markers],
+                   'validation': [{'run': str(r['path']), 'marker': r['marker']['name'],
+                                   'channel': r['marker']['channel'], 'eligible': r['eligible'], 'errors': r['errors']}
                                   for r in records],
-                   'runs': [{'source': str(r['path']), 'status': 'pending', 'output': None} for r in runs]}
+                   'runs': [{'source': str(r['path']), 'marker': r['marker']['name'],
+                             'marker_folder': str(r['marker']['folder']), 'channel': r['marker']['channel'],
+                             'status': 'pending', 'output': None} for r in runs]}
         write_json(journal_path, journal)
         for record, item in zip(runs, journal['runs']):
-            output = new_output(record['path'].parent, 'Nuclear_Intensity_')
+            output = new_output(record['path'].parent, f"Nuclear_Intensity_{record['marker']['name']}_")
             item.update(status='running', output=str(output))
             write_json(journal_path, journal)
             try:
-                item['status'] = analyze_run(record, output, mode, channel, engine, journal_path)
+                item['status'] = analyze_run(record, output, mode, engine, journal_path)
             except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
                 item.update(status='failed', error=str(error))
                 failed_path = output / 'intensity_run.json'

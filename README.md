@@ -35,7 +35,7 @@ The following changes describe the installation, interface, and development infr
 - Log filenames in stages 1-3 use the `.log` extension.
 - Stage 2 can reuse validated StarDist masks when changing the minimum nucleus area and exports pixel-based nuclear morphology for each final-mask run.
 - Native image width and height are preserved throughout processing and numbered QC exports; the former 1024 x 1024 resizing in stage 1 has been removed.
-- `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/run selection and separate results for each mask run.
+- `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/marker/run selection and separate results for each combination.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
 | Stage | Script in `main` | Terminal command in `tech_dev` |
@@ -56,7 +56,7 @@ Transparent: extensive logging, safety prompts before overwriting, and structure
 
 ## Workflow (4 scripts)
 **1) Image Pre-processing & Channel Extraction**
-Interactively select channels (1 nuclei + 1..N foci). For .nd2 .tiff stacks, create Max Intensity Z-projections for nuclei and StdDev Z-projections for foci (XY). Standardize all images (resize to 1024×1024, convert to 8-bit), save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
+Interactively select channels (1 nuclei + 1..N foci). For .nd2 .tiff stacks, create Max Intensity Z-projections for nuclei and StdDev Z-projections for foci (XY). Preserve native XY dimensions and convert prepared channels to 8-bit, save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
 
 **2) Nuclei Segmentation & Mask Generation**
 Perform nuclei segmentation with StarDist (2D_versatile_fluo) after intensity normalization, then refine masks via ImageJ particle analysis and watershed to split touching objects, applying a minimum-size filter to remove debris; results are saved to timestamped nuclei-mask folders with detailed warning/error logs for QA.
@@ -224,17 +224,18 @@ If an image cannot be measured or its QC files cannot be saved, its `Images` row
 Use this branch for a diffuse nuclear marker such as phospho-Smad2. It measures intensity inside each existing final nucleus, without generating foci, rerunning StarDist or adding another segmentation/size filter.
 
 ```bash
-quantify_nuclear_intensity -i input_paths.json -c 2
+quantify_nuclear_intensity -i input_paths.json
 ```
 
-`-c`/`--channel` is the **1-based marker channel in the original multichannel image**, not the nuclei channel or a prepared `Foci` folder number. If omitted, the program asks for it. The command reads originals directly from the experiment folders in `paths_to_files`; it never uses the prepared 8-bit/standard-deviation foci images for intensity measurement.
+Select markers from the existing `foci_assay/Foci/Foci_<index>_Channel_<channel>/` folders. **`Channel_N` always selects channel N in the original multichannel image**; the `Foci` index is only the order assigned during preparation. For example, choosing `Foci_1_Channel_2` measures original channel 2. There is no separate channel prompt or `-c`/`--channel` option; previous commands containing that option must be updated. The command reads originals directly from the experiment folders in `paths_to_files`; it never uses the prepared 8-bit/standard-deviation foci images for intensity measurement.
 
 The terminal prompts proceed as follows:
 
 1. List existing experiment folders, original-image counts and final-mask run counts. Choose one number, several comma-separated numbers (for example `1,3`), or `all`.
-2. Select ND2 Z-stack, multichannel TIFF Z-stack, or 2D multichannel TIFF. For either stack format, the selected marker channel is projected with **ImageJ MAX over all Z planes**. A 2D TIFF is assumed to be an existing MAX projection and is only split by channel. You can supply `--input-type nd2`, `--input-type tiff-stack` or `--input-type tiff-2d` to skip this prompt. The same channel and input mode apply to this batch; run a separate batch for different acquisition layouts.
-3. Inspect the listed `Final_Nuclei_Mask_<timestamp>` runs: full path/timestamp, `-p`, mask count, compatible source/mask pair count and validation errors. Choose the latest **completed compatible** run per selected experiment, all compatible runs, or a manual selection of one/several/all listed compatible runs. A newer incomplete run is never selected automatically. Experiments without compatible runs are reported and have no results.
-4. The program prints the selected runs and starts analysis. Enter `q` at a selection prompt to cancel before results are created.
+2. Review the marker folders and their visible TIFF counts in each selected experiment. Choose one marker number, several comma-separated numbers, or `all`. Hidden, empty and nonstandard folders are excluded. A selected marker unavailable in an experiment is reported and recorded in the batch journal; the program does not substitute another marker.
+3. Select ND2 Z-stack, multichannel TIFF Z-stack, or 2D multichannel TIFF. For either stack format, the selected marker channel is projected with **ImageJ MAX over all Z planes**. A 2D TIFF is assumed to be an existing MAX projection and is only split by channel. You can supply `--input-type nd2`, `--input-type tiff-stack` or `--input-type tiff-2d` to skip this prompt. The same input mode applies to this batch. The channel is derived separately for each selected marker. Keep the channel-to-marker mapping consistent across images in an experiment. Across experiments, marker folders are matched by their full names; biological marker names are not inferred from channel numbers.
+4. Inspect the listed `Final_Nuclei_Mask_<timestamp>` runs for each selected marker: full path/timestamp, `-p`, mask count, compatible source/mask pair count and validation errors. Choose the latest **completed compatible** run per selected experiment and marker, all compatible runs, or a manual selection of one/several/all listed compatible runs. A newer incomplete run is never selected automatically. Experiments without compatible runs are reported and have no results.
+5. The program prints the selected experiment/marker/mask-run combinations and starts analysis. Enter `q` at a selection prompt to cancel before results are created.
 
 A usable mask run needs completed `nuclei_run.json` and morphology status, all recorded final masks, and matching `Morphology_QC/*_ids.tif` maps. Source pairing uses the exact original filename stem after removing the known final-mask suffix; missing or ambiguous matches block that run. Hidden files and directories, including `.DS_Store` and `._*`, are excluded from discovery and counts. Old runs without ID maps must pass through stage 2 again; validated StarDist masks can be reused.
 
@@ -242,7 +243,7 @@ A usable mask run needs completed `nuclei_run.json` and morphology status, all r
 
 Bio-Formats reads raw channel planes; ImageJ performs MAX projection, ROI construction and measurements. Supported numerical inputs are 8-/16-bit signed or unsigned grayscale channels and 32-bit floating-point channels. The saved marker projection is **unnormalized float32**; integer values from supported input types are preserved exactly. There is no intensity threshold, background subtraction, brightness normalization or texture measurement. Zero-valued pixels inside each nucleus ROI are included. RGB images, multiple series/fields within one file, multiple timepoints, nonfinite channel values, or a Z-stack selected as 2D are rejected with an explanation. Export each field/timepoint as a separate multichannel file first. Input metadata must identify channel and Z axes correctly; the program does not infer them from TIFF page count.
 
-Each selected experiment/mask-run pair creates its own `foci_assay/Nuclear_Intensity_<timestamp>/`, preserving earlier runs. Separate mask runs of the same image are never pooled. The folder contains:
+Each selected experiment/marker/mask-run combination creates its own `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/`, preserving earlier runs. For example, selecting `Foci_1_Channel_2` creates `Nuclear_Intensity_Foci_1_Channel_2_20260923_210000/`. Different markers and different mask runs of the same image are never pooled. The prepared TIFFs in `Foci` provide the marker catalog and discovery counts only; their pixels are never read for intensity analysis. The folder contains:
 
 - `Nuclear_Intensity.xlsx`, with **Nuclei**, **Images** and **Run_Info** sheets, plus UTF-8 CSV copies `Nuclear_Intensity.csv`, `Nuclear_Intensity_Images.csv` and `Nuclear_Intensity_Run_Info.csv`. CSV fields containing commas are quoted.
 - `image_0001/`, `image_0002/`, etc., linked to original filenames in the tables. Each contains `marker.tif`, native-size full-frame binary `nucleus_<ID>_mask.tif` files, corresponding ImageJ `nucleus_<ID>.roi` files, and `numbered_nuclei.png` with eligible nucleus outlines/IDs. Display contrast is adjusted only for the PNG preview; saved marker values remain unchanged.
@@ -259,7 +260,7 @@ The **Nuclei** sheet contains one row per non-border nucleus and these measureme
 | `Marker_Min`, `Marker_Max` | Minimum and maximum ROI pixel intensities |
 | `Marker_RawIntDen` | Sum of raw marker pixel values in the ROI |
 
-`Nucleus_ID` is copied from the existing morphology ID map, including gaps after border exclusion. It is local to an image and nucleus-mask run. All table rows include source/mask/ID-map paths, dataset, channel, input mode/projection, Z-plane count, XY dimensions, source pixel type, run IDs, `-p` and StarDist source. `Condition` and `Biological_replicate` are omitted.
+`Nucleus_ID` is copied from the existing morphology ID map, including gaps after border exclusion. It is local to an image and nucleus-mask run. All table rows include `Marker_folder`, `Marker_folder_path`, `Marker_channel`, source/mask/ID-map paths, dataset, input mode/projection, Z-plane count, XY dimensions, source pixel type, run IDs, `-p` and StarDist source. `Condition` and `Biological_replicate` are omitted.
 
 The **Images** sheet reports `Nuclei_count_total`, `Border_nuclei_count`, `Non_border_nuclei_count` (total minus border), `Nuclei_measured_count`, `Failed_nuclei_count`, status and error. Any nucleus touching an image edge is excluded from all per-nucleus intensity tables and summary metrics, and receives no individual mask/ROI in this branch. Original final masks and morphology QC remain unchanged. Each measurement has per-image `Mean`, `Median` and `IQR` summary columns (for example `Marker_Mean_Mean`), with equal weight per eligible nucleus. Empty populations have zero counts and blank statistics. A failed image exports no nucleus rows or statistics: counts remain blank if its ID map could not be validated; otherwise all its eligible nuclei are counted as failed/unaccepted. Partial image files are marked `FAILED.json` and must not be used as completed measurements.
 
@@ -305,7 +306,6 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 | `generate_nuclei_mask` | `-p`, `--particle_size` | Minimum nucleus area in processed-image pixels | `2500` |
 | `generate_foci_mask` | `-f`, `--foci_threshold` | Lower foci intensity threshold on processed 8-bit images | `150` |
 | `quantify_foci` | `-j`, `--jobs` | Number of worker processes | `4` |
-| `quantify_nuclear_intensity` | `-c`, `--channel` | Original marker channel, starting at 1 | Interactive |
 | `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack`, or `tiff-2d` | Interactive |
 | All five commands | `-h`, `--help` | Show command-line options | Not applicable |
 
@@ -324,14 +324,14 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/Final_Nuclei_Mask_<timestamp>/` | Processed nuclei masks, morphology workbook/CSV tables and run metadata |
 | `foci_assay/Final_Nuclei_Mask_<timestamp>/Morphology_QC/` | Per-image nucleus ID label maps and numbered PNG previews |
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
-| `foci_assay/Nuclear_Intensity_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
+| `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.
 
 Stage-specific logs include `1_log.log`, `2_val_log.log`, `2_log.log`, `nuclei_log.log`, `3_val_log.log`, `foci_log.log`, and `4_log.log`. Validation logs are written in the input folder; processing logs are saved with their corresponding stage outputs. Logs record warnings and errors, and the final stage also logs progress.
 
-Nuclei-mask, foci-mask, and final-analysis directories include timestamps. The prepared-channel folders and metadata file use fixed paths, and some log files are overwritten on rerun. The existing foci quantification stage selects the latest matching mask folders; nuclear intensity instead uses the explicit experiment/run selection described above. Preserve the outputs needed for a previous analysis before repeating preparation or switching between analyses in the same input folder.
+Nuclei-mask, foci-mask, and final-analysis directories include timestamps. The prepared-channel folders and metadata file use fixed paths, and some log files are overwritten on rerun. The existing foci quantification stage selects the latest matching mask folders; nuclear intensity instead uses the explicit experiment/marker/run selection described above. Preserve the outputs needed for a previous analysis before repeating preparation or switching between analyses in the same input folder.
 
 
 # Dependencies and Tools Used

@@ -50,12 +50,10 @@ def quantify_foci():
 
 def quantify_nuclear_intensity():
     parser = argparse.ArgumentParser(
-        description="Measure original marker intensity in existing nucleus IDs.")
+        description="Select Foci marker folders and measure original intensities in existing nucleus IDs.")
     parser.add_argument('-i', '--input', required=True)
-    parser.add_argument('-c', '--channel', type=int,
-                        help="Marker channel (1-based); prompted when omitted")
     parser.add_argument('--input-type', choices=('nd2', 'tiff-stack', 'tiff-2d'),
                         help="Input format; prompted when omitted")
     args = parser.parse_args()
     return _load_script("nuclear_intensity").main(
-        args.input, args.channel, args.input_type)
+        args.input, mode=args.input_type)
