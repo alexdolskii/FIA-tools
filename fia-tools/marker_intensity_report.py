@@ -14,7 +14,7 @@ import matplotlib
 import numpy as np
 import openpyxl
 import scipy
-from marker_report_plots import PLOT_COLUMNS, render_plots
+from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, render_plots
 from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image
@@ -149,8 +149,11 @@ def report_tables(data, output, manifest):
     notes = [
         ('Population', 'Non-border nuclei only. No extra morphology or intensity filtering.'),
         ('Count plot', 'One point = non-border nuclei in one image, including zero-count images.'),
-        ('Intensity plots', 'One point = one nucleus; original Marker_RawIntDen; no averaging or normalization.'),
-        ('Morphology plots', 'Add a boxplot for each morphology metric with at least one tested control comparison having P_Holm < 0.05. Show all conditions and comparisons for that metric; one point = one non-border nucleus.'),
+        ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
+        ('Morphology plots', 'Add a violin with an inner boxplot for each morphology metric with at least one tested control comparison having P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots.'),
+        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. Overview PNGs contain up to four panels; separate panel PNGs are also embedded in the workbook. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
+        ('Plot sample sizes', 'Labels give usable nuclei or images and contributing wells for each metric. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains every observation once per metric, irrespective of panel exports.'),
+        ('Violin display', 'Equal maximum widths; Scott bandwidth; density limited to observed values. Fewer than five nuclei: box/range without density. Constant or single value: horizontal line. Empty groups retain n=0. Range lines retain extremes without outlier dots.'),
         ('Statistics unit', unit),
         ('Count test exception', 'Requested nucleus mode uses images for count tests; well mode uses wells.'),
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
@@ -209,6 +212,7 @@ def report_tables(data, output, manifest):
         'Well_Values': as_table(data['well_values']),
         'Plate_Map': as_table(data['design']),
         'Plot_Data': as_table(data['plot_data'], PLOT_COLUMNS),
+        'Plot_Labels': as_table(data['plot_labels'], LABEL_COLUMNS),
         'Plot_Info': as_table(data['plots']),
         'Run_Info': as_table([{'Parameter': key, 'Value': value} for key, value in metadata.items()]),
         'Source_Files': as_table(provenance),

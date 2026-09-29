@@ -247,8 +247,10 @@ def read_template(path, files, sheet_name=None, statistics=False):
                     continue
                 if cell.data_type in ('f', 'e') or not isinstance(cell.value, str):
                     raise ValidationError(f'{cell.coordinate}: group names must be literal text')
+                direct_fill = cell.fill.patternType == 'solid' and cell.fill.fgColor.type in ('rgb', 'theme', 'indexed')
                 design.append({'Well': f'{letter}{column:02d}', 'Group': cell.value, 'Excel_cell': cell.coordinate,
-                               'Is_control': bool(cell.font.bold), 'Color': _color(cell) if statistics else ''})
+                               'Is_control': bool(cell.font.bold),
+                               'Color': _color(cell) if statistics or direct_fill else ''})
         if not design:
             raise ValidationError('No annotated wells')
         return sheet.title, design

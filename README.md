@@ -37,7 +37,7 @@ The following changes describe the installation, interface, and development infr
 - Native image width and height are preserved throughout processing and numbered QC exports; the former 1024 x 1024 resizing in stage 1 has been removed.
 - `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/marker/run selection and separate results for each combination.
 - `fia_collect_marker_intensity_results` collects nuclear morphology and marker-intensity spreadsheets into a separate folder beside the original images, with a combined per-nucleus table and per-image summaries.
-- `fia_marker_intensity_report` compares collected morphology and marker intensity using a 96-well plate map, with individual-nucleus intensity boxplots and optional nucleus- or well-based statistics.
+- `fia_marker_intensity_report` compares collected morphology and marker intensity using a 96-well plate map, with nucleus-level violin plots, panels by plate-map color block and optional nucleus- or well-based statistics.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
 | Stage | Script in `main` | Terminal command in `tech_dev` |
@@ -344,13 +344,15 @@ fia_marker_intensity_report -i input_paths.json \
 
 #### Plots and statistical units
 
-All plots are boxplots with every observation shown as a point, without subsampling. Boxes show the median and IQR; whiskers extend to the most extreme observations within 1.5 IQR. Outliers remain visible as individual points. A single observation is shown as a point; an empty group keeps its labeled position.
+Intensity and morphology use **violin plots with a small inner boxplot, without individual nucleus dots**. Every usable non-border nucleus contributes to the distribution, without subsampling. Violin contours use Scott smoothing, have equal maximum widths and stop at the observed minimum and maximum. Boxes show the median and IQR; whiskers extend to the most extreme observations within 1.5 IQR. A thin range line retains extremes without outlier dots. With fewer than five nuclei, only the box/range is drawn; a constant or single value is shown as a horizontal line. An empty group keeps its labeled position with `n=0`. Nuclei-count graphs remain boxplots with every image shown as a point.
+
+All Y axes remain **linear**, with the same limits across panels of a given metric. Panels follow the existing plate-map color blocks. Shared whole-word condition prefixes move into figure/panel titles, leaving shorter wrapped condition labels; full names remain unchanged in all data and statistics tables. `Plot_Labels` records the exact display mapping. Labels show usable nuclei or images and contributing wells separately. The report exports an overview with up to four panels per PNG (additional pages if needed) and, for multiple blocks, a separate PNG per panel. Both views are embedded in Excel so individual panels remain readable. Descriptive reports also use consistent direct fills when available; otherwise they retain an unsplit view. Changing the layout does not split or recalculate statistical families.
 
 | Measurement | Plot observations | `--stats-unit nucleus` | `--stats-unit well` |
 | --- | --- | --- | --- |
 | Non-border nuclei count | One point = non-border nuclei in one image | Images: the explicit exception to nucleus-level tests | One mean count per image per well |
-| `Marker_RawIntDen` per selected marker | One point = one non-border nucleus, in both statistics modes | Individual nuclei | One mean per well |
-| Morphology metrics | One point = one non-border nucleus; add a plot only if at least one control comparison has `P_Holm < 0.05` | Individual nuclei | One mean per well |
+| `Marker_RawIntDen` per selected marker | Violin from all usable non-border nuclei, in both statistics modes; no individual dots | Individual nuclei | One mean per well |
+| Morphology metrics | Violin from all usable non-border nuclei; add a plot only if at least one control comparison has `P_Holm < 0.05` | Individual nuclei | One mean per well |
 | Other intensity metrics | No additional plots | Individual nuclei | One mean per well |
 
 For morphology and intensity in well mode, calculate the mean across usable nuclei **within each image**, then the mean of those image means **within each well**. Images receive equal weight within a well; wells receive equal weight in the test. These well means do not replace individual nuclei on plots. A zero-nucleus image contributes zero to count analysis and no value to morphology/intensity means. Missing marker measurements stay blank, not zero.
@@ -367,7 +369,7 @@ Tests are **two-sided Welch t-tests** against the control. **Holm correction** c
 
 Tests need at least two usable observations per condition in the selected unit. **One well per condition gives no well-based p-values**, while retaining plots and descriptive results. Both groups constant also gives `NOT_TESTED`. Nucleus/image tests are exploratory: observations within a well are dependent, and Welch/Holm do not model that clustering. Wells within a plate are not automatically independent biological replicates. Separate experiments and mask runs are never pooled.
 
-After statistics, the report automatically adds a boxplot for each morphology parameter with at least one successful treatment-versus-control test having **Holm-adjusted p < 0.05**. Raw p-values or differences between means alone do not trigger a plot. The selected `nucleus` or `well` mode determines significance; the resulting graph always shows individual non-border nuclei. Each qualifying parameter receives one plot showing all conditions and all its planned comparisons, including nonsignificant and unavailable comparisons. Count and integrated-density plots remain unconditional. Without `--stats-unit`, or if no morphology comparison qualifies, no additional morphology plots are created. All 12 morphology parameters remain in the summary and comparison tables regardless of significance. The original statistical tests and Holm families remain unchanged.
+After statistics, the report automatically adds a violin plot for each morphology parameter with at least one successful treatment-versus-control test having **Holm-adjusted p < 0.05**. Raw p-values or differences between means alone do not trigger a plot. The selected `nucleus` or `well` mode determines significance; the resulting graph always represents the distribution of individual non-border nuclei. Each qualifying parameter includes all conditions and all its planned comparisons across its panels, including nonsignificant and unavailable comparisons. Count and integrated-density plots remain unconditional. Without `--stats-unit`, or if no morphology comparison qualifies, no additional morphology plots are created. All 12 morphology parameters remain in the summary and comparison tables regardless of significance. The original statistical tests and Holm families remain unchanged.
 
 #### Report outputs and validation
 
@@ -375,12 +377,14 @@ Each report is saved beside the original images in a new `FIA_Marker_Intensity_R
 
 | Output | Contents |
 | --- | --- |
-| `FIA_Marker_Intensity_Report.xlsx` | Overview, Morphology_By_Condition, Morphology_Comparisons, Statistics, Summary, Nuclei, Images, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Info, Run_Info, Source_Files and embedded Plots |
+| `FIA_Marker_Intensity_Report.xlsx` | Overview, Morphology_By_Condition, Morphology_Comparisons, Statistics, Summary, Nuclei, Images, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Labels, Plot_Info, Run_Info, Source_Files and embedded Plots |
 | `Nuclei_Morphology_Summary.xlsx` | Separate morphology workbook: Morphology_By_Condition, Morphology_Comparisons and Run_Info; no plots |
 | Corresponding `.csv` tables | Data, aggregation values, statistics and provenance |
-| `Plots/` | Count and integrated-density boxplots plus `Morphology_<metric>.png` for each morphology metric with a significant Holm-adjusted comparison; also embedded in the main report |
+| `Plots/` | Count boxplots, integrated-density violins and significant `Morphology_<metric>.png` violins; overview PNGs plus `__Block_01.png`, etc. for separate panels; also embedded in the main report |
 | `Inputs/` | Byte-preserved input spreadsheets, plate map and input manifest |
 | `report.log`, `report_status.json` | Progress, errors, selected settings and completion status |
+
+`Plot_Data` retains each observation once per metric, irrespective of the number of exported views. In `Plot_Info`, the existing `Points` field counts observations represented in that view; `Rendered_points` counts individual observation dots (zero for nucleus-level plots). `View` and `Panels` identify overviews and individual panels.
 
 `Morphology_By_Condition` has one row for each of the 12 morphology metrics, including circularity, area, aspect ratio, solidity, roundness and eccentricity. Conditions appear side by side, with numeric `N`, `Mean`, sample `SD`, `Median` and `IQR` columns. In `nucleus` mode, these describe individual non-border nuclei. In `well` mode, they describe the same equal-image-weight well means used in the tests. `N` counts usable observations for that metric in the stated `Observation_unit`; sample SD is blank when fewer than two observations are available. Empty conditions retain `N=0` and blank descriptive statistics. Without `--stats-unit`, the table describes nuclei and the comparison sheet contains headers only.
 
@@ -453,7 +457,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
 | `FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
-| `FIA_Marker_Intensity_Report_<timestamp>/` | Separate marker-intensity/morphology report with statistics, boxplots, input snapshots and completion status |
+| `FIA_Marker_Intensity_Report_<timestamp>/` | Separate marker-intensity/morphology report with statistics, panelled violin/count plots, input snapshots and completion status |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.
