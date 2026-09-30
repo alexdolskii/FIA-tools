@@ -147,9 +147,9 @@ def morphology_tables(data):
 def report_tables(data, output, manifest):
     unit = data['stats_unit'] or 'disabled'
     notes = [
-        ('Population', 'Non-border nuclei from images with Non_border_nuclei_count > 0. No intensity threshold or additional nucleus-level filtering.'),
-        ('Image exclusion', inputs.IMAGE_EXCLUSION_RULE + '. Applied to all metrics before aggregation and tests. Excluded_Images lists files and reasons; Image_Filter_Summary counts original, excluded and retained images per condition. Inputs remain unchanged.'),
-        ('Count plot', 'One point = non-border nuclei in one retained image; zero-count images are excluded.'),
+        ('Population', 'Non-border nuclei from images retained by the optional --min-nuclei filter. No intensity threshold or additional nucleus-level filtering.'),
+        ('Image exclusion', data['image_exclusion_rule'] + ' Applied to all metrics before aggregation and tests. Excluded_Images lists files, counts, threshold and reasons; Image_Filter_Summary counts original, excluded and retained images per condition. Inputs remain unchanged.'),
+        ('Count plot', 'One point = non-border nuclei in one retained image. With no --min-nuclei threshold (or 0), zero-count images are included.'),
         ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
         ('Morphology plots', 'Add a violin with an inner boxplot for each morphology metric with at least one tested control comparison having P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots.'),
         ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview PNG contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Separate panel PNGs are also embedded in the workbook. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
@@ -158,7 +158,7 @@ def report_tables(data, output, manifest):
         ('Statistics unit', unit),
         ('Count test exception', 'Requested nucleus mode uses images for count tests; well mode uses wells.'),
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
-        ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no metric. Wells or conditions with no retained images keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
+        ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no metric. Retained zero-nucleus images contribute zero to counts and no value to morphology/intensity means. Wells or conditions with no usable observations keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
         ('Tests', 'Two-sided Welch comparisons of each treatment to the bold control in its plate-map color block.'),
         ('Multiplicity', 'Holm family includes count, 12 morphology metrics and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
         ('Confidence intervals', '95% Welch intervals for treatment minus control; nominal, not multiplicity-adjusted.'),
@@ -186,20 +186,21 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 2, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 3, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
         'Requested_statistics_unit': unit, 'Non_border_nuclei': len(data['nuclei']),
         'Morphology_summary_observation_unit': 'well' if data['stats_unit'] == 'well' else 'nucleus',
-        'Morphology_summary_population': 'Non-border nuclei from images with Non_border_nuclei_count > 0.',
+        'Morphology_summary_population': 'Non-border nuclei from images retained by the optional --min-nuclei filter.',
         'Morphology_summary_N': 'Usable observations for each metric, in Morphology_summary_observation_unit.',
         'Morphology_summary_SD': 'Sample standard deviation (ddof=1); blank for fewer than two observations.',
         'Morphology_summary_well_values': 'Mean of usable per-image nucleus means within each well; equal image weight.',
         'Morphology_summary_tests': 'Existing Welch/Holm results from Statistics, including its full planned family across count, morphology and selected markers. No tests when Requested_statistics_unit is disabled.',
         'Morphology_plot_rule': 'At least one TESTED control comparison with P_Holm < 0.05 in the selected statistics unit; no morphology plots when statistics are disabled or no comparisons qualify.',
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
-        'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': inputs.IMAGE_EXCLUSION_RULE,
+        'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
+        'Min_nuclei': data['min_nuclei'],
         'Python': sys.version.split()[0],
         'NumPy': np.__version__, 'SciPy': scipy.__version__, 'Matplotlib': matplotlib.__version__,
         'openpyxl': openpyxl.__version__,
@@ -274,7 +275,8 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
     temporary.replace(output / filename)
 
 
-def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None):
+def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
+                  min_nuclei=0):
     output = create_output(root)
     logger = logging.getLogger(f'fia_marker_report.{output.name}')
     logger.setLevel(logging.INFO)
@@ -300,9 +302,9 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         if manifest_path:
             collect.snapshot(manifest_path, data['files'])
         stage = 'image exclusion'
-        inputs.exclude_empty_images(data)
+        inputs.filter_images(data, min_nuclei)
         logger.info('Image filter: %s; original=%s, excluded=%s, retained=%s',
-                    inputs.IMAGE_EXCLUSION_RULE, data['images_before_filter'],
+                    data['image_exclusion_rule'], data['images_before_filter'],
                     len(data['excluded_images']), len(data['images']))
         stage = 'aggregation and statistics'
         inputs.aggregate(data)
@@ -332,7 +334,8 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
                      Statistics_unit=stats_unit or 'disabled', Markers=selected,
                      Non_border_nuclei=len(data['nuclei']), Images=len(data['images']),
                      Images_before_filter=data['images_before_filter'],
-                     Images_excluded=len(data['excluded_images']), Image_exclusion_rule=inputs.IMAGE_EXCLUSION_RULE,
+                     Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
+                     Min_nuclei=data['min_nuclei'],
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
         print(f'SUCCESS: {output}')
@@ -356,12 +359,16 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description='Report collected nuclear morphology and marker intensity; no image processing.')
     parser.add_argument('-i', '--input', required=True, help='JSON with paths_to_files experiment folders')
     parser.add_argument('--stats-unit', choices=('nucleus', 'well'), help='Omit for descriptive results without tests')
+    parser.add_argument('--min-nuclei', type=int, default=0,
+                        help='Minimum non-border nuclei per image (inclusive); omit or use 0 to disable filtering')
     parser.add_argument('--template', help='96-well plate-map XLSX; otherwise discover it inside each collection folder')
     parser.add_argument('--sheet', help='Plate-map worksheet name; default: first sheet')
     parser.add_argument('--all-experiments', action='store_true', help='Use all valid manifest folders without the experiment prompt')
     parser.add_argument('--collections', choices=('ask', 'latest', 'all'), default='ask', help='Default: interactive selection')
     parser.add_argument('--markers', help='Comma-separated marker folders, all, or none; default: interactive selection per collection')
     args = parser.parse_args(argv)
+    if args.min_nuclei < 0:
+        parser.error('--min-nuclei must be a nonnegative integer')
     try:
         roots = collect.discover_sources(args.input)
         if not roots:
@@ -376,7 +383,7 @@ def main(argv=None):
         for collection in selected:
             try:
                 success, _ = create_report(collection, collection.parent, args.template, args.markers,
-                                           args.stats_unit, args.sheet, args.input)
+                                           args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei)
                 failures += not success
             except OSError as error:
                 print(f'Cannot write report for {collection}: {error}')

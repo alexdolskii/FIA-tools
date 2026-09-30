@@ -291,7 +291,7 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     assert ok
     plate(path / 'arbitrary layout.xlsx')
     before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
-    ok, output = report.create_report(path, path.parent, markers='all', stats_unit=unit)
+    ok, output = report.create_report(path, path.parent, markers='all', stats_unit=unit, min_nuclei=1)
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Nuclei') == []
     summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
@@ -309,7 +309,8 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     assert excluded[0]['Nuclei_count_total'] == excluded[0]['Border_nuclei_count'] == border_count
     assert excluded[0]['Non_border_nuclei_count'] == 0
     assert excluded[0]['Well'] == 'A02' and excluded[0]['Group'] == 'Control'
-    assert excluded[0]['Reason'] == 'No usable non-border nuclei'
+    assert excluded[0]['Min_nuclei'] == 1
+    assert excluded[0]['Reason'] == 'Non-border nuclei count 0 is below minimum 1'
     assert (output / 'Excluded_Images.csv').is_file()
     counts = sheet_rows(output / report.WORKBOOK, 'Image_Filter_Summary')
     assert counts == [
@@ -340,7 +341,7 @@ def test_filter_precedes_all_aggregation_and_preserves_real_zero_intensity(unit)
                                Mask_name='mask_6', Image_name='field6_WellA06.nd2'))
     data['stats_unit'] = unit
     original = deepcopy(data)
-    data_tools.exclude_empty_images(data)
+    data_tools.filter_images(data, min_nuclei=1)
     data_tools.aggregate(data)
     calculate_statistics(data)
     assert len(data['excluded_images']) == 3 and len(data['images']) == 4
@@ -385,6 +386,64 @@ def test_changed_input_cannot_publish_success(tmp_path, monkeypatch):
     assert (output / 'Report_Diagnostics.xlsx').is_file()
 
 
+@pytest.mark.parametrize('options', [{}, {'min_nuclei': 0}])
+def test_default_and_zero_threshold_keep_empty_images(tmp_path, options):
+    path = collection(tmp_path, empty=True)
+    ok, output = report.create_report(path, path.parent, markers='all', stats_unit='well', **options)
+    assert ok
+    assert sheet_rows(output / report.WORKBOOK, 'Excluded_Images') == []
+    images = sheet_rows(output / report.WORKBOOK, 'Images')
+    assert len(images) == 1 and images[0][data_tools.COUNT] == 0
+    points = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
+    assert len(points) == 1 and points[0]['Value'] == 0 and points[0]['Observation'] == 'image'
+    wells = sheet_rows(output / report.WORKBOOK, 'Well_Values')
+    assert next(r for r in wells if r['Well'] == 'A02' and r['Metric'] == data_tools.COUNT)['Value'] == 0
+    assert all(r['Value'] is None for r in wells if r['Metric'] != data_tools.COUNT)
+    status = json.loads((output / 'report_status.json').read_text())
+    assert status['Min_nuclei'] == status['Images_excluded'] == 0
+    assert 'disabled' in status['Image_exclusion_rule']
+    assert all('filtering disabled' in r['Caption'] for r in sheet_rows(output / report.WORKBOOK, 'Plot_Info'))
+
+
+@pytest.mark.parametrize('unit', ['nucleus', 'well', None])
+def test_threshold_boundary_removes_nuclei_from_all_markers_and_morphology(unit):
+    data = annotated([('A02', [5]), ('A03', [0, 2]), ('A04', [6]), ('A05', [4, 5, 8])])
+    second = 'Foci_2_Channel_3'
+    data['markers'].append(second)
+    for row in data['images'] + data['nuclei']:
+        for key, value in list(row.items()):
+            if key.startswith(MARKER + '_'):
+                row[second + key[len(MARKER):]] = value * 3
+    data['stats_unit'] = unit
+    data_tools.filter_images(data, min_nuclei=2)
+    data_tools.aggregate(data)
+    calculate_statistics(data)
+    assert [r[data_tools.COUNT] for r in data['images']] == [2, 3]
+    assert len(data['nuclei']) == 5
+    assert all(row['Mask_name'] in {'mask_1', 'mask_3'} for row in data['nuclei'] + data['image_values'] + plot_rows(data))
+    assert all(r['Min_nuclei'] == 2 and r[data_tools.COUNT] == 1 for r in data['excluded_images'])
+    for metric in ('Area_px2', RAW, second + '_Marker_RawIntDen'):
+        summary = next(r for r in data['summary'] if r['Metric'] == metric and r['Group'] == 'Control')
+        assert summary['N'] == 2
+        assert summary['Mean'] == (3 if metric.startswith(second) else 1)
+    assert data['nuclei'][0][RAW] == data['nuclei'][0][second + '_Marker_RawIntDen'] == 0
+    if unit is not None:
+        assert all(row['Family_size_planned'] == 25 for row in data['statistics'])
+
+
+@pytest.mark.parametrize('value', [-1, 1.5, True, '20', None])
+def test_threshold_rejects_invalid_programmatic_values(value):
+    with pytest.raises(data_tools.ValidationError, match='nonnegative integer'):
+        data_tools.filter_images(annotated(), value)
+
+
+@pytest.mark.parametrize('argument', ['-1', '1.5', 'bad'])
+def test_cli_rejects_invalid_min_nuclei_before_accessing_input(argument):
+    with pytest.raises(SystemExit) as error:
+        report.main(['-i', 'missing.json', '--min-nuclei', argument])
+    assert error.value.code == 2
+
+
 def test_formula_like_group_is_literal_in_workbook(tmp_path):
     path = collection(tmp_path)
     template = path / 'arbitrary layout.xlsx'
@@ -411,10 +470,14 @@ def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
     manifest.write_text(json.dumps({'paths_to_files': [str(path.parent)]}))
     script = Path(report.__file__).resolve()
     result = subprocess.run([sys.executable, str(script), '-i', str(manifest), '--all-experiments',
-                             '--collections', 'latest', '--markers', MARKER, '--stats-unit', 'well'],
+                             '--collections', 'latest', '--markers', MARKER, '--stats-unit', 'well',
+                             '--min-nuclei', '3'],
                             text=True, capture_output=True, timeout=45, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'SUCCESS:' in result.stdout
+    status_path = next(path.parent.glob('FIA_Marker_Intensity_Report_*/report_status.json'))
+    status = json.loads(status_path.read_text())
+    assert status['Min_nuclei'] == 3 and status['Images_excluded'] == 1 and status['Non_border_nuclei'] == 0
     check = subprocess.run([sys.executable, '-c',
                             ('import sys, marker_intensity_report; '
                              'assert not {"imagej", "scyjava", "stardist", "tensorflow"} & set(sys.modules)')],

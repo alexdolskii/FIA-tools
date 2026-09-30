@@ -237,7 +237,8 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
         book.close()
         assert json.loads((output / 'intensity_run.json').read_text())['Status'] == 'complete'
     assert all(p.read_bytes() == content for p, content in before.items())
-    assert len(list(tmp_path.glob('Nuclear_Intensity_Batch_*'))) == 2
+    assert not list(tmp_path.glob('Nuclear_Intensity_Batch_*'))
+    assert all((output / 'batch.json').is_file() for output in outputs)
 
 
 def test_empty_population_has_blank_statistics_and_failure_is_not_zero(tmp_path):
@@ -453,7 +454,7 @@ def test_native_marker_selection_reads_matching_original_channels(
         for row in rows:
             values = saved[labels == int(row['Nucleus_ID'])]
             assert float(row['Marker_Mean']) == pytest.approx(values.mean())
-    journal = json.loads(next(tmp_path.glob('Nuclear_Intensity_Batch_*/batch.json')).read_text())
+    journal = json.loads((outputs[0] / 'batch.json').read_text())
     assert {row['marker']: row['channel'] for row in journal['runs']} == expected
 
 
@@ -495,7 +496,7 @@ def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 0
-    journal = json.loads(next(tmp_path.glob('Nuclear_Intensity_Batch_*/batch.json')).read_text())
+    journal = json.loads(next((roots[0] / 'foci_assay').glob('Nuclear_Intensity_*/batch.json')).read_text())
     assert len(journal['runs']) == 2
     assert len(journal['skipped_markers']) == 2
     assert {(Path(row['source']).parent.parent, row['marker'], row['channel'])

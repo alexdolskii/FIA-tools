@@ -247,6 +247,45 @@ def write_json(path, content):
     temporary.replace(path)
 
 
+def save_batch_journal(journal):
+    """Checkpoint the full batch in every created result, with a local fallback for I/O failures."""
+    paths = [Path(item['output']) / 'batch.json' for item in journal['runs'] if item['output']]
+    errors = []
+    for path in paths:
+        try:
+            write_json(path, journal)
+        except OSError as error:
+            errors.append({'path': str(path), 'error': str(error)})
+    if errors or not paths or journal.get('fallback_journal'):
+        try:
+            if not journal.get('fallback_journal'):
+                logs = Path.home() / '.fia-tools' / 'logs'
+                logs.mkdir(parents=True, exist_ok=True)
+                folder = new_output(logs, 'Nuclear_Intensity_Batch_')
+                fallback = folder / 'batch.json'
+                write_json(fallback, {**journal, 'fallback_journal': str(fallback), 'journal_copy_errors': errors})
+                journal['fallback_journal'] = str(fallback)
+                print(f'Fallback batch journal: {fallback}')
+            else:
+                write_json(Path(journal['fallback_journal']), {**journal, 'journal_copy_errors': errors})
+        except OSError as error:
+            print(f'Could not preserve the fallback batch journal: {error}')
+            return False
+    for error in errors:
+        print(f"Could not update batch journal {error['path']}: {error['error']}")
+    return bool(paths) and not errors
+
+
+def finish_batch_journal(journal, status, error=None):
+    journal.update(status=status, finished_utc=datetime.now(timezone.utc).isoformat())
+    if error is not None:
+        journal['error'] = str(error)
+    saved = save_batch_journal(journal)
+    if saved:
+        print('Batch journal saved as batch.json in each intensity result folder.')
+    return saved
+
+
 def save_tables(output, nuclei, images, info):
     """Save quoted UTF-8 CSV and literal-string Excel cells, including empty tables."""
     workbook = Workbook(write_only=True)
@@ -392,6 +431,7 @@ def analyze_run(record, output, mode, engine, batch_path):
 
 def main(input_path, mode=None):
     """Interactive planning precedes output creation; failures return a nonzero status."""
+    journal = None
     try:
         experiments = discover(input_path)
         if not experiments:
@@ -444,9 +484,8 @@ def main(input_path, mode=None):
         for record in runs:
             print(f"  {record['path']} | {record['marker']['name']} "
                   f"| original channel {record['marker']['channel']}")
-        batch = new_output(Path(input_path).expanduser().resolve().parent, 'Nuclear_Intensity_Batch_')
-        journal_path = batch / 'batch.json'
         journal = {'status': 'running', 'input_manifest': str(Path(input_path).resolve()),
+                   'started_utc': datetime.now(timezone.utc).isoformat(),
                    'input_type': mode, 'skipped_markers': skipped,
                    'selected_markers': [{'folder': marker['name'], 'channel': marker['channel']} for marker in markers],
                    'validation': [{'run': str(r['path']), 'marker': r['marker']['name'],
@@ -455,32 +494,44 @@ def main(input_path, mode=None):
                    'runs': [{'source': str(r['path']), 'marker': r['marker']['name'],
                              'marker_folder': str(r['marker']['folder']), 'channel': r['marker']['channel'],
                              'status': 'pending', 'output': None} for r in runs]}
-        write_json(journal_path, journal)
         for record, item in zip(runs, journal['runs']):
-            output = new_output(record['path'].parent, f"Nuclear_Intensity_{record['marker']['name']}_")
-            item.update(status='running', output=str(output))
-            write_json(journal_path, journal)
+            output = None
             try:
+                output = new_output(record['path'].parent, f"Nuclear_Intensity_{record['marker']['name']}_")
+                item.update(status='running', output=str(output))
+                journal_path = output / 'batch.json'
+                saved = save_batch_journal(journal)
+                if not saved and journal.get('fallback_journal'):
+                    journal_path = Path(journal['fallback_journal'])
                 item['status'] = analyze_run(record, output, mode, engine, journal_path)
+            except (Cancelled, KeyboardInterrupt, EOFError):
+                item['status'] = 'interrupted'
+                raise
             except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
                 item.update(status='failed', error=str(error))
-                failed_path = output / 'intensity_run.json'
-                try:
-                    failed_info = json.loads(failed_path.read_text(encoding='utf-8')) if failed_path.exists() else {}
-                    failed_info.update(Status='failed', Error=str(error))
-                    write_json(failed_path, failed_info)
-                except OSError:
-                    pass  # The batch journal still records failures on an unwritable output volume.
-                print(f'Run failed: {output}: {error}')
-            write_json(journal_path, journal)
-            print(f"Results: {output} ({item['status']})")
-        journal['status'] = 'complete' if all(r['status'] == 'complete' for r in journal['runs']) else 'incomplete'
-        write_json(journal_path, journal)
-        print(f'Batch journal: {journal_path}')
-        return 0 if journal['status'] == 'complete' else 1
+                if output is not None:
+                    failed_path = output / 'intensity_run.json'
+                    try:
+                        failed_info = json.loads(failed_path.read_text(encoding='utf-8')) if failed_path.exists() else {}
+                        failed_info.update(Status='failed', Error=str(error))
+                        write_json(failed_path, failed_info)
+                    except OSError:
+                        pass  # The batch journal records failures even when the output volume is unavailable.
+                print(f"Run failed: {output or record['path']}: {error}")
+            finally:
+                save_batch_journal(journal)
+            if output is not None:
+                print(f"Results: {output} ({item['status']})")
+        status = 'complete' if all(r['status'] == 'complete' for r in journal['runs']) else 'incomplete'
+        saved = finish_batch_journal(journal, status)
+        return 0 if status == 'complete' and saved else 1
     except (Cancelled, KeyboardInterrupt, EOFError):
+        if journal is not None:
+            finish_batch_journal(journal, 'canceled')
         print('Canceled. Any interrupted output remains marked running; it is not a completed result.')
         return 130
     except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
+        if journal is not None:
+            finish_batch_journal(journal, 'failed', error)
         print(f'Nuclear intensity analysis could not complete: {error}')
         return 1

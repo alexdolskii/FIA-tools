@@ -253,7 +253,8 @@ Each selected experiment/marker/mask-run combination creates its own `foci_assay
 
 - `Nuclear_Intensity.xlsx`, with **Nuclei**, **Images** and **Run_Info** sheets, plus UTF-8 CSV copies `Nuclear_Intensity.csv`, `Nuclear_Intensity_Images.csv` and `Nuclear_Intensity_Run_Info.csv`. CSV fields containing commas are quoted.
 - `image_0001/`, `image_0002/`, etc., linked to original filenames in the tables. Each contains `marker.tif`, native-size full-frame binary `nucleus_<ID>_mask.tif` files, corresponding ImageJ `nucleus_<ID>.roi` files, and `numbered_nuclei.png` with eligible nucleus outlines/IDs. Display contrast is adjusted only for the PNG preview; saved marker values remain unchanged.
-- `intensity_run.json` with run status/settings/provenance, and `intensity.log` with per-image progress and errors. A separate `Nuclear_Intensity_Batch_<timestamp>/batch.json` beside the input manifest records validation, selected runs and output paths without pooling measurements.
+- `intensity_run.json` with run status/settings/provenance, and `intensity.log` with per-image progress and errors.
+- `batch.json`, a copy of the full batch journal in each created intensity result folder. It records validation, skipped markers, selected runs, output paths and statuses without pooling measurements. Copies are updated throughout the batch and finalized after success, failure or cancellation; `Batch_journal` in run metadata/CSV/Excel points to the saved journal. No batch folder is created beside the input JSON during normal execution. If result folders cannot be created or journal copies cannot be written, a fallback is retained under `~/.fia-tools/logs/Nuclear_Intensity_Batch_<timestamp>/batch.json` and its path is printed. A run starting without a writable result journal references that fallback when available. A final journal-copy failure returns a nonzero exit status even if measurements completed. Cancellation before measurement output creates no journal. Existing batch folders from earlier versions are not moved or deleted.
 
 The **Nuclei** sheet contains one row per non-border nucleus and these measurements:
 
@@ -344,7 +345,13 @@ fia_marker_intensity_report -i input_paths.json \
 
 #### Plots and statistical units
 
-The report automatically excludes images with **`Non_border_nuclei_count == 0`**, including images containing border nuclei only. This image-level filter runs after input validation and plate annotation, before aggregation, statistics and plotting, and applies to every selected marker and morphology metric. `Excluded_Images.csv` and the matching Excel sheet identify each excluded source image, mask, well, condition, total/border/non-border counts and reason. `Image_Filter_Summary.csv` and its Excel sheet report original, excluded and retained image counts per condition, plus wells with input images and wells retained. The original images, collector tables and archived inputs remain unchanged. Zero usable nuclei is an exclusion criterion, not proof of poor image quality; count summaries now describe retained, nonempty images.
+Image-count filtering is **disabled by default**. Use optional **`--min-nuclei N`** to retain images with at least `N` non-border nuclei; `N` must be a nonnegative integer. Omitting the option or using `--min-nuclei 0` keeps all validated images, including zero-count images. `--min-nuclei 1` reproduces the previous zero-image exclusion, including border-only images. `--min-nuclei 20` excludes counts 0–19 and retains 20 or more:
+
+```bash
+fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
+```
+
+This image-level filter runs after input validation and plate annotation, before aggregation, statistics and plotting, and applies to every selected marker and morphology metric, removing all nuclei of each excluded image from the report. `Excluded_Images.csv` and the matching Excel sheet identify each excluded source image, mask, well, condition, total/border/non-border counts, `Min_nuclei` threshold and reason. The table is empty when filtering is disabled. `Image_Filter_Summary.csv` and its Excel sheet report original, excluded and retained image counts per condition, plus wells with input images and wells retained. The effective threshold and filter policy are saved in `Run_Info`, `report_status.json` and plot captions. The original images, collector tables and archived inputs remain unchanged. A low nucleus count is an optional exclusion criterion, not proof of poor image quality; count summaries describe only images retained by the chosen threshold.
 
 Intensity and morphology use **violin plots with a small inner boxplot, without individual nucleus dots**. Every usable non-border nucleus contributes to the distribution, without subsampling. Violin contours use Scott smoothing, have equal maximum widths and stop at the observed minimum and maximum. Boxes show the median and IQR; whiskers extend to the most extreme observations within 1.5 IQR. A thin range line retains extremes without outlier dots. With fewer than five nuclei, only the box/range is drawn; a constant or single value is shown as a horizontal line. An empty group keeps its labeled position with `n=0`. Nuclei-count graphs remain boxplots with every retained image shown as a point.
 
@@ -357,7 +364,7 @@ All Y axes remain **linear**, with the same limits across panels of a given metr
 | Morphology metrics | Violin from all usable non-border nuclei; add a plot only if at least one control comparison has `P_Holm < 0.05` | Individual nuclei | One mean per well |
 | Other intensity metrics | No additional plots | Individual nuclei | One mean per well |
 
-For morphology and intensity in well mode, calculate the mean across usable nuclei **within each retained image**, then the mean of those image means **within each well**. Retained images receive equal weight within a well; wells receive equal weight in the test. These well means do not replace individual nuclei on plots. Zero-non-border-nucleus images contribute to no metric, including count analysis. A well or condition with no retained images stays in the design with blank measurements, `n=0` and unavailable tests; it is never replaced by a zero-valued observation. Missing marker measurements stay blank, while measured zero intensity in a retained nucleus remains valid. Welch tests and the full planned Holm families are recomputed after filtering; adjusted p-values can change even for metrics whose observations did not change.
+For morphology and intensity in well mode, calculate the mean across usable nuclei **within each retained image**, then the mean of those image means **within each well**. Retained images receive equal weight within a well; wells receive equal weight in the test. These well means do not replace individual nuclei on plots. Images excluded by `--min-nuclei` contribute to no metric. When filtering is disabled, a retained zero-nucleus image contributes zero to count analysis but no value to morphology/intensity means. A well or condition with no usable observations for a metric stays in the design with blank measurements, `n=0` and unavailable tests; it is never replaced by a zero-valued observation. Missing marker measurements stay blank, while measured zero intensity in a retained nucleus remains valid. Welch tests and the full planned Holm families are recomputed after filtering; adjusted p-values can change even for metrics whose observations did not change.
 
 The tested metrics are:
 
@@ -381,7 +388,7 @@ Each report is saved beside the original images in a new `FIA_Marker_Intensity_R
 | --- | --- |
 | `FIA_Marker_Intensity_Report.xlsx` | Overview, Morphology_By_Condition, Morphology_Comparisons, Statistics, Summary, Nuclei, Images, Excluded_Images, Image_Filter_Summary, Image_Values, Well_Values, Plate_Map, Plot_Data, Plot_Labels, Plot_Info, Run_Info, Source_Files and embedded Plots |
 | `Nuclei_Morphology_Summary.xlsx` | Separate morphology workbook: Morphology_By_Condition, Morphology_Comparisons and Run_Info; no plots |
-| `Excluded_Images.csv`, `Image_Filter_Summary.csv` | Excluded image identities and reasons; before/after image counts per condition (also in the main Excel workbook) |
+| `Excluded_Images.csv`, `Image_Filter_Summary.csv` | Excluded image identities, counts, threshold and reasons; before/after image counts per condition (also in the main Excel workbook) |
 | Corresponding `.csv` tables | Data, aggregation values, statistics and provenance |
 | `Plots/` | Count boxplots, integrated-density violins and significant `Morphology_<metric>.png` violins; one complete overview per metric plus `__Block_01.png`, etc. for separate panels; also embedded in the main report |
 | `Inputs/` | Byte-preserved input spreadsheets, plate map and input manifest |
@@ -437,6 +444,7 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 | `quantify_foci` | `-j`, `--jobs` | Number of worker processes | `4` |
 | `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack`, or `tiff-2d` | Interactive |
 | `fia_marker_intensity_report` | `--stats-unit` | `nucleus` or `well` | No hypothesis tests |
+| `fia_marker_intensity_report` | `--min-nuclei` | Minimum non-border nuclei per image, inclusive; nonnegative integer | `0` (no image-count filtering) |
 | `fia_marker_intensity_report` | `--template`, `--sheet` | Plate-map XLSX and worksheet | Discover workbook; first worksheet |
 | `fia_marker_intensity_report` | `--collections` | `ask`, `latest`, or `all` | `ask` |
 | `fia_marker_intensity_report` | `--markers` | Folder names separated by commas, `all`, or `none` | Interactive |

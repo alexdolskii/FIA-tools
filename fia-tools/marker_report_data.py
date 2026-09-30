@@ -17,9 +17,8 @@ COLLECTION_PATTERN = re.compile(r'^FIA_Marker_Intensity_Combined_Results_(\d{8}_
 MARKER_PATTERN = re.compile(r'^(?:Foci_[1-9][0-9]*_)?Channel_([1-9][0-9]*)$')
 WELL_PATTERN = re.compile(r'Well([A-H])(0?[1-9]|1[0-2])(?!\d)', re.IGNORECASE)
 COUNT = 'Non_border_nuclei_count'
-IMAGE_EXCLUSION_RULE = 'Non_border_nuclei_count == 0 (including images with border nuclei only)'
 EXCLUDED_IMAGE_COLUMNS = ['Image_name', 'Source_file', 'Mask_name', 'Well', 'Group',
-                          *collect.COUNTS, 'Reason']
+                          *collect.COUNTS, 'Min_nuclei', 'Reason']
 IMAGE_VALUE_COLUMNS = ['Category', 'Marker', 'Metric', 'Unit', 'Group', 'Well', 'Image_name',
                        'Mask_name', 'N_nuclei', 'N_values', 'Value']
 
@@ -317,15 +316,22 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
     return data
 
 
-def exclude_empty_images(data):
-    """Filter validated, annotated images once, before aggregation or statistical testing."""
+def filter_images(data, min_nuclei=0):
+    """Optionally filter validated images by their minimum non-border nucleus count."""
+    if not isinstance(min_nuclei, int) or isinstance(min_nuclei, bool) or min_nuclei < 0:
+        raise ValidationError('min_nuclei must be a nonnegative integer')
+    data['min_nuclei'] = min_nuclei
+    data['image_exclusion_rule'] = (
+        f'Images with Non_border_nuclei_count < {min_nuclei} excluded before analysis.'
+        if min_nuclei else 'Image count filtering disabled; zero-count images retained.')
     images = data['images']
     data['image_columns'] = list(dict.fromkeys(key for row in images for key in row))
     data['images_before_filter'] = len(images)
-    excluded = {row['Mask_name'] for row in images if row[COUNT] == 0}
+    excluded = {row['Mask_name'] for row in images if row[COUNT] < min_nuclei}
     data['excluded_images'] = [
         {**{key: row.get(key) for key in EXCLUDED_IMAGE_COLUMNS[:-1]},
-         'Reason': 'No usable non-border nuclei'}
+         'Min_nuclei': min_nuclei,
+         'Reason': f'Non-border nuclei count {row[COUNT]} is below minimum {min_nuclei}'}
         for row in images if row['Mask_name'] in excluded
     ]
     data['image_filter_summary'] = []

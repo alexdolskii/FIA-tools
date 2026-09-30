@@ -141,7 +141,8 @@ def plot_note(data, name, observation, comparisons):
     effective = 'well' if data['stats_unit'] == 'well' else observation
     inference = ('Statistics disabled.' if data['stats_unit'] is None else
                  f'Test unit: {effective}. Two-sided Welch; p adjusted by Holm across all metrics and selected markers per color block.')
-    note = (description + ' Border nuclei excluded. Images with zero non-border nuclei excluded before analysis. '
+    image_filter = data.get('image_exclusion_rule', 'Image count filtering disabled.')
+    note = (description + ' Border nuclei excluded. ' + image_filter + ' '
             'Linear Y; shared limits across panels of this metric. '
             'Box: median and IQR; whiskers: 1.5 IQR. Labels: usable observations and contributing wells. ' + inference)
     if data['stats_unit'] == 'well':
