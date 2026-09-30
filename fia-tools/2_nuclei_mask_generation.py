@@ -3,8 +3,8 @@
 import argparse
 import hashlib
 import json
-import logging
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -15,6 +15,7 @@ import spatial_calibration as spatial
 from csbdeep.utils import normalize
 from interactive_input import ask_choice, ask_yes_no, cancelable
 from nuclei_morphology import NucleiMorphologyExport
+from nuclei_run_log import NucleiRunLog
 from scyjava import jimport
 from skimage.io import imread, imsave
 from stardist.models import StarDist2D
@@ -66,12 +67,20 @@ def nuclei_source_files(nuclei_folder):
             and (Path(nuclei_folder) / f).is_file()]
 
 
-def source_fingerprints(nuclei_folder):
-    return {name: file_digest(Path(nuclei_folder) / name)
-            for name in nuclei_source_files(nuclei_folder)}
+def source_fingerprints(nuclei_folder, progress=None):
+    files = nuclei_source_files(nuclei_folder)
+    fingerprints = {}
+    for index, name in enumerate(files, 1):
+        if progress:
+            progress.phase(f'Source checksums {index}/{len(files)}')
+        fingerprints[name] = file_digest(Path(nuclei_folder) / name)
+        if progress and progress.logger:
+            progress.logger.info('SOURCE_CHECKSUM | file=%s | sha256=%s',
+                                 Path(nuclei_folder) / name, fingerprints[name])
+    return fingerprints
 
 
-def inspect_stardist_folder(folder, nuclei_folder, sources):
+def inspect_stardist_folder(folder, nuclei_folder, sources, progress=None):
     """Check completeness, provenance and readable masks before offering reuse."""
     candidate = {"path": str(folder), "count": 0, "legacy": False,
                  "reason": "", "usable": False}
@@ -105,23 +114,40 @@ def inspect_stardist_folder(folder, nuclei_folder, sources):
             recorded_masks = metadata.get("masks", {})
             if not isinstance(recorded_masks, dict) or set(recorded_masks) != masks:
                 raise ValueError("Recorded mask set does not match the folder")
-            for name in masks:
+            for index, name in enumerate(masks, 1):
+                if progress:
+                    progress.phase(f'Mask checksums {index}/{len(masks)}')
                 if file_digest(Path(folder) / name) != recorded_masks[name]:
                     raise ValueError(f"Saved mask has changed: {name}")
         else:
             candidate["legacy"] = True
 
         for mask_name, source_name in expected.items():
+            if progress:
+                progress.begin_image(Path(folder) / mask_name)
+                progress.phase('Checking dimensions and bit depth')
             source = imread(str(Path(nuclei_folder) / source_name))
             mask = imread(str(Path(folder) / mask_name))
+            if progress and progress.logger:
+                progress.logger.info(
+                    'VALIDATE_IMAGE | source=%s | shape=%s | dtype=%s | '
+                    'mask=%s | shape=%s | dtype=%s', source_name, source.shape,
+                    source.dtype, mask_name, mask.shape, mask.dtype)
             if source.ndim != 2 or source.dtype != np.uint8:
                 raise ValueError(f"Source is not 2D uint8: {source_name}")
             if (mask.ndim != 2 or mask.dtype != np.uint16
                     or mask.shape != source.shape):
                 raise ValueError(f"Invalid mask type or dimensions: {mask_name}")
+            if progress:
+                progress.finish_image()
         candidate["usable"] = True
     except Exception as error:
         candidate["reason"] = str(error)
+        if progress:
+            progress.finish_image(success=False)
+    if progress and progress.logger:
+        progress.logger.info('REUSE_CHECK | folder=%s | usable=%s | legacy=%s | reason=%s',
+                             folder, candidate['usable'], candidate['legacy'], candidate['reason'])
     return candidate
 
 
@@ -141,9 +167,17 @@ def discover_stardist_folders(nuclei_folder):
     folders.sort(key=lambda item: item[0], reverse=True)
     if not folders:
         return []
-    sources = source_fingerprints(nuclei_folder)
-    return [inspect_stardist_folder(folder, nuclei_folder, sources)
-            for _, folder in folders]
+    with NucleiRunLog(Path(nuclei_folder).parent.parent / '2_val_log.log',
+                      'Reuse validation', len(nuclei_source_files(nuclei_folder)), mode='a') as run:
+        run.logger.info('INPUT | folder=%s | candidate_runs=%s', nuclei_folder, len(folders))
+        sources = source_fingerprints(nuclei_folder, run.progress)
+        candidates = []
+        for index, (_, folder) in enumerate(folders, 1):
+            run.progress.group(f'Run {index}/{len(folders)} | Checking masks', len(sources))
+            candidates.append(inspect_stardist_folder(folder, nuclei_folder, sources, run.progress))
+        run.finish('COMPLETE', show_counts=False, candidate_runs=len(candidates),
+                   reusable=sum(item['usable'] for item in candidates))
+    return candidates
 
 
 def select_stardist_sources(nuclei_folders):
@@ -199,7 +233,7 @@ def select_stardist_sources(nuclei_folders):
                     continue
                 legacy_remaining = reuse_remaining
             selected[nuclei_folder] = chosen["path"]
-            print(f"Reusing StarDist masks: {chosen['path']}")
+            print(f"StarDist: reused ({chosen['count']} masks). Source: {chosen['path']}")
             break
     return selected
 
@@ -211,7 +245,7 @@ class ImageJInitializationError(Exception):
     pass
 
 
-def initialize_imagej():
+def initialize_imagej(progress=None):
     """
     Initialize ImageJ in headless mode.
 
@@ -219,13 +253,14 @@ def initialize_imagej():
         ij (imagej.ImageJ): The initialized ImageJ instance.
     """
     # Attempt to initialize ImageJ headless mode
-    print("Initializing ImageJ...")
+    message = progress.message if progress is not None else print
+    message("Initializing ImageJ...")
     try:
         ij = imagej.init(fiji_config.FIJI_ENDPOINT, mode='headless')
     except Exception as e:
         raise ImageJInitializationError(
             f"Failed to initialize ImageJ: {e}")
-    print(f"ImageJ initialization completed. Version: {ij.getVersion()}")
+    message(f"ImageJ initialization completed. Version: {ij.getVersion()}")
     return ij
 
 
@@ -233,267 +268,246 @@ def validate_folders(input_json_path: str) -> list:
     valid_folders = validate_input_file(input_json_path)
     nuclei_folders = []
     for folder in valid_folders:
-        # Set up logging
-        file_handler = logging.FileHandler(os.path.join(folder,
-                                                        '2_val_log.log'),
-                                           mode='w')
-        file_handler.setLevel(logging.WARNING)
-        file_handler.setFormatter(
-            logging.Formatter('%(asctime)s - '
-                              '%(levelname)s - '
-                              '%(message)s'))
-        logging.getLogger('').addHandler(file_handler)
-
-        nuclei_folder = os.path.join(folder,
-                                     'foci_assay',
-                                     'Nuclei')
-        if os.path.exists(nuclei_folder):
-            files = [f for f in os.listdir(nuclei_folder)
-                     if not f.startswith('.')]
-            file_formats = set(os.path.splitext(f)[1] for f in files)
-            print(f"Nuclei folder found: {nuclei_folder}, "
-                  f"File types: {', '.join(file_formats)}")
-            nuclei_folders.append(nuclei_folder)
-        else:
-            logging.error(f"Nuclei folder not found "
-                          f"in '{folder}/foci_assay'.")
+        with NucleiRunLog(Path(folder) / '2_val_log.log', 'Input validation', quiet=True) as run:
+            run.logger.info('INPUT | json=%s | folder=%s', input_json_path, folder)
+            nuclei_folder = os.path.join(folder, 'foci_assay', 'Nuclei')
+            if os.path.exists(nuclei_folder):
+                files = [f for f in os.listdir(nuclei_folder) if not f.startswith('.')]
+                file_formats = set(os.path.splitext(f)[1] for f in files)
+                count = len(nuclei_source_files(nuclei_folder))
+                message = (f"Nuclei folder found: {nuclei_folder}, "
+                           f"File types: {', '.join(sorted(file_formats))}; images: {count}")
+                print(message)
+                run.logger.info(message)
+                nuclei_folders.append(nuclei_folder)
+                run.finish('COMPLETE', show_counts=False, images=count)
+            else:
+                run.logger.error("Nuclei folder not found in '%s/foci_assay'.", folder)
+                run.finish('INCOMPLETE', show_counts=False)
     return nuclei_folders
 
 
 def find_nuclei(nuclei_folders: list) -> list:
-    """
-    The function to find nuclei using machine
-    learning approach from stardist. For the analysis
-    2D_versatile_fluo is used.
-
-    Args:
-        nuclei_folders: list of folders that contain 2D
-        images with nuclei to analyze.
-
-    Returns:
-        List of paths to folders with processed masks.
-    """
-    # Load pre-trained Versatile (fluorescent nuclei) model
-    model = StarDist2D.from_pretrained(STARDIST_SETTINGS["model"])
-
+    """Generate StarDist masks with compact progress and a journal per folder."""
+    model = None
     processed_folders = []
-
-    # Process images in each Nuclei folder
-    for nuclei_folder in nuclei_folders:
+    for folder_index, nuclei_folder in enumerate(nuclei_folders, 1):
         output_folder = create_output_folder(
             os.path.dirname(nuclei_folder), "Nuclei_StarDist_mask_processed_")
         processed_folders.append(output_folder)
-
-        # Setting up logging
-        file_handler = logging.FileHandler(os.path.join(output_folder,
-                                                        '2_log.log'),
-                                           mode='w')
-        file_handler.setLevel(logging.WARNING)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - '
-                                                    '%(levelname)s - '
-                                                    '%(message)s'))
-        logging.getLogger('').addHandler(file_handler)
-
-        # Get list of files with .tif extension
         image_files = nuclei_source_files(nuclei_folder)
-        run_metadata = {
-            "schema_version": 1,
-            "status": "running",
-            "source_folder": str(Path(nuclei_folder).resolve()),
-            "settings": dict(STARDIST_SETTINGS),
-            "sources": source_fingerprints(nuclei_folder),
-            "masks": {},
-        }
-        write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-
-        # Check if there are any images in the folder
-        if not image_files:
-            logging.error(f"No .tif images found in folder "
-                          f"'{nuclei_folder}'. Skipping folder.")
-            run_metadata["status"] = "incomplete"
+        with NucleiRunLog(Path(output_folder) / '2_log.log',
+                          f'Folder {folder_index}/{len(nuclei_folders)} | StarDist',
+                          len(image_files)) as run:
+            progress, logger = run.progress, run.logger
+            progress.message(f'Input: {nuclei_folder}')
+            progress.message(f'Output: {output_folder}')
+            logger.info('INPUT | folder=%s | output=%s', nuclei_folder, output_folder)
+            logger.info('PARAMETERS | %s', json.dumps(STARDIST_SETTINGS, sort_keys=True))
+            if model is None:
+                progress.phase('Loading StarDist model')
+                progress.message('Loading StarDist model...')
+                model = StarDist2D.from_pretrained(STARDIST_SETTINGS["model"])
+                logger.info('MODEL_READY | model=%s', STARDIST_SETTINGS['model'])
+                progress.message('StarDist model ready.')
+            else:
+                logger.info('MODEL_READY | reusing loaded model=%s', STARDIST_SETTINGS['model'])
+            run_metadata = {
+                "schema_version": 1,
+                "status": "running",
+                "source_folder": str(Path(nuclei_folder).resolve()),
+                "settings": dict(STARDIST_SETTINGS),
+                "sources": source_fingerprints(nuclei_folder, progress),
+                "masks": {},
+            }
             write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-            continue
-
-        # Process each image in the folder
-        for image_file in image_files:
-            image_path = os.path.join(nuclei_folder, image_file)
-            image = imread(image_path)
-
-            # Check if the image is 8-bit grayscale
-            if image.dtype != np.uint8:
-                logging.error(f"Image '{image_file}' is "
-                              f"not 8-bit grayscale. "
-                              f"Skipping file.")
+            run.saved(Path(output_folder) / STARDIST_METADATA)
+            if not image_files:
+                logger.error("No .tif images found in folder '%s'. Skipping folder.", nuclei_folder)
+                run_metadata["status"] = "incomplete"
+                write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
+                run.finish('NO_INPUT')
                 continue
 
-            # Normalize the image
-            image = normalize(image)
+            for image_file in image_files:
+                image_path = os.path.join(nuclei_folder, image_file)
+                progress.begin_image(image_path)
+                image = imread(image_path)
+                logger.info('INPUT_IMAGE | file=%s | shape=%s | dtype=%s | bits=%s',
+                            image_file, image.shape, image.dtype, image.dtype.itemsize * 8)
+                # Keep the existing input requirement and inference unchanged.
+                if image.dtype != np.uint8:
+                    logger.error("Image '%s' is not 8-bit grayscale. Skipping file.", image_file)
+                    progress.finish_image(skipped=True)
+                    continue
+                progress.phase('Normalizing')
+                image = normalize(image)
+                progress.phase('Predicting nuclei')
+                labels, details = model.predict_instances(
+                    image,
+                    nms_thresh=STARDIST_SETTINGS["nms_thresh"],
+                    prob_thresh=STARDIST_SETTINGS["prob_thresh"])
+                progress.phase('Saving mask and calibration')
+                base_name, ext = os.path.splitext(image_file)
+                new_file_name = f"{base_name}_StarDist_processed{ext}"
+                output_path = os.path.join(output_folder, new_file_name)
+                imsave(output_path, labels.astype(np.uint16))
+                logger.info('OUTPUT_IMAGE | file=%s | shape=%s | dtype=uint16 | bits=16',
+                            new_file_name, labels.shape)
+                run.saved(output_path)
+                calibration = spatial.projection_calibration(
+                    image_path, labels.shape, allow_bioformats=False)
+                logger.info('CALIBRATION | file=%s | %s', image_file, calibration)
+                if calibration is not None:
+                    spatial.save_snapshot(output_path, calibration, labels.shape)
+                    run.saved(Path(output_folder) / spatial.MANIFEST)
+                run_metadata["masks"][new_file_name] = file_digest(output_path)
+                progress.finish_image()
 
-            # Apply model with specified thresholds
-            labels, details = model.predict_instances(
-                image,
-                nms_thresh=STARDIST_SETTINGS["nms_thresh"],
-                prob_thresh=STARDIST_SETTINGS["prob_thresh"])
-
-            # Form new file name with _StarDist_processed suffix
-            base_name, ext = os.path.splitext(image_file)
-            new_file_name = f"{base_name}_StarDist_processed{ext}"
-            output_path = os.path.join(output_folder, new_file_name)
-            imsave(output_path, labels.astype(np.uint16))
-            calibration = spatial.projection_calibration(image_path, labels.shape, allow_bioformats=False)
-            if calibration is not None:
-                spatial.save_snapshot(output_path, calibration, labels.shape)
-            run_metadata["masks"][new_file_name] = file_digest(output_path)
-
-        complete = (
-            len(run_metadata["masks"]) == len(image_files)
-            and run_metadata["sources"] == source_fingerprints(nuclei_folder))
-        run_metadata["status"] = "complete" if complete else "incomplete"
-        write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-        print(f"Image processing completed in folder '{nuclei_folder}'.")
-
+            complete = (
+                len(run_metadata["masks"]) == len(image_files)
+                and run_metadata["sources"] == source_fingerprints(nuclei_folder, progress))
+            run_metadata["status"] = "complete" if complete else "incomplete"
+            if not complete:
+                logger.error('StarDist results are incomplete: missing masks or changed source files.')
+            write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
+            run.saved(Path(output_folder) / STARDIST_METADATA)
+            run.finish('COMPLETE' if complete else 'INCOMPLETE', masks=len(run_metadata['masks']))
     return processed_folders
 
 
-def process_nuclei(valid_folders: list,
-                   particle_size: int) -> None:
-    """
-    Process all files from the provided directories (.tif)
-    for the Nuclei channel using ImageJ.
-
-    Args:
-        valid_folders: list of folders containing 2D images.
-        particle_size: minimum size of nuclei to analyze.
-    """
-    # Initialize ImageJ
-    ij = initialize_imagej()  # noqa: F841
-
-    # Import Java classes
-    IJ = jimport('ij.IJ')
-    WindowManager = jimport('ij.WindowManager')
-
-    # Process images in each folder
-    for input_folder in valid_folders:
-        # Keep every area-filter run separate, including same-second reruns.
+def process_nuclei(valid_folders: list, particle_size: int) -> bool:
+    """Run the existing ImageJ/morphology pipeline, reporting stage-level progress."""
+    ij = None
+    all_complete = bool(valid_folders)
+    for folder_index, input_folder in enumerate(valid_folders, 1):
         processed_folder = create_output_folder(
             os.path.dirname(input_folder), "Final_Nuclei_Mask_")
-        morphology = NucleiMorphologyExport(
-            processed_folder, input_folder, particle_size, IJ.getVersion())
-        print(f"\nProcessed images will be saved in: {processed_folder}")
-        run_metadata = {
-            "schema_version": 1,
-            "status": "running",
-            "stardist_folder": str(Path(input_folder).resolve()),
-            "particle_size_pixels_squared": particle_size,
-            "morphology_status": "running",
-            "processed_files": [],
-            "skipped_files": [],
-        }
-        write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
-
-        # Set up logging
-        log_file = os.path.join(processed_folder, 'nuclei_log.log')
-        file_handler = logging.FileHandler(log_file, mode='w')
-        file_handler.setLevel(logging.WARNING)
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - '
-                                                    '%(levelname)s - '
-                                                    '%(message)s'))
-        logging.getLogger('').addHandler(file_handler)
-
-        # Valid file extensions
-        valid_exts = ('.tif', '.tiff')
-
-        for filename in os.listdir(input_folder):
-            # Skip hidden files and files starting with "._"
-            if filename.startswith('.') or filename.startswith('._'):
-                logging.warning(f"Skipping hidden "
-                                f"or dot-underscore file: "
-                                f"{filename}")
-                continue
-
-            if filename in (STARDIST_METADATA, spatial.MANIFEST):
-                continue
-
-            # Check file extension
-            file_ext = filename.lower()
-            if not file_ext.endswith(valid_exts):
-                # If file is not TIF/TIFF, skip
-                logging.error(f"Skipping '{filename}' (unsupported format).")
-                continue
-
-            file_path = os.path.join(input_folder, filename)
-            print(f"\nProcessing file: {file_path}")
-
-            # Close any images left open
-            IJ.run("Close All")
-
-            # Open the image
-            imp = IJ.openImage(file_path)
-            if imp is None:
-                logging.warning(f"Failed to open image: "
-                                f"{file_path}. "
-                                f"Check Bio-Formats or file integrity.")
-                run_metadata["skipped_files"].append(filename)
-                morphology.record_failure(filename, "Failed to open the StarDist mask.")
-                continue
-
-            # Convert image to 8-bit
-            IJ.run(imp, "8-bit", "")
-
-            # Threshold
-            IJ.setThreshold(imp, 1, 255)
-            IJ.run(imp, "Convert to Mask", "")
-            IJ.run(imp, "Watershed", "")
-
-            # Analyze particles with specified particle size
-            IJ.run(imp, "Analyze Particles...",
-                   f"size={particle_size}-Infinity pixel show=Masks")
-
-            # Get processed image
-            mask_title = 'Mask of ' + filename
-            imp_mask = WindowManager.getImage(mask_title)
-            if imp_mask is None:
-                imp_mask = WindowManager.getCurrentImage()
-                if imp_mask is None:
-                    logging.error(f"Failed to get mask for image: {file_path}")
-                    imp.close()
-                    run_metadata["skipped_files"].append(filename)
-                    morphology.record_failure(filename, "ImageJ did not return a final mask.")
+        entries = os.listdir(input_folder)
+        image_files = [name for name in entries
+                       if not name.startswith('.') and name.lower().endswith(('.tif', '.tiff'))]
+        with NucleiRunLog(Path(processed_folder) / 'nuclei_log.log',
+                          f'Folder {folder_index}/{len(valid_folders)} | ImageJ',
+                          len(image_files)) as run:
+            progress, logger = run.progress, run.logger
+            progress.message(f'Input: {input_folder}')
+            progress.message(f'Output: {processed_folder}')
+            logger.info('INPUT | folder=%s | output=%s', input_folder, processed_folder)
+            logger.info('PARAMETERS | particle_size_pixels_squared=%s | threshold=1..255 | '
+                        'conversion=8-bit | watershed=True | Fiji=%s',
+                        particle_size, fiji_config.FIJI_ENDPOINT)
+            if ij is None:
+                progress.phase('Initializing ImageJ')
+                ij = initialize_imagej(progress=progress)
+                IJ = jimport('ij.IJ')
+                WindowManager = jimport('ij.WindowManager')
+            logger.info('IMAGEJ_READY | version=%s', IJ.getVersion())
+            morphology = NucleiMorphologyExport(
+                processed_folder, input_folder, particle_size, IJ.getVersion())
+            run_metadata = {
+                "schema_version": 1,
+                "status": "running",
+                "stardist_folder": str(Path(input_folder).resolve()),
+                "particle_size_pixels_squared": particle_size,
+                "morphology_status": "running",
+                "processed_files": [],
+                "skipped_files": [],
+            }
+            write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
+            run.saved(Path(processed_folder) / 'nuclei_run.json')
+            ignored = 0
+            for filename in entries:
+                if filename.startswith('.') or filename in (
+                        STARDIST_METADATA, spatial.MANIFEST, '2_log.log'):
+                    logger.info('IGNORED | file=%s | hidden or auxiliary file', filename)
+                    ignored += 1
                     continue
+                if not filename.lower().endswith(('.tif', '.tiff')):
+                    logger.error("Skipping '%s' (unsupported format).", filename)
+                    ignored += 1
+                    continue
+                file_path = os.path.join(input_folder, filename)
+                progress.begin_image(file_path)
+                IJ.run("Close All")
+                imp = IJ.openImage(file_path)
+                if imp is None:
+                    logger.warning('Failed to open image: %s. Check Bio-Formats or file integrity.', file_path)
+                    run_metadata["skipped_files"].append(filename)
+                    morphology.record_failure(filename, "Failed to open the StarDist mask.")
+                    progress.finish_image(skipped=True)
+                    continue
+                try:
+                    logger.info('INPUT_IMAGE | file=%s | width=%s | height=%s | bits=%s',
+                                filename, imp.getWidth(), imp.getHeight(), imp.getBitDepth())
+                    progress.phase('Converting and thresholding')
+                    IJ.run(imp, "8-bit", "")
+                    IJ.setThreshold(imp, 1, 255)
+                    IJ.run(imp, "Convert to Mask", "")
+                    progress.phase('Watershed')
+                    IJ.run(imp, "Watershed", "")
+                    progress.phase('Filtering nuclei by area')
+                    IJ.run(imp, "Analyze Particles...",
+                           f"size={particle_size}-Infinity pixel show=Masks")
+                    mask_title = 'Mask of ' + filename
+                    imp_mask = WindowManager.getImage(mask_title)
+                    if imp_mask is None:
+                        imp_mask = WindowManager.getCurrentImage()
+                    if imp_mask is None:
+                        logger.error('Failed to get mask for image: %s', file_path)
+                        run_metadata["skipped_files"].append(filename)
+                        morphology.record_failure(filename, "ImageJ did not return a final mask.")
+                        progress.finish_image(skipped=True)
+                        continue
+                    try:
+                        progress.phase('Saving final mask')
+                        base_name = os.path.splitext(filename)[0]
+                        output_path = os.path.join(processed_folder, f"{base_name}_processed.tif")
+                        IJ.saveAs(imp_mask, "Tiff", output_path)
+                        run_metadata["processed_files"].append(filename)
+                        logger.info('OUTPUT_IMAGE | file=%s | width=%s | height=%s | bits=%s',
+                                    output_path, imp_mask.getWidth(), imp_mask.getHeight(), imp_mask.getBitDepth())
+                        run.saved(output_path)
+                        success = True
+                        progress.phase('Measuring morphology and saving QC')
+                        try:
+                            morphology.add_image(imp_mask, filename, Path(output_path).name)
+                            # add_image can update calibration of the final TIFF.
+                            run.saved(output_path)
+                            qc_stem = Path(output_path).stem
+                            for suffix in ('_ids.tif', '_ids.png'):
+                                run.saved(Path(processed_folder) / 'Morphology_QC' / (qc_stem + suffix))
+                            logger.info('MORPHOLOGY | file=%s | status=complete', filename)
+                        except Exception as error:
+                            success = False
+                            morphology.record_failure(filename, error, Path(output_path).name)
+                            logger.exception("Morphology export failed for '%s': %s", filename, error)
+                        progress.finish_image(success=success)
+                    finally:
+                        imp_mask.close()
+                finally:
+                    imp.close()
 
-            # Save processed image
-            base_name = os.path.splitext(filename)[0]
-            output_path = os.path.join(processed_folder,
-                                       f"{base_name}_processed.tif")
-            IJ.saveAs(imp_mask, "Tiff", output_path)
-            run_metadata["processed_files"].append(filename)
-            print(f"Processed image saved: {output_path}")
-
-            # Measure a duplicate of the final mask without changing segmentation.
-            try:
-                morphology.add_image(imp_mask, filename, Path(output_path).name)
-            except Exception as error:
-                morphology.record_failure(filename, error, Path(output_path).name)
-                logging.exception(f"Morphology export failed for: {filename}")
-                print(f"Morphology export failed for '{filename}': {error}")
-
-            # Close images
-            imp.close()
-            imp_mask.close()
-
-        # Close all images to free memory
-        IJ.run("Close All")
-        run_metadata["status"] = (
-            "complete" if run_metadata["processed_files"]
-            and not run_metadata["skipped_files"] else "incomplete")
-        run_metadata["morphology_status"] = morphology.save()
-        write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
-        print(f"Morphology table: {processed_folder}/Nuclei_Morphology.xlsx; "
-              f"status: {run_metadata['morphology_status']}.")
-        print(f"ImageJ run status: {run_metadata['status']}; "
-              f"processed: {len(run_metadata['processed_files'])}; "
-              f"skipped: {len(run_metadata['skipped_files'])}; "
-              f"minimum area: {particle_size} pixels^2.")
+            IJ.run("Close All")
+            run_metadata["status"] = (
+                "complete" if run_metadata["processed_files"]
+                and not run_metadata["skipped_files"] else "incomplete")
+            progress.phase('Saving morphology tables')
+            run_metadata["morphology_status"] = morphology.save()
+            for name in ('Nuclei_Morphology.xlsx', 'Nuclei_Morphology.csv',
+                         'Nuclei_Images.csv', 'Nuclei_Run_Info.csv'):
+                run.saved(Path(processed_folder) / name)
+            write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
+            run.saved(Path(processed_folder) / 'nuclei_run.json')
+            complete = (run_metadata['status'] == 'complete'
+                        and run_metadata['morphology_status'] == 'complete')
+            all_complete = all_complete and complete
+            run.finish('COMPLETE' if complete else 'INCOMPLETE',
+                       masks=run_metadata['status'], morphology=run_metadata['morphology_status'],
+                       saved_masks=len(run_metadata['processed_files']), ignored=ignored,
+                       minimum_area_px2=particle_size)
+            progress.message(f"Morphology table: {processed_folder}/Nuclei_Morphology.xlsx; "
+                             f"status: {run_metadata['morphology_status']}.")
+    return all_complete
 
 
 @cancelable
@@ -502,6 +516,7 @@ def main(input_json_path: str,
     """
     Main function to analyze and process nuclei.
     """
+    started = time.monotonic()
     # Step 1: Reuse validated masks or analyze nuclei using StarDist.
     print("Starting Step 1: Preparing StarDist nuclei masks...")
     nuclei_folders = validate_folders(input_json_path)
@@ -524,8 +539,9 @@ def main(input_json_path: str,
 
     # Step 2: Process nuclei using ImageJ
     print("Starting Step 2: Processing nuclei with ImageJ...")
-    process_nuclei(processed_folders, particle_size)
-    print("Step 2 completed: Nuclei processing finished.")
+    complete = process_nuclei(processed_folders, particle_size)
+    status = "INCOMPLETE; check the folder logs" if complete is False else "finished"
+    print(f"Step 2: Nuclei processing {status}. Total elapsed: {time.monotonic() - started:.1f}s.")
 
 
 if __name__ == '__main__':
