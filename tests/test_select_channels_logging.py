@@ -244,7 +244,7 @@ def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path,
 
 
 @pytest.mark.parametrize("first_exists", [False, True])
-def test_declining_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch, runtime, first_exists):
+def test_canceling_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch, runtime, first_exists):
     first = source_folder(tmp_path, "first")
     second = source_folder(tmp_path, "second")
     previous = existing_results(second)
@@ -252,9 +252,8 @@ def test_declining_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch,
         previous.update(existing_results(first))
     initializer = MagicMock()
     monkeypatch.setattr(mod, "initialize_imagej", initializer)
-    choices = ("yes", "no") if first_exists else ("n",)
-    with pytest.raises(ValueError, match="canceled by user before processing"):
-        run(monkeypatch, [first, second], choices)
+    choices = ("yes", "q") if first_exists else ("q",)
+    assert run(monkeypatch, [first, second], choices) == []
     initializer.assert_not_called()
     runtime.openImage.assert_not_called()
     assert all(path.read_bytes() == content for path, content in previous.items())
@@ -267,8 +266,96 @@ def test_declining_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch,
 def test_invalid_confirmation_does_not_allow_overwrite(tmp_path, monkeypatch, runtime, capsys):
     folder = source_folder(tmp_path)
     previous = existing_results(folder)
-    with pytest.raises(ValueError, match="canceled by user before processing"):
-        run(monkeypatch, [folder], ("maybe", "", "no"))
-    assert capsys.readouterr().out.count("Please enter yes or no.") == 2
+    assert run(monkeypatch, [folder], ("maybe", "", "no")) == []
+    assert capsys.readouterr().out.count("Please enter yes, no, or q.") == 2
     runtime.openImage.assert_not_called()
     assert all(path.read_bytes() == content for path, content in previous.items())
+
+
+@pytest.mark.parametrize("choices,selected_index", [(("no", "yes"), 1), (("yes", "n"), 0)])
+def test_independent_folder_choices_preserve_skips_and_count_selected_images(
+        tmp_path, monkeypatch, runtime, capsys, choices, selected_index):
+    first = source_folder(tmp_path, "first", ("first.tif", "extra.tif", "._first.tif"))
+    second = source_folder(tmp_path, "second", ("second.tif", ".hidden.tif"))
+    fresh = source_folder(tmp_path, "fresh", ("new.tif",))
+    previous = {**existing_results(first), **existing_results(second)}
+    folders = [first, second, fresh]
+    skipped = folders[1 - selected_index]
+    skipped_paths = set(skipped.rglob('*'))
+    selected = [folders[selected_index], fresh]
+    expected_sources = {p for folder in selected for p in folder.glob('*.tif') if not p.name.startswith('.')}
+    initialize = mod.initialize_imagej
+    prompts = []
+    answers = iter((*choices, "3", "1", "1", "2"))
+
+    def answer(prompt):
+        prompts.append(prompt)
+        if 'overwrite' in prompt:
+            assert all(path.read_bytes() == content for path, content in previous.items())
+        return next(answers)
+
+    def start_imagej():
+        assert len(prompts) == 2
+        assert str(first) in prompts[0] and str(second) in prompts[1]
+        assert all(path.read_bytes() == content for path, content in previous.items() if skipped in path.parents)
+        return initialize()
+
+    monkeypatch.setattr('builtins.input', answer)
+    monkeypatch.setattr(mod, 'initialize_imagej', start_imagej)
+    assert mod.process_image([str(folder) for folder in folders]) == ['SUCCESS', 'SUCCESS']
+    assert {Path(call.args[0]) for call in runtime.openImage.call_args_list} == expected_sources
+    assert set(skipped.rglob('*')) == skipped_paths
+    assert all(path.read_bytes() == content for path, content in previous.items() if skipped in path.parents)
+    output = capsys.readouterr().out
+    count = len(expected_sources)
+    assert f'Ready: 2 folder(s), {count} images. Skipped: 1 folder(s).' in output
+    assert f'Total {count}/{count} (100.0%)' in output
+    assert 'Folder 2/2:' in output and 'Folder 3/' not in output
+
+
+def test_skipping_all_folders_exits_without_false_success_or_writes(tmp_path, monkeypatch, runtime, capsys):
+    folders = [source_folder(tmp_path, name) for name in ('first', 'second')]
+    previous = {path: content for folder in folders for path, content in existing_results(folder).items()}
+    paths_before = set(tmp_path.rglob('*'))
+    initializer = MagicMock()
+    monkeypatch.setattr(mod, 'initialize_imagej', initializer)
+    monkeypatch.setattr(mod, 'validate_folders', lambda path: [str(folder) for folder in folders])
+    answers = iter(['yes', 'no', 'no'])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
+    assert mod.select_channel_name('input.json') is None
+    initializer.assert_not_called()
+    runtime.openImage.assert_not_called()
+    assert set(tmp_path.rglob('*')) == paths_before
+    assert all(path.read_bytes() == content for path, content in previous.items())
+    output = capsys.readouterr()
+    assert 'No folders selected for processing.' in output.out
+    assert 'Nothing to do.' in output.out
+    assert 'successfully completed' not in output.out and 'incomplete results' not in output.out
+    assert 'Traceback' not in output.out + output.err
+
+
+@pytest.mark.parametrize('response', ['no', 'N', 'q'])
+def test_initial_decline_is_normal_exit_and_invalid_input_reprompts(monkeypatch, capsys, response):
+    monkeypatch.setattr(mod, 'validate_folders', lambda path: ['images'])
+    process = MagicMock()
+    monkeypatch.setattr(mod, 'process_image', process)
+    answers = iter(['maybe', '', response])
+    monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
+    assert mod.select_channel_name('input.json') is None
+    process.assert_not_called()
+    output = capsys.readouterr()
+    assert output.out.count('Please enter yes, no, or q.') == 2
+    assert 'Analysis canceled.' in output.out
+    assert 'Traceback' not in output.out + output.err
+
+
+def test_output_path_error_is_still_an_error_before_any_writes(tmp_path, monkeypatch, runtime):
+    first = source_folder(tmp_path, 'first')
+    second = source_folder(tmp_path, 'second')
+    bad_output = second / 'foci_assay'
+    bad_output.write_text('not a directory')
+    with pytest.raises(NotADirectoryError, match='Output path is not a directory'):
+        run(monkeypatch, [first, second], ())
+    runtime.openImage.assert_not_called()
+    assert not (first / 'foci_assay').exists()
+    assert bad_output.read_text() == 'not a directory'

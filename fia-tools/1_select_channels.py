@@ -120,7 +120,7 @@ def select_settings():
 
 
 def confirm_output_folders(valid_folders):
-    """Confirm every existing output folder before initializing or writing anything."""
+    """Return selected/skipped folders, or None for cancellation, before any writes."""
     output_folders = [Path(folder) / 'foci_assay' for folder in valid_folders]
     existing = []
     print("\nChecking output folders before analysis:")
@@ -133,17 +133,30 @@ def confirm_output_folders(valid_folders):
         else:
             print(f"New output folder: {folder}")
 
-    for folder in existing:
+    selected, skipped = [], []
+    for index, (input_folder, folder) in enumerate(zip(valid_folders, output_folders), 1):
+        if folder not in existing:
+            selected.append(input_folder)
+            continue
         while True:
             response = input(
-                f"The folder {folder} already exists. "
-                "Do you want to overwrite existing results? (yes/no): "
+                f"\n[{index}/{len(valid_folders)}] {folder}\n"
+                "Existing results found. Do you want to overwrite prepared-channel results? "
+                "(yes/no; q = cancel all): "
             ).strip().lower()
             if response in ('yes', 'y'):
+                selected.append(input_folder)
+                print("SELECTED: Prepared-channel results will be overwritten.")
                 break
             if response in ('no', 'n'):
-                raise ValueError("Analysis canceled by user before processing; existing results were not changed.")
-            print("Please enter yes or no.")
+                skipped.append(input_folder)
+                print("SKIPPED: Existing results preserved.")
+                break
+            if response == 'q':
+                print("Analysis canceled. Existing results preserved; no processing started.")
+                return None
+            print("Please enter yes, no, or q.")
+    return selected, skipped
 
 
 def process_image(valid_folders: list, input_json_path=None) -> list:
@@ -171,18 +184,26 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
 
     if not valid_folders:
         raise ValueError("No supported input images were found; analysis was not started.")
-    confirm_output_folders(valid_folders)
+    selection = confirm_output_folders(valid_folders)
+    if selection is None:
+        return []
+    selected_folders, skipped_folders = selection
+    if not selected_folders:
+        print("No folders selected for processing.\nExisting results preserved. Nothing to do.")
+        return []
     settings = None
     run_id = uuid4().hex
     script_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     statuses = []
 
-    total = sum(1 for folder in valid_folders for path in Path(folder).iterdir()
+    total = sum(1 for folder in selected_folders for path in Path(folder).iterdir()
                 if path.is_file() and not path.name.startswith('.')
                 and path.suffix.lower() in ('.nd2', '.tif', '.tiff'))
+    print(f"\nReady: {len(selected_folders)} folder(s), {total} images. "
+          f"Skipped: {len(skipped_folders)} folder(s).")
     with CompactProgress(total) as progress:
         # Process images in each folder
-        for folder_index, input_folder in enumerate(valid_folders, 1):
+        for folder_index, input_folder in enumerate(selected_folders, 1):
             # Create a new folder 'foci_assay' for processed images
             processed_folder = os.path.join(input_folder,
                                             'foci_assay')
@@ -228,7 +249,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                         metadata_file.write("================\n")
 
                         # Part 1: Image processing
-                        progress.group(f"Folder {folder_index}/{len(valid_folders)}: {input_folder}", len(run.files))
+                        progress.group(f"Folder {folder_index}/{len(selected_folders)}: {input_folder}", len(run.files))
 
                         for filename in run.files:
                             file_ext = os.path.splitext(filename)[1].lower()
@@ -432,16 +453,20 @@ def select_channel_name(input_json_path: str) -> None:
     valid_folders = validate_folders(input_json_path)
 
     # Confirm whether the user wants to start analysis
-    start_analysis = input("Start analyzing "
-                           "files in the specified folders? "
-                           "(yes/no): ").strip().lower()
-    if start_analysis in ('no', 'n'):
-        raise ValueError("Analysis canceled by user.")
-    elif start_analysis not in ('yes', 'y', 'no', 'n'):
-        raise ValueError("Incorrect input. Please enter yes/no")
+    while True:
+        start_analysis = input("Start analyzing files in the specified folders? "
+                               "(yes/no; q = cancel all): ").strip().lower()
+        if start_analysis in ('no', 'n', 'q'):
+            print("Analysis canceled. Existing results preserved; no processing started.")
+            return
+        if start_analysis in ('yes', 'y'):
+            break
+        print("Please enter yes, no, or q.")
 
     # Process images
     statuses = process_image(valid_folders, input_json_path)
+    if not statuses:
+        return
     if all(status == "SUCCESS" for status in statuses):
         print("\nPart 1 successfully completed.")
     else:
