@@ -2,6 +2,7 @@
 
 import logging
 import platform
+import re
 import time
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -10,6 +11,15 @@ from uuid import uuid4
 
 import tifffile
 from terminal_progress import ProgressLogHandler
+
+
+class _BioFormatsProgressFilter(logging.Filter):
+    """Omit routine block percentages from this file without hiding diagnostics."""
+
+    def filter(self, record):
+        if record.levelno >= logging.WARNING:
+            return True
+        return re.match(r"Bio-Formats: Parsing block .*? \d+%", record.getMessage()) is None
 
 
 class ChannelRunLog:
@@ -44,6 +54,7 @@ class ChannelRunLog:
                 archived = archive / f"{archived.stem}_{uuid4().hex}.log"
             log_path.rename(archived)
         handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+        handler.addFilter(_BioFormatsProgressFilter())
         formatter = logging.Formatter("%(asctime)sZ - %(levelname)s - %(message)s")
         formatter.converter = time.gmtime
         handler.setFormatter(formatter)

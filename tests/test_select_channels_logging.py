@@ -1,5 +1,6 @@
 """Exercise folder journals with real TIFF writes and a stubbed ImageJ runtime."""
 
+import io
 import json
 import logging
 import sys
@@ -10,6 +11,7 @@ import numpy as np
 import pytest
 import tifffile
 from channel_run_log import ChannelRunLog
+from terminal_progress import CompactProgress
 
 mod = sys.modules["select_channels"]
 
@@ -57,6 +59,39 @@ def run(monkeypatch, folders, choices=("3", "1", "1", "2"), input_json=None):
 
 def journal(folder):
     return (folder / "foci_assay" / "1_log.log").read_text()
+
+
+def test_channel_journal_omits_block_percentages_but_keeps_phases_and_diagnostics(tmp_path):
+    folder = source_folder(tmp_path, filenames=("image.nd2",))
+    (folder / "foci_assay").mkdir()
+    stream = io.StringIO()
+    with CompactProgress(1, stream) as progress:
+        with ChannelRunLog(folder, None, "test", "digest", progress) as audit:
+            audit.inventory()
+            progress.logger = audit.logger
+            audit.start_image("image.nd2")
+            progress.phase("Opening source")
+            progress.bioformats_event("ND2Reader initializing image.nd2")
+            for percent in range(100):
+                progress.bioformats_event(f"Parsing block 'ImageDataSeq' {percent}%")
+            progress.bioformats_event("Parsing block 'ND2 FILEMAP ' 99%")
+            assert (progress.stage, progress.percent) == ("ND2 structure", 99)
+            progress.bioformats_event("Parsing block 'ImageDataSeq' 42%: warning", logging.WARNING)
+            progress.bioformats_event("Parsing block 'ImageDataSeq' 42%: error", logging.ERROR)
+            progress.phase("Creating nuclei MAX projection")
+            audit.finish_image()
+
+    log = journal(folder)
+    assert "INFO - Bio-Formats: Parsing block" not in log
+    assert log.count("PHASE | file=image.nd2 | ND2 structure") == 1
+    assert "PHASE | file=image.nd2 | Opening source" in log
+    assert "PHASE | file=image.nd2 | Creating nuclei MAX projection" in log
+    assert "ND2Reader initializing image.nd2" in log
+    for level, message in (("WARNING", "warning"), ("ERROR", "error")):
+        assert f"{level} - Bio-Formats: Parsing block 'ImageDataSeq' 42%: {message}" in log
+        assert stream.getvalue().count(f"42%: {message}") == 1
+    assert "IMAGE_COMPLETED | file=image.nd2 | elapsed_s=" in log
+    assert "STARTED | run_id=test" in log and "FINISHED | status=SUCCESS" in log
 
 
 @pytest.mark.parametrize("file_type,filename,processing", [
