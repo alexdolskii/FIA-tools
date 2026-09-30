@@ -193,8 +193,7 @@ class TestStarDistReuse(unittest.TestCase):
              patch("builtins.input", return_value="q"), \
              patch.object(mod, "find_nuclei") as find, \
              patch.object(mod, "process_nuclei") as process:
-            with self.assertRaisesRegex(ValueError, "canceled"):
-                mod.main("unused.json", 2000)
+            self.assertEqual(mod.main("unused.json", 2000), 130)
         find.assert_not_called()
         process.assert_not_called()
 

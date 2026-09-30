@@ -21,7 +21,7 @@ def select_channels():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--input', type=str, required=True)
     args = parser.parse_args()
-    _load_script("1_select_channels").select_channel_name(args.input)
+    return _load_script("1_select_channels").select_channel_name(args.input)
 
 
 def generate_nuclei_mask():
@@ -29,7 +29,7 @@ def generate_nuclei_mask():
     parser.add_argument('-i', '--input', type=str, required=True)
     parser.add_argument('-p', '--particle_size', type=int, default=2500)
     args = parser.parse_args()
-    _load_script("2_nuclei_mask_generation").main(args.input, args.particle_size)
+    return _load_script("2_nuclei_mask_generation").main(args.input, args.particle_size)
 
 
 def generate_foci_mask():
@@ -37,7 +37,7 @@ def generate_foci_mask():
     parser.add_argument('-i', '--input', type=str, required=True)
     parser.add_argument('-f', '--foci_threshold', type=int, default=150)
     args = parser.parse_args()
-    _load_script("3_foci_mask_generation").main_filter_foci(args.input, args.foci_threshold)
+    return _load_script("3_foci_mask_generation").main_filter_foci(args.input, args.foci_threshold)
 
 
 def quantify_foci():
@@ -45,7 +45,7 @@ def quantify_foci():
     parser.add_argument('-i', '--input', type=str, required=True)
     parser.add_argument('-j', '--jobs', type=int, default=4)
     args = parser.parse_args()
-    _load_script("4_foci_quantification").main_summarize_res(args.input, njobs=args.jobs)
+    return _load_script("4_foci_quantification").main_summarize_res(args.input, njobs=args.jobs)
 
 
 def quantify_nuclear_intensity():

@@ -13,6 +13,7 @@ import imagej
 import numpy as np
 import spatial_calibration as spatial
 from csbdeep.utils import normalize
+from interactive_input import ask_choice, ask_yes_no, cancelable
 from nuclei_morphology import NucleiMorphologyExport
 from scyjava import jimport
 from skimage.io import imread, imsave
@@ -170,33 +171,29 @@ def select_stardist_sources(nuclei_folders):
             if reuse_remaining:
                 answer = "1"
             else:
-                answer = input(
+                answer = ask_choice(
                     "Reuse folder [number; Enter = 1], [n] run StarDist again, "
                     "[a] reuse the latest valid run for this and remaining "
-                    "inputs, or [q] cancel: "
-                ).strip().lower() or "1"
-            if answer == "q":
-                raise ValueError("Analysis canceled by user.")
+                    "inputs, or [q] cancel: ",
+                    {**{str(i): str(i) for i in range(1, len(usable) + 1)},
+                     "n": "n", "a": "a"}, default="1",
+                    error="Please choose a listed folder or n, a, q.")
             if answer == "n":
                 selected[nuclei_folder] = None
                 break
             if answer == "a":
                 reuse_remaining = True
                 answer = "1"
-            if not answer.isdecimal() or not 1 <= int(answer) <= len(usable):
-                print("Please choose a listed folder or n, a, q.")
-                continue
             chosen = usable[int(answer) - 1]
             if chosen["legacy"] and not legacy_remaining:
                 print("This older run has no provenance metadata. File names, "
                       "dimensions and readability passed validation, but "
                       "unchanged source content and settings cannot be verified.")
                 scope = "all reused legacy runs" if reuse_remaining else "this run"
-                confirmed = input(
+                confirmed = ask_yes_no(
                     f"Confirm unchanged source images and StarDist settings "
-                    f"for {scope} [y/N]: "
-                ).strip().lower()
-                if confirmed not in ("y", "yes"):
+                    f"for {scope} [y/N; Enter = no; q = cancel]: ", default=False)
+                if not confirmed:
                     reuse_remaining = False
                     print("Legacy reuse was not confirmed. Choose another option.")
                     continue
@@ -499,8 +496,9 @@ def process_nuclei(valid_folders: list,
               f"minimum area: {particle_size} pixels^2.")
 
 
+@cancelable
 def main(input_json_path: str,
-         particle_size: int) -> None:
+         particle_size: int):
     """
     Main function to analyze and process nuclei.
     """
@@ -544,4 +542,4 @@ if __name__ == '__main__':
                              "Default is 2500",
                         default=2500)
     args = parser.parse_args()
-    main(args.input, args.particle_size)
+    raise SystemExit(main(args.input, args.particle_size))

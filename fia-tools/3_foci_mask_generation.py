@@ -7,6 +7,7 @@ from datetime import datetime
 import fiji_config
 import imagej
 import spatial_calibration as spatial
+from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
 from scyjava import jimport
 from validate_folders import validate_input_file
 
@@ -292,7 +293,8 @@ def filter_foci(folder: dict,
     print(f"  - Results saved to: {foci_mask_folder}\n")
 
 
-def main_filter_foci(input_json_path: str, foci_threshold: int) -> None:
+@cancelable
+def main_filter_foci(input_json_path: str, foci_threshold: int):
     """
     Main entry point: validate & process machine-learning results for Foci.
     We prompt once for a subfolder to analyze, then apply that choice to all
@@ -333,23 +335,16 @@ def main_filter_foci(input_json_path: str, foci_threshold: int) -> None:
     for i, sb in enumerate(all_subfolders_list, start=1):
         print(f"  {i}) {sb}")
 
-    choice = input("Select subfolder to analyze (enter a number): ").strip()
-    try:
-        choice_idx = int(choice) - 1
-        if choice_idx < 0 or choice_idx >= len(all_subfolders_list):
-            raise IndexError
-    except (ValueError, IndexError):
-        raise ValueError("Invalid choice. Please run again.")
+    choice_idx = ask_integer(
+        f"Select subfolder to analyze (1-{len(all_subfolders_list)}; q = cancel): ",
+        1, len(all_subfolders_list)) - 1
 
     chosen_subfolder = all_subfolders_list[choice_idx]
 
     # --- Confirm user wants to proceed ---
-    start_processing = input(f"\nYou selected '{chosen_subfolder}'. "
-                             f"Proceed? (yes/no): ").strip().lower()
-    if start_processing in ('no', 'n'):
-        raise ValueError("Analysis canceled by user.")
-    elif start_processing not in ('yes', 'y', 'no', 'n'):
-        raise ValueError("Incorrect input. Please enter yes/no.")
+    if not ask_yes_no(f"\nYou selected '{chosen_subfolder}'. "
+                      "Proceed? (yes/no; q = cancel): "):
+        raise Cancelled()
 
     # --- Process that subfolder in each valid folder ---
     for key in folder_keys:
@@ -374,4 +369,4 @@ if __name__ == '__main__':
                              "Default is 150",
                         default=150)
     args = parser.parse_args()
-    main_filter_foci(args.input, args.foci_threshold)
+    raise SystemExit(main_filter_foci(args.input, args.foci_threshold))

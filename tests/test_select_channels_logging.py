@@ -61,6 +61,39 @@ def journal(folder):
     return (folder / "foci_assay" / "1_log.log").read_text()
 
 
+@pytest.mark.parametrize("prefix", [[], ["1"], ["1", "1"], ["1", "1", "1"]])
+@pytest.mark.parametrize("stop", ["q", KeyboardInterrupt(), EOFError()])
+def test_settings_cancellation_preserves_images_and_remaining_folder(
+        tmp_path, monkeypatch, runtime, prefix, stop, capsys):
+    first = source_folder(tmp_path, "first")
+    second = source_folder(tmp_path, "second")
+    previous = {**existing_results(first), **existing_results(second)}
+    monkeypatch.setattr(mod, "validate_folders", lambda path: [str(first), str(second)])
+    answers = iter(["yes", "yes", "yes", *prefix, stop])
+
+    def answer(prompt):
+        value = next(answers)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    monkeypatch.setattr("builtins.input", answer)
+    assert mod.select_channel_name("input.json") == 130
+    runtime.openImage.assert_not_called()
+    runtime.saveAs.assert_not_called()
+    for path, content in previous.items():
+        if path != first / "foci_assay" / "1_log.log":
+            assert path.read_bytes() == content
+    assert list((first / "foci_assay" / "logs").glob("1_log_*.log"))[0].read_text() == "previous log"
+    log = journal(first)
+    assert "status=CANCELLED" in log and "attempted=0" in log
+    assert "RUN_ABORTED" not in log and "Traceback" not in log
+    assert "FAILED" not in log
+    captured = capsys.readouterr()
+    assert "Traceback" not in captured.out + captured.err
+    assert "successfully completed" not in captured.out
+
+
 def test_channel_journal_omits_block_percentages_but_keeps_phases_and_diagnostics(tmp_path):
     folder = source_folder(tmp_path, filenames=("image.nd2",))
     (folder / "foci_assay").mkdir()

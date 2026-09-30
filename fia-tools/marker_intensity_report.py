@@ -15,6 +15,7 @@ import matplotlib
 import numpy as np
 import openpyxl
 import scipy
+from interactive_input import ask_choice
 from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, render_plots
 from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
@@ -73,14 +74,9 @@ def choose_collections(roots, mode):
             print(f'{index}. {path} | {run}')
         choices = {'1': 'latest', 'latest': 'latest', '2': 'all', 'all': 'all',
                    '3': 'manual', 'manual': 'manual'}
-        while True:
-            answer = input('Collections: 1 = latest per experiment; 2 = all; 3 = manual; q = cancel: ').strip().lower()
-            if answer == 'q':
-                raise collect.Cancelled()
-            if answer in choices:
-                mode = choices[answer]
-                break
-            print('Enter latest (1), all (2), manual (3), or q.')
+        mode = ask_choice(
+            'Collections: 1 = latest per experiment; 2 = all; 3 = manual; q = cancel: ',
+            choices, error='Enter latest (1), all (2), manual (3), or q.')
     if mode == 'latest':
         selected = [values[-1][0] for values in contexts.values() if values]
     elif mode == 'all':

@@ -9,6 +9,8 @@ import threading
 import time
 from pathlib import Path
 
+from interactive_input import CANCELLATION_EXCEPTIONS
+
 
 def short_image_name(path):
     name = Path(path).name
@@ -47,7 +49,7 @@ class CompactProgress:
         if self._thread:
             self._thread.join(timeout=1)
         if exc_type is not None and self.image is not None:
-            status = 'CANCELLED' if issubclass(exc_type, (KeyboardInterrupt, EOFError)) else 'INTERRUPTED'
+            status = 'CANCELLED' if issubclass(exc_type, CANCELLATION_EXCEPTIONS) else 'INTERRUPTED'
             self.message(f'{status}: {self.image} | stage={self.stage}')
         with self._lock:
             self._clear()

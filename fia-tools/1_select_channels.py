@@ -11,6 +11,7 @@ import imagej
 import spatial_calibration as spatial
 from bioformats_progress import bioformats_progress
 from channel_run_log import ChannelRunLog
+from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
 from scyjava import jimport
 from terminal_progress import CompactProgress
 from validate_folders import validate_input_file
@@ -86,34 +87,22 @@ def select_settings():
     print("1. ND2 files (multi-channel Z-stacks)")
     print("2. Multi-channel TIFF files with Z-stacks")
     print("3. 2D multi-channel TIFF files (already projections)")
-    file_type = int(input("Enter choice (1-3): "))
-    if file_type not in [1, 2, 3]:
-        raise ValueError("Invalid file type selection (must be 1-3).")
+    file_type = ask_integer("Enter choice (1-3; q = cancel): ", 1, 3)
 
     # Request the nuclei segmentation channel (1-based).
-    nuclei_channel = int(input("Enter the nuclei segmentation "
-                               "channel number (starting from 1): "))
-    if nuclei_channel not in range(1, 13):
-        raise ValueError("Invalid channel number for Nuclei (must be 1-12).")
+    nuclei_channel = ask_integer("Enter the nuclei segmentation "
+                                 "channel number (1-12; q = cancel): ", 1, 12)
 
     # Marker channels serve either the foci or nuclear-intensity workflow.
     print("Marker channels can be used for foci analysis or nuclear marker-intensity measurements.")
-    num_foci_channels = int(input("How many marker "
-                                  "channels do you want to process? "))
-    if num_foci_channels < 1:
-        raise ValueError("Number of marker "
-                         "channels must be at least 1.")
+    num_foci_channels = ask_integer("How many marker channels do you want to "
+                                    "process? (at least 1; q = cancel): ", 1)
 
     # Request channel numbers for each marker (1-based).
     foci_channels = []
     for i in range(num_foci_channels):
-        channel = int(input(f"Enter the channel "
-                            f"number for marker {i + 1} "
-                            f"(starting from 1): "))
-        if channel not in range(1, 13):
-            raise ValueError(f"Invalid channel "
-                             f"number for marker {i + 1} "
-                             f"(must be 1-12).")
+        channel = ask_integer(f"Enter the channel number for marker {i + 1} "
+                              "(1-12; q = cancel): ", 1, 12)
         foci_channels.append(channel)
 
     return file_type, nuclei_channel, foci_channels
@@ -138,24 +127,21 @@ def confirm_output_folders(valid_folders):
         if folder not in existing:
             selected.append(input_folder)
             continue
-        while True:
-            response = input(
+        try:
+            overwrite = ask_yes_no(
                 f"\n[{index}/{len(valid_folders)}] {folder}\n"
                 "Existing results found. Do you want to overwrite prepared-channel results? "
                 "(yes/no; q = cancel all): "
-            ).strip().lower()
-            if response in ('yes', 'y'):
-                selected.append(input_folder)
-                print("SELECTED: Prepared-channel results will be overwritten.")
-                break
-            if response in ('no', 'n'):
-                skipped.append(input_folder)
-                print("SKIPPED: Existing results preserved.")
-                break
-            if response == 'q':
-                print("Analysis canceled. Existing results preserved; no processing started.")
-                return None
-            print("Please enter yes, no, or q.")
+            )
+        except Cancelled:
+            print("Analysis canceled. Existing results preserved; no processing started.")
+            return None
+        if overwrite:
+            selected.append(input_folder)
+            print("SELECTED: Prepared-channel results will be overwritten.")
+        else:
+            skipped.append(input_folder)
+            print("SKIPPED: Existing results preserved.")
     return selected, skipped
 
 
@@ -444,7 +430,8 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
     return statuses
 
 
-def select_channel_name(input_json_path: str) -> None:
+@cancelable
+def select_channel_name(input_json_path: str):
     """
     Reads the JSON file to get valid folders, then prompts the user
     for file type and channel numbers, and processes images accordingly.
@@ -453,15 +440,14 @@ def select_channel_name(input_json_path: str) -> None:
     valid_folders = validate_folders(input_json_path)
 
     # Confirm whether the user wants to start analysis
-    while True:
-        start_analysis = input("Start analyzing files in the specified folders? "
-                               "(yes/no; q = cancel all): ").strip().lower()
-        if start_analysis in ('no', 'n', 'q'):
-            print("Analysis canceled. Existing results preserved; no processing started.")
-            return
-        if start_analysis in ('yes', 'y'):
-            break
-        print("Please enter yes, no, or q.")
+    try:
+        start_analysis = ask_yes_no("Start analyzing files in the specified folders? "
+                                    "(yes/no; q = cancel all): ")
+    except Cancelled:
+        start_analysis = False
+    if not start_analysis:
+        print("Analysis canceled. Existing results preserved; no processing started.")
+        return
 
     # Process images
     statuses = process_image(valid_folders, input_json_path)
@@ -481,4 +467,4 @@ if __name__ == '__main__':
                         help="JSON file with all paths of directories",
                         required=True)
     args = parser.parse_args()
-    select_channel_name(args.input)
+    raise SystemExit(select_channel_name(args.input))

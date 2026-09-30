@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import spatial_calibration as spatial
+from interactive_input import Cancelled, ask_yes_no, cancelable
 from PIL import Image, ImageDraw
 from skimage import io, measure
 from validate_folders import validate_input_file
@@ -605,7 +606,8 @@ def parallel_processing(nuclei_files: list,
     return df
 
 
-def main_summarize_res(input_json_path: str, njobs=4) -> None:
+@cancelable
+def main_summarize_res(input_json_path: str, njobs=4):
     """
     Main function:
       1) Reads JSON with folder paths,
@@ -621,16 +623,11 @@ def main_summarize_res(input_json_path: str, njobs=4) -> None:
     if not folder_dicts:
         raise ValueError("No valid folders found in JSON.")
 
-    proceed_processing = input("Start processing? (yes/no): ").strip().lower()
-    if proceed_processing in ('no', 'n'):
-        raise ValueError("Analysis canceled by user.")
-    elif proceed_processing not in ('yes', 'y', 'no', 'n'):
-        raise ValueError("Incorrect input. Please enter yes/no")
+    if not ask_yes_no("Start processing? (yes/no; q = cancel): "):
+        raise Cancelled()
 
-    co_loc_answer = (input("Do you want to perform "
-                           "colocalization analysis? (yes/no): ")
-                     .strip().lower())
-    perform_colocalization = (co_loc_answer in ("yes", "y"))
+    perform_colocalization = ask_yes_no(
+        "Do you want to perform colocalization analysis? (yes/no; q = cancel): ")
 
     for base_folder, info in folder_dicts.items():
         foci_assay_folder = info["foci_assay_folder"]
@@ -698,4 +695,4 @@ if __name__ == "__main__":
                         help="Number of CPU to run the script. "
                              "Default is 4")
     args = parser.parse_args()
-    main_summarize_res(args.input, njobs=args.jobs)
+    raise SystemExit(main_summarize_res(args.input, njobs=args.jobs))

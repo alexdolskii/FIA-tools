@@ -13,6 +13,7 @@ from nuclear_intensity_imagej import METRICS, ImageJEngine
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
 from terminal_progress import CompactProgress, ProgressLogHandler
+from interactive_input import Cancelled, ask_integer, choose_indices as choose, parse_selection
 
 RUN_PATTERN = re.compile(r'^Final_Nuclei_Mask_(\d{8}_\d{6})$')
 MARKER_PATTERN = re.compile(r'^Foci_([1-9][0-9]*)_Channel_([1-9][0-9]*)$')
@@ -33,10 +34,6 @@ NUCLEI_COLUMNS = IDENTIFIERS + ['Nucleus_ID'] + EXPORT_METRICS + [
 IMAGE_COLUMNS = IDENTIFIERS + ['Status', 'Error'] + COUNTS + [
     f'{metric}_{stat}' for metric in EXPORT_METRICS for stat in ('Mean', 'Median', 'IQR')
 ] + ['Marker_image', 'Numbered_image']
-
-
-class Cancelled(Exception):
-    """The user canceled before any measurement output was created."""
 
 
 def visible_files(folder, extensions):
@@ -113,29 +110,6 @@ def select_markers(experiments):
             print(f'   {root}: {availability}')
     return [catalog[index] for index in choose(
         'Select marker numbers (e.g. 1,3), all, or q: ', len(catalog))]
-
-
-def parse_selection(answer, count):
-    answer = answer.strip().lower()
-    if answer == 'q':
-        raise Cancelled()
-    if answer in ('a', 'all'):
-        return list(range(count))
-    try:
-        numbers = [int(value.strip()) for value in answer.split(',')]
-    except ValueError as error:
-        raise ValueError('Enter comma-separated numbers, all, or q.') from error
-    if not numbers or any(number < 1 or number > count for number in numbers):
-        raise ValueError(f'Choose numbers between 1 and {count}.')
-    return sorted({number - 1 for number in numbers})
-
-
-def choose(prompt, count):
-    while True:
-        try:
-            return parse_selection(input(prompt), count)
-        except ValueError as error:
-            print(error)
 
 
 def fingerprint(path):
@@ -221,25 +195,22 @@ def select_runs(records):
     print('\nChoose mask runs: 1 = latest compatible per experiment and marker; '
           '2 = all compatible; 3 = manual; q = cancel.')
     while True:
-        answer = input('Mask-run selection: ').strip().lower()
-        if answer == 'q':
-            raise Cancelled()
-        if answer == '1':
+        answer = ask_integer('Mask-run selection (1-3; q = cancel): ', 1, 3)
+        if answer == 1:
             latest = {}
             for record in eligible:
                 key = (record['dataset'], record['marker']['name'])
                 if key not in latest or record['path'].name > latest[key]['path'].name:
                     latest[key] = record
             return list(latest.values())
-        if answer == '2':
+        if answer == 2:
             return eligible
-        if answer == '3':
+        if answer == 3:
             for index, record in enumerate(eligible, 1):
                 print(f"{index}. {record['dataset']} / {record['marker']['name']} / {record['path'].name} "
                       f"(-p {record['metadata'].get('particle_size_pixels_squared')})")
             return [eligible[index] for index in choose(
                 'Select run numbers (e.g. 1,3), all, or q: ', len(eligible))]
-        print('Enter 1, 2, 3, or q.')
 
 
 def new_output(parent, prefix):
@@ -485,12 +456,8 @@ def main(input_path, mode=None):
         if mode is None:
             print('Input type: 1 = ND2 Z-stack; 2 = multichannel TIFF Z-stack; '
                   '3 = 2D multichannel TIFF (assumed MAX projection).')
-            while mode is None:
-                answer = input('Input type (1-3, q to cancel): ').strip().lower()
-                if answer == 'q':
-                    raise Cancelled()
-                if answer in ('1', '2', '3'):
-                    mode = INPUT_MODES[int(answer) - 1]
+            answer = ask_integer('Input type (1-3; q = cancel): ', 1, 3)
+            mode = INPUT_MODES[answer - 1]
         if mode not in INPUT_MODES:
             raise ValueError('Invalid input type.')
         print('Initializing ImageJ and validating candidate mask runs...')

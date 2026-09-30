@@ -189,14 +189,6 @@ class TestProcessImage:
         assert (foci_assay / "Nuclei").exists()
         assert (foci_assay / "image_metadata.txt").exists()
 
-    def test_raises_for_invalid_file_type_selection(self, tmp_path):
-        # PRECONDITION: one input folder, but the user enters 0 (invalid).
-        img_dir = self._make_folder_with_tif(tmp_path)
-
-        with patch.object(mod, "imagej"), \
-             patch.object(mod, "jimport"), \
-             patch("builtins.input", side_effect=["0"]):
-
-            # STEP / RESULT: ValueError because file type 0 is not in [1, 2, 3].
-            with pytest.raises(ValueError, match="Invalid file type"):
-                mod.process_image([str(img_dir)])
+    def test_invalid_file_type_selection_repeats_the_question(self):
+        with patch("builtins.input", side_effect=["0", "abc", "3", "1", "1", "2"]):
+            assert mod.select_settings() == (3, 1, [2])

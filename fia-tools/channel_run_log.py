@@ -10,6 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import tifffile
+from interactive_input import CANCELLATION_EXCEPTIONS
 from terminal_progress import ProgressLogHandler
 
 
@@ -37,6 +38,7 @@ class ChannelRunLog:
         self.files = []
         self.completed = 0
         self.failed = 0
+        self.cancelled = 0
         self.attempted = 0
         self.output_files = 0
         self.current_image = None
@@ -125,10 +127,18 @@ class ChannelRunLog:
 
     def __exit__(self, exc_type, exc_value, traceback):
         try:
-            if exc_type is not None:
+            if exc_type is not None and issubclass(exc_type, CANCELLATION_EXCEPTIONS):
+                self.status = "CANCELLED"
+                if self.current_image is not None:
+                    self.cancelled += 1
+                    self.logger.info("IMAGE_CANCELLED | file=%s | elapsed_s=%.3f",
+                                     self.current_image, time.monotonic() - self.image_started)
+                    self.current_image = None
+                self.logger.info("RUN_CANCELLED | Analysis canceled by user.")
+            elif exc_type is not None:
                 if self.current_image is not None:
                     self.fail_image(str(exc_value) or exc_type.__name__)
-                self.status = "CANCELLED" if issubclass(exc_type, KeyboardInterrupt) else "FAILED"
+                self.status = "FAILED"
                 self.logger.error("RUN_ABORTED", exc_info=(exc_type, exc_value, traceback))
             elif not self.files:
                 self.status = "NO_INPUT"
@@ -137,10 +147,10 @@ class ChannelRunLog:
             else:
                 self.status = "SUCCESS"
             self.logger.info("FINISHED | status=%s | input_images=%d | attempted=%d | completed=%d | "
-                             "failed=%d | not_attempted=%d | output_files=%d | elapsed_s=%.3f",
+                             "failed=%d | not_attempted=%d | output_files=%d | elapsed_s=%.3f | cancelled=%d",
                              self.status, len(self.files), self.attempted, self.completed,
                              self.failed, len(self.files) - self.attempted, self.output_files,
-                             time.monotonic() - self.started)
+                             time.monotonic() - self.started, self.cancelled)
             message = f"Folder status: {self.status}. Log: {self.output / '1_log.log'}"
             if self.progress:
                 self.progress.message(message)

@@ -307,13 +307,10 @@ class TestMainFilterFoci:
     def test_cancels_when_user_confirms_no(self, test_input_json):
         # PRECONDITION: valid JSON; user chooses "1" for subfolder then "no".
         with patch("builtins.input", side_effect=["1", "no"]):
-            # STEP / RESULT: ValueError because the user cancelled.
-            with pytest.raises(ValueError, match="canceled"):
-                mod.main_filter_foci(test_input_json, foci_threshold=150)
+            assert mod.main_filter_foci(test_input_json, foci_threshold=150) == 130
 
-    def test_raises_for_invalid_subfolder_choice(self, test_input_json):
+    def test_invalid_subfolder_choice_allows_retry_or_cancellation(self, test_input_json):
         # PRECONDITION: valid JSON; user enters "999" which is out of range.
-        with patch("builtins.input", return_value="999"):
-            # STEP / RESULT: ValueError about invalid choice.
-            with pytest.raises(ValueError, match="[Ii]nvalid"):
-                mod.main_filter_foci(test_input_json, foci_threshold=150)
+        with patch("builtins.input", side_effect=["999", "q"]) as prompt:
+            assert mod.main_filter_foci(test_input_json, foci_threshold=150) == 130
+        assert prompt.call_count == 2

@@ -14,6 +14,7 @@ from pathlib import Path
 import spatial_calibration as spatial
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell
+from interactive_input import Cancelled, ask_integer, choose_indices
 
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Combined_Results_'
 COMBINED_NAME = 'FIA_Marker_Intensity_Combined.xlsx'
@@ -35,10 +36,6 @@ INFO_COLUMNS = ['Category', 'Item', 'Status', 'Source', 'Details', 'SHA256']
 
 class ValidationError(ValueError):
     """A result cannot be selected or safely combined."""
-
-
-class Cancelled(Exception):
-    """Interactive selection was canceled before collection."""
 
 
 def parts(path):
@@ -389,24 +386,6 @@ def discover_sources(input_path):
     return result
 
 
-def choose_indices(prompt, count, allow_none=False):
-    while True:
-        answer = input(prompt).strip().lower()
-        if answer == 'q':
-            raise Cancelled()
-        if allow_none and answer in ('none', 'n'):
-            return []
-        if answer in ('all', 'a'):
-            return list(range(count))
-        try:
-            indices = sorted({int(value.strip()) - 1 for value in answer.split(',')})
-            if indices and min(indices) >= 0 and max(indices) < count:
-                return indices
-        except ValueError:
-            pass
-        print(f'Enter numbers from 1 to {count}, all, ' + ('none, ' if allow_none else '') + 'or q.')
-
-
 def scan_source(root):
     context = {'root': root, 'morphology': [], 'intensity': [], 'markers': set(), 'checks': []}
     assay = root / 'foci_assay'
@@ -446,20 +425,17 @@ def select_morphologies(contexts):
         raise ValidationError('No completed valid morphology spreadsheets were found')
     print('\nChoose nucleus runs: 1 = latest valid per experiment; 2 = all valid; 3 = manual; q = cancel.')
     while True:
-        answer = input('Nucleus-run selection: ').strip().lower()
-        if answer == 'q':
-            raise Cancelled()
-        if answer == '1':
+        answer = ask_integer('Nucleus-run selection (1-3; q = cancel): ', 1, 3)
+        if answer == 1:
             return [max(context['morphology'], key=lambda b: b['run'].name)
                     for context in contexts if context['morphology']]
-        if answer == '2':
+        if answer == 2:
             return bundles
-        if answer == '3':
+        if answer == 3:
             for index, bundle in enumerate(bundles, 1):
                 print(f"{index}. {bundle['root']} / {bundle['run'].name} "
                       f"| -p {bundle['particle_size']:g}")
             return [bundles[index] for index in choose_indices('Select run numbers, all, or q: ', len(bundles))]
-        print('Enter 1, 2, 3, or q.')
 
 
 def select_markers(bundles, contexts):
