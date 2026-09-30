@@ -231,6 +231,7 @@ class TestFilterFoci:
         fake_mask = MagicMock()
         mock_IJ = MagicMock()
         mock_IJ.openImage.return_value = fake_imp
+        mock_IJ.saveAs.side_effect = lambda image, fmt, path: Path(path).write_bytes(b"saved mask")
         mock_win = MagicMock()
         mock_win.getImage.return_value = fake_mask
 
@@ -276,6 +277,7 @@ class TestFilterFoci:
             mock_imagej.init.return_value = MagicMock()
             mock_IJ = MagicMock()
             mock_IJ.openImage.return_value = MagicMock()
+            mock_IJ.saveAs.side_effect = lambda image, fmt, path: Path(path).write_bytes(b"saved mask")
             mock_jimport.side_effect = lambda cls: {
                 "ij.IJ": mock_IJ,
                 "ij.WindowManager": MagicMock(),

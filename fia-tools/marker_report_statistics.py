@@ -4,7 +4,7 @@ import math
 import warnings
 
 import numpy as np
-from marker_report_data import COUNT, metric_specs
+from marker_report_data import COUNT, metric_value, report_specs
 from scipy.stats import ttest_ind
 
 STAT_COLUMNS = [
@@ -24,7 +24,8 @@ def observations(data, field, group):
         rows = [r for r in data['well_values'] if r['Metric'] == field and r['Group'] == group]
         return [r['Value'] for r in rows if r['Value'] is not None], 'well'
     population = data['images'] if field == COUNT else data['nuclei']
-    return [r[field] for r in population if r['Group'] == group and r[field] is not None], (
+    return [metric_value(r, field) for r in population
+            if r['Group'] == group and metric_value(r, field) is not None], (
         'image' if field == COUNT else 'nucleus')
 
 
@@ -89,7 +90,7 @@ def calculate_statistics(data):
     if data['stats_unit'] is None:
         data['statistics'] = []
         return data
-    specs, rows = metric_specs(data['markers']), []
+    specs, rows = report_specs(data), []
     for color, groups in data['blocks'].items():
         control = next(group for group, is_control in groups.items() if is_control)
         treatments = [group for group in groups if group != control]

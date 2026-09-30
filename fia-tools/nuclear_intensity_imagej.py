@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
+import spatial_calibration as spatial
 from scyjava import jimport
 
 METRICS = {
@@ -29,6 +30,7 @@ class ImageJEngine:
         try:
             # A source file is one analysis unit; never group neighboring files.
             reader.setGroupFiles(False)
+            reader.setMetadataStore(jimport('loci.formats.MetadataTools').createOMEXMLMetadata())
             reader.setId(str(path))
             yield reader
         finally:
@@ -37,6 +39,7 @@ class ImageJEngine:
     def _info(self, reader):
         tools = jimport('loci.formats.FormatTools')
         return {
+            **spatial.bioformats_calibration(reader),
             'Width_px': int(reader.getSizeX()),
             'Height_px': int(reader.getSizeY()),
             'Channels': int(reader.getSizeC()),
@@ -52,6 +55,9 @@ class ImageJEngine:
     def inspect(self, path, mode, channel):
         with self.reader(path) as reader:
             info = self._info(reader)
+            if Path(path).suffix.lower() in ('.tif', '.tiff'):
+                calibration, _ = spatial.tiff_calibration(path)
+                info.update(calibration)
         self.validate_info(info, mode, channel)
         return info
 
@@ -79,6 +85,9 @@ class ImageJEngine:
                                         expected_info['Height_px'])
         with self.reader(path) as reader:
             info = self._info(reader)
+            if Path(path).suffix.lower() in ('.tif', '.tiff'):
+                calibration, _ = spatial.tiff_calibration(path)
+                info.update(calibration)
             self.validate_info(info, mode, channel)
             if info != expected_info:
                 raise ValueError('Source dimensions/type changed after selection.')
@@ -108,6 +117,7 @@ class ImageJEngine:
                 processor = projected.getProcessor().duplicate()
             else:
                 processor = source.getProcessor().duplicate()
+            self._active_calibration = spatial.columns(info)
             result = ImagePlus('Marker MAX' if info['Z_planes'] > 1 else 'Marker',
                                processor)
             result.setIgnoreGlobalCalibration(True)
@@ -178,8 +188,11 @@ class ImageJEngine:
         marker.setIgnoreGlobalCalibration(True)
         marker.setCalibration(jimport('ij.measure.Calibration')())
         marker.getProcessor().resetThreshold()
+        saved_calibration = getattr(self, '_active_calibration', spatial.uncalibrated())
+        spatial.imagej_calibration(marker, saved_calibration, jimport)
         if not FileSaver(marker).saveAsTiff(str(folder / 'marker.tif')):
             raise OSError('Could not save marker TIFF.')
+        marker.setCalibration(jimport('ij.measure.Calibration')())
         marker.getProcessor().resetMinAndMax()
         preview = ImagePlus('Nuclear intensity QC', marker.getProcessor().convertToRGB())
         canvas = preview.getProcessor()
@@ -214,6 +227,7 @@ class ImageJEngine:
                 processor.resetThreshold()
                 binary_image = ImagePlus(f'Nucleus {nucleus_id}', processor)
                 try:
+                    spatial.imagej_calibration(binary_image, saved_calibration, jimport)
                     if not FileSaver(binary_image).saveAsTiff(str(folder / mask_name)):
                         raise OSError('Could not save individual nucleus mask.')
                 finally:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 import imagej
 import numpy as np
+import spatial_calibration as spatial
 from csbdeep.utils import normalize
 from nuclei_morphology import NucleiMorphologyExport
 from scyjava import jimport
@@ -342,6 +343,9 @@ def find_nuclei(nuclei_folders: list) -> list:
             new_file_name = f"{base_name}_StarDist_processed{ext}"
             output_path = os.path.join(output_folder, new_file_name)
             imsave(output_path, labels.astype(np.uint16))
+            calibration = spatial.projection_calibration(image_path, labels.shape, allow_bioformats=False)
+            if calibration is not None:
+                spatial.save_snapshot(output_path, calibration, labels.shape)
             run_metadata["masks"][new_file_name] = file_digest(output_path)
 
         complete = (
@@ -410,7 +414,7 @@ def process_nuclei(valid_folders: list,
                                 f"{filename}")
                 continue
 
-            if filename == STARDIST_METADATA:
+            if filename in (STARDIST_METADATA, spatial.MANIFEST):
                 continue
 
             # Check file extension

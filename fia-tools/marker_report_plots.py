@@ -7,7 +7,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
-from marker_report_data import COUNT, metric_specs
+import spatial_calibration as spatial
+from marker_report_data import COUNT, metric_value, report_specs
 from matplotlib.font_manager import FontProperties, fontManager
 from matplotlib.textpath import TextPath
 
@@ -70,10 +71,11 @@ def plot_specs(data):
         significant = {row['Metric'] for row in data.get('statistics', [])
                        if row['Category'] == 'Morphology' and row['Status'] == 'TESTED'
                        and row['P_Holm'] is not None and 0 <= row['P_Holm'] < 0.05}
-    for category, _, field, unit in metric_specs([]):
+    for category, _, field, unit in report_specs(data, []):
         if category == 'Morphology' and field in significant:
-            label = field.removesuffix('_px2').removesuffix('_px').replace('_', ' ').capitalize()
-            ylabel = label + (' (px²)' if unit == 'px2' else f' ({unit})')
+            label = field.removesuffix('_px2').removesuffix('_px').removesuffix('_um2').removesuffix('_um').replace('_', ' ').capitalize()
+            display_unit = {'px2': 'px²', 'um2': 'µm²', 'um': 'µm'}.get(unit, unit)
+            ylabel = label + f' ({display_unit})'
             specs.append(('Morphology_' + field, field, 'Nuclear morphology: ' + label, ylabel, 'nucleus'))
     return specs
 
@@ -83,12 +85,13 @@ def plot_rows(data):
     for name, field, _, _, observation in plot_specs(data):
         population = data['images'] if observation == 'image' else data['nuclei']
         for row in population:
-            if row[field] is None:
+            value = metric_value(row, field)
+            if value is None:
                 continue
             rows.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Group': row['Group'],
                          'Well': row['Well'], 'Image_name': row['Image_name'], 'Mask_name': row['Mask_name'],
                          'Nucleus_ID': row.get('Nucleus_ID') if observation == 'nucleus' else None,
-                         'Value': row[field]})
+                         'Value': value})
     return rows
 
 
@@ -205,7 +208,7 @@ def render_figure(data, spec, panels, points, comparisons, limits, high, span, n
         _render_figure(data, spec, panels, points, comparisons, limits, high, span, path)
 
 
-def short_plot_note(data, observation):
+def short_plot_note(data, observation, field=None):
     population = 'Non-border nuclei.' if observation == 'nucleus' else 'One point = one image; non-border nuclei counted.'
     threshold = data.get('min_nuclei', 0)
     filtering = f' Images: ≥{threshold} non-border nuclei.' if threshold else ' No image-count filter.'
@@ -214,16 +217,21 @@ def short_plot_note(data, observation):
     else:
         unit = 'well' if data['stats_unit'] == 'well' else observation
         inference = f' Welch + Holm; test unit: {unit}. Symbols and methods: report tables.'
-    return population + filtering + ' Box: median and IQR.' + inference
+    cohort = ''
+    if field in spatial.PHYSICAL_FIELDS or field in spatial.PHYSICAL_FIELDS.values():
+        label = 'Calibrated' if field in spatial.PHYSICAL_FIELDS.values() else 'Uncalibrated'
+        images = sum(row['Metric'] == field and row['Value'] is not None for row in data.get('image_values', []))
+        cohort = f' {label} images only; {images} contributing images in this metric.'
+    return population + filtering + ' Box: median and IQR.' + inference + cohort
 
 
 def _render_figure(data, spec, panels, points, comparisons, limits, high, span, path):
-    name, _, title, ylabel, observation = spec
+    name, field, title, ylabel, observation = spec
     columns = min(2, len(panels))
     rows = math.ceil(len(panels) / columns)
     panel_width = max(7.2, 1.85 * max(len(p['groups']) for p in panels))
     width = columns * panel_width
-    caption = wrap_label(short_plot_note(data, observation), (width - 0.6) * 72, FONT_SIZES['note'])
+    caption = wrap_label(short_plot_note(data, observation, field), (width - 0.6) * 72, FONT_SIZES['note'])
     subtitle = ' · '.join(part for part in (panels[0]['context'],
                          name.removesuffix('_Integrated_density') if name.endswith('_Integrated_density') else '') if part)
     heading = wrap_label(title, (width - 0.6) * 72, FONT_SIZES['title'], 'bold')
@@ -345,7 +353,7 @@ def render_plots(data, folder):
                           'Rendered_points': count if observation == 'image' else 0,
                           'File': str(path.relative_to(folder.parent)),
                           'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)),
-                          'Caption': note, 'Display_caption': short_plot_note(data, observation),
+                          'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
                           'Font': plot_font(), 'PNG_DPI': PNG_DPI})
     data['plots'] = plots
     return data

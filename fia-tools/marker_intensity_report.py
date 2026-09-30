@@ -204,7 +204,7 @@ def morphology_tables(data):
     columns = ['Metric', 'Unit', 'Observation_unit']
     columns += [f'{group}: {stat}' for group in data['groups'] for stat in statistics]
     rows = []
-    for category, _, field, unit in inputs.metric_specs([]):
+    for category, _, field, unit in inputs.report_specs(data, []):
         if category != 'Morphology':
             continue
         row = {'Metric': field, 'Unit': unit,
@@ -246,14 +246,14 @@ def report_tables(data, output, manifest):
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
         ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no metric. Retained zero-nucleus images contribute zero to counts and no value to morphology/intensity means. Wells or conditions with no usable observations keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
         ('Tests', 'Two-sided Welch comparisons of each treatment to the bold control in its plate-map color block.'),
-        ('Multiplicity', 'Holm family includes count, 12 morphology metrics and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
+        ('Multiplicity', 'Holm family includes count, available physical/pixel morphology cohorts (each nucleus enters only one unit cohort per size metric) and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
         ('Confidence intervals', '95% Welch intervals for treatment minus control; nominal, not multiplicity-adjusted.'),
         ('Minimum observations', 'At least two usable units per condition. Both groups constant: not tested.'),
         ('Dependence', 'Nucleus/image tests are exploratory and do not account for within-well clustering. Holm does not correct this dependence.'),
         ('Replicates', 'Wells are within-plate observations, not inferred biological replicates; experiments and runs are never pooled.'),
         ('Summary fields', 'Median and IQR columns describe distributions; no separate tests of these summary columns.'),
-        ('Morphology summary', 'Nuclei_Morphology_Summary.xlsx contains all 12 morphology metrics side by side by condition, existing control comparisons and Run_Info. Significant morphology plots are in the main report and Plots folder; no additional tests.'),
-        ('Size units', 'Area_px2 and pixel-based morphology; no rescaling or conversion to micrometers.'),
+        ('Morphology summary', 'Nuclei_Morphology_Summary.xlsx contains all morphology metrics and separate physical/pixel size cohorts side by side by condition, existing control comparisons and Run_Info. Significant morphology plots are in the main report and Plots folder; no additional tests.'),
+        ('Size units', 'Physical XY calibration per image: um2 for area and um for lengths when available. Pixel-unit results include only uncalibrated images. Raw pixel columns remain in source tables. Calibration_Summary lists each cohort; no image resampling.'),
         ('Marker identity', 'Selected folder names are used verbatim. No inferred biological marker names or legacy alias merging.'),
         ('Completion', 'Use this report only when report_status.json says SUCCESS.'),
     ]
@@ -272,7 +272,7 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 3, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 4, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
@@ -287,6 +287,7 @@ def report_tables(data, output, manifest):
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
         'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
         'Min_nuclei': data['min_nuclei'],
+        'Spatial_units_policy': 'Calibrated images: um2/um only; uncalibrated images: separate px2/px results; RawIntDen unchanged',
         'Python': sys.version.split()[0],
         'NumPy': np.__version__, 'SciPy': scipy.__version__, 'Matplotlib': matplotlib.__version__,
         'openpyxl': openpyxl.__version__,
@@ -300,6 +301,7 @@ def report_tables(data, output, manifest):
         'Images': as_table(data['images'], data['image_columns']),
         'Excluded_Images': as_table(data['excluded_images'], inputs.EXCLUDED_IMAGE_COLUMNS),
         'Image_Filter_Summary': as_table(data['image_filter_summary']),
+        'Calibration_Summary': as_table(data['calibration_summary']),
         'Image_Values': as_table(data['image_values'], inputs.IMAGE_VALUE_COLUMNS),
         'Well_Values': as_table(data['well_values']),
         'Plate_Map': as_table(data['design']),

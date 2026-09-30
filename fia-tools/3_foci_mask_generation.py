@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 
 import imagej
+import spatial_calibration as spatial
 from scyjava import jimport
 from validate_folders import validate_input_file
 
@@ -143,46 +144,10 @@ def parse_metadata_file(metadata_path: str) -> dict:
     keyed by the base image name (e.g., "image_1") with
     a dictionary of calibration info.
     """
-    if not os.path.exists(metadata_path):
-        logging.warning(f"Metadata file not found: {metadata_path}")
-        return {}
-
-    metadata_dict = {}
-    current_name = None
-    current_data = {}
-
-    with open(metadata_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("Image Name:"):
-                # If we have a previous entry, store
-                # it before starting a new one
-                if current_name and current_data:
-                    base_key = os.path.splitext(current_name)[0]
-                    metadata_dict[base_key] = current_data
-
-                # Start a new entry
-                current_name = line.replace("Image Name:", "").strip()
-                current_data = {}
-            elif line.startswith("Pixel Width:"):
-                val = line.replace("Pixel Width:", "").strip()
-                current_data['pixel_width'] = float(val)
-            elif line.startswith("Pixel Height:"):
-                val = line.replace("Pixel Height:", "").strip()
-                current_data['pixel_height'] = float(val)
-            elif line.startswith("Pixel Depth:"):
-                val = line.replace("Pixel Depth:", "").strip()
-                current_data['pixel_depth'] = float(val)
-            elif line.startswith("Unit:"):
-                val = line.replace("Unit:", "").strip()
-                current_data['unit'] = val
-
-        # Store the last entry if present
-        if current_name and current_data:
-            base_key = os.path.splitext(current_name)[0]
-            metadata_dict[base_key] = current_data
-
-    return metadata_dict
+    return {key: {'pixel_width': row.get('Pixel Width'),
+                  'pixel_height': row.get('Pixel Height'),
+                  'pixel_depth': row.get('Pixel Depth'), 'unit': row.get('Unit')}
+            for key, row in spatial.read_text_metadata(metadata_path).items()}
 
 
 def find_metadata_for_file(filename: str, metadata_dict: dict) -> dict:
@@ -190,10 +155,13 @@ def find_metadata_for_file(filename: str, metadata_dict: dict) -> dict:
     Attempt to find the calibration data in 'metadata_dict'
     for a given filename (e.g. 'image_1_nuclei_projection.tif').
     """
-    for base_key, cal_data in metadata_dict.items():
-        if base_key in filename:
-            return cal_data
-    return None
+    stem = os.path.splitext(filename)[0]
+    for suffix in ('_nuclei_projection_StarDist_processed_processed',
+                   '_nuclei_projection_StarDist_processed', '_nuclei_projection', '_foci_projection'):
+        if stem.endswith(suffix):
+            stem = stem[:-len(suffix)]
+            break
+    return metadata_dict.get(stem)
 
 
 def filter_foci(folder: dict,
@@ -246,11 +214,6 @@ def filter_foci(folder: dict,
     IJ = jimport('ij.IJ')
     WindowManager = jimport('ij.WindowManager')
 
-    # Read metadata from image_metadata.txt
-    metadata_path = os.path.join(foci_assay_folder,
-                                 "image_metadata.txt")
-    metadata_dict = parse_metadata_file(metadata_path)
-
     # Create (or reuse) a "Foci_Masks" folder in the assay folder
     foci_masks_base = os.path.join(foci_assay_folder, "Foci_Masks")
     os.makedirs(foci_masks_base, exist_ok=True)
@@ -290,28 +253,12 @@ def filter_foci(folder: dict,
         # Convert image to 8-bit
         IJ.run(imp, "8-bit", "")
 
-        # Retrieve calibration info (if any) from metadata
-        cal_data = find_metadata_for_file(filename, metadata_dict)
-        if cal_data:
-            pxw = cal_data.get('pixel_width', 0.2071602)
-            pxh = cal_data.get('pixel_height', 0.2071602)
-            pxd = cal_data.get('pixel_depth', 0.5)
-            unit = cal_data.get('unit', 'micron')
-        else:
-            logging.warning(f"No matching metadata found for '{filename}'. "
-                            f"Using defaults.")
-            pxw, pxh, pxd, unit = 0.2071602, 0.2071602, 0.5, 'micron'
-
-        # Set calibration in ImageJ
-        IJ.run(imp, "Properties...",
-               f"channels=1 slices=1 frames=1 "
-               f"pixel_width={pxw} pixel_height={pxh} voxel_depth={pxd}")
-
-        # Optionally set the units
-        calibration = imp.getCalibration()
-        calibration.setXUnit(unit)
-        calibration.setYUnit(unit)
-        calibration.setZUnit(unit)
+        # Prefer the exact projection snapshot; never invent a microscopy scale.
+        shape = (int(imp.getHeight()), int(imp.getWidth()))
+        calibration = spatial.projection_calibration(file_path, shape)
+        if not spatial.calibrated(calibration):
+            logging.warning("No valid physical calibration for '%s'; using pixel units.", filename)
+        spatial.imagej_calibration(imp, calibration, jimport)
 
         # Threshold & convert to mask
         IJ.setThreshold(imp, foci_threshold, 255)
@@ -333,7 +280,9 @@ def filter_foci(folder: dict,
 
         # Save processed image
         output_path = os.path.join(foci_mask_folder, f"processed_{filename}")
+        spatial.imagej_calibration(imp_mask, calibration, jimport)
         IJ.saveAs(imp_mask, "Tiff", output_path)
+        spatial.save_snapshot(output_path, calibration, shape)
 
         # Close images
         imp.close()

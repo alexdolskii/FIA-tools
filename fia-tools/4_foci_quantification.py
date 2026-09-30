@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import spatial_calibration as spatial
 from PIL import Image, ImageDraw
 from skimage import io, measure
 from validate_folders import validate_input_file
@@ -56,31 +57,7 @@ def extract_metadata(metadata_path: str) -> dict:
     Returns a dict of { image_key: {"Pixel Width": float,
     "Pixel Height": float, ...}, ... }
     """
-    metadata = {}
-    if not os.path.exists(metadata_path):
-        return metadata
-
-    with open(metadata_path, "r") as file:
-        content = file.read()
-
-    blocks = content.split("Image Name: ")[1:]
-    for block in blocks:
-        image_name = block.split("\n")[0].strip()
-        image_key = os.path.splitext(image_name)[0]
-
-        px_w = re.search(r"Pixel Width: (\d+\.\d+)", block)
-        px_h = re.search(r"Pixel Height: (\d+\.\d+)", block)
-        px_d = re.search(r"Pixel Depth: (\d+\.\d+)", block)
-        unit = re.search(r"Unit: (\w+)", block)
-
-        if px_w and px_h and px_d and unit:
-            metadata[image_key] = {
-                "Pixel Width": float(px_w.group(1)),
-                "Pixel Height": float(px_h.group(1)),
-                "Pixel Depth": float(px_d.group(1)),
-                "Unit": unit.group(1)
-            }
-    return metadata
+    return spatial.read_text_metadata(metadata_path)
 
 
 def get_nuclei_mask_folder(foci_assay_folder: str) -> str:
@@ -272,7 +249,7 @@ def count_foci_in_nuclei(nuclei_mask,
     for prop in nuclei_props:
         nuc_label = prop.label
         nuc_area_px = prop.area
-        nuc_area_micron = nuc_area_px * pixel_area
+        nuc_area_micron = nuc_area_px * pixel_area if pixel_area is not None else None
 
         nucleus_bool = (nuclei_mask == nuc_label)
         masked_foci = labeled_foci * nucleus_bool
@@ -283,7 +260,7 @@ def count_foci_in_nuclei(nuclei_mask,
         total_foci_px = 0
         for flab in unique_foci:
             total_foci_px += np.sum(masked_foci == flab)
-        total_foci_micron = total_foci_px * pixel_area
+        total_foci_micron = total_foci_px * pixel_area if pixel_area is not None else None
         rel_area = 0.0
         if nuc_area_px > 0:
             rel_area = (total_foci_px / nuc_area_px) * 100.0
@@ -307,9 +284,9 @@ def count_foci_in_nuclei(nuclei_mask,
             "Nucleus": 0,
             "Foci Count": 0,
             "Nucleus Area (pixels)": 0,
-            "Nucleus Area (micron²)": 0,
+            "Nucleus Area (micron²)": 0 if pixel_area is not None else None,
             "Total Foci Area (pixels)": 0,
-            "Total Foci Area (micron²)": 0,
+            "Total Foci Area (micron²)": 0 if pixel_area is not None else None,
             "Relative Foci Area (%)": 0.0,
         })
     return results
@@ -343,10 +320,6 @@ def process_nuclei_image(nuc_file_path: str,
     nuc_key = extract_image_key(nuc_filename)
     logging.info(f"Started nuclei processing: {nuc_filename}")
 
-    if nuc_key not in metadata:
-        logging.warning(f"No metadata for {nuc_key}. Skipping.")
-        return []
-
     # Load nucleus
     nuclei_mask = io.imread(nuc_file_path)
     nuclei_labels = measure.label(nuclei_mask)
@@ -362,10 +335,19 @@ def process_nuclei_image(nuc_file_path: str,
                        title=f"Nuclei {nuc_key}",
                        labels=labels_dict)
 
-    # Pixel area
-    px_width = metadata[nuc_key]["Pixel Width"]
-    px_height = metadata[nuc_key]["Pixel Height"]
-    pixel_area_micron = px_width * px_height
+    # Use a saved mask calibration or explicit, dimension-checked preparation metadata.
+    calibration = spatial.snapshot_calibration(nuc_file_path, nuclei_mask.shape)
+    if calibration is None:
+        item = metadata.get(nuc_key, {})
+        expected = (item.get('Height'), item.get('Width'))
+        if expected == nuclei_mask.shape and item.get('XY processing') == 'native dimensions; no resizing':
+            calibration = spatial.normalize(item.get('Pixel Width'), item.get('Pixel Height'),
+                                            item.get('Unit'), 'Native-size preparation metadata')
+        else:
+            calibration = spatial.uncalibrated('No verified native-size calibration for this mask.')
+    pixel_area_micron = spatial.area_um2(1, calibration)
+    if pixel_area_micron is None:
+        logging.warning('No verified calibration for %s; physical areas are blank, pixel results retained.', nuc_key)
 
     # Load all foci channel masks
     channel_names = sorted(foci_channels_info.keys())
@@ -421,6 +403,9 @@ def process_nuclei_image(nuc_file_path: str,
         df_single = df_single.merge(df_next,
                                     on=["Image Key", "Nucleus"],
                                     how="outer")
+
+    for field, value in spatial.columns(calibration).items():
+        df_single[field] = value
 
     # If user doesn't want colocalization => return single
     if not perform_colocalization:

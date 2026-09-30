@@ -11,6 +11,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import spatial_calibration as spatial
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell
 
@@ -202,7 +203,7 @@ def validate_rows(bundle, kind):
                     raise ValidationError('Intensity run ID differs from its folder')
                 if number(row['Marker_channel'], 'Marker_channel', integer=True) != bundle['channel']:
                     raise ValidationError('Marker channel differs from metadata')
-                if meta.get('Schema_version') == 2 and row.get('Marker_folder') != bundle['marker']:
+                if meta.get('Schema_version') in (2, 3) and row.get('Marker_folder') != bundle['marker']:
                     raise ValidationError('Marker folder differs from metadata')
                 if parts(row['Mask_file'])[:-1] != parts(meta['Nuclei_run']):
                     raise ValidationError('Mask path differs from the recorded nucleus run')
@@ -246,11 +247,27 @@ def validate_rows(bundle, kind):
                 for metric in metrics:
                     number(row[metric], metric, blank=kind == 'morphology' and metric != 'Area_px2')
                 nuclei[key] = row
+            try:
+                spatial.validate_record(row)
+            except (ValueError, TypeError) as error:
+                raise ValidationError(f'Invalid spatial calibration for {mask}: {error}') from error
+            extra = spatial.EXTRA_METRICS if kind == 'morphology' else ['Area_um2']
+            for metric in extra:
+                for field in ([metric] if table == 'Nuclei' else [f'{metric}_{stat}' for stat in STATS]):
+                    if field in row:
+                        value = number(row[field], field, blank=True)
+                        if value is not None and not spatial.calibrated(row):
+                            raise ValidationError(f'Physical measurement without calibration: {mask}/{field}')
     for mask, row in images.items():
         if sum(key[0] == mask for key in nuclei) != number(row['Non_border_nuclei_count'], 'count', integer=True):
             raise ValidationError(f'Nucleus-row count differs from image summary: {mask}')
     if any(mask not in images for mask, _ in nuclei):
         raise ValidationError('Nucleus row has no corresponding image row')
+    for (mask, _), row in nuclei.items():
+        image = images[mask]
+        if (row.get('Calibration_status') != image.get('Calibration_status')
+                or not spatial.compatible(row, image)):
+            raise ValidationError(f'Nucleus/image calibration differs: {mask}')
     bundle.update(namespace=namespace, images=images, nuclei=nuclei, particle_size=particle_size)
 
 
@@ -282,7 +299,7 @@ def intensity_candidate(run):
         raise ValidationError('Unrecognized intensity folder name')
     datetime.strptime(match[2], '%Y%m%d_%H%M%S').replace(tzinfo=timezone.utc)
     meta = json_snapshot(run / 'intensity_run.json', files)
-    if meta.get('Schema_version') not in (1, 2):
+    if meta.get('Schema_version') not in (1, 2, 3):
         raise ValidationError('Unsupported intensity metadata schema')
     channel = number(meta.get('Marker_channel'), 'Marker_channel', integer=True)
     if channel < 1:
@@ -318,7 +335,7 @@ def load_intensity(candidate):
             or number(info.get('Marker_channel'), 'Run_Info channel', integer=True) != bundle['channel']
             or number(info.get('Particle_size_px2'), 'Run_Info particle size') != bundle['particle_size']):
         raise ValidationError('Intensity Run_Info/dataset namespace differs from metadata')
-    if meta.get('Schema_version') == 2 and info.get('Marker_folder') != bundle['marker']:
+    if meta.get('Schema_version') in (2, 3) and info.get('Marker_folder') != bundle['marker']:
         raise ValidationError('Intensity Run_Info marker differs from metadata')
     return bundle
 
@@ -336,6 +353,13 @@ def validate_compatibility(morphology, intensity):
         if number(row['Area_px2'], 'area', integer=True) != number(intensity['nuclei'][key]['Area_px2'], 'area', integer=True):
             raise ValidationError(f'Nucleus area differs between morphology and intensity: {key}')
     for mask, row in morphology['images'].items():
+        other = intensity['images'][mask]
+        if not spatial.compatible(row, other):
+            raise ValidationError(f'Morphology/intensity physical calibration differs: {mask}')
+        if spatial.calibrated(other) and not spatial.calibrated(row):
+            raise ValidationError('Intensity has physical calibration missing from morphology. '
+                                  'Regenerate nuclei measurements using the existing StarDist masks, '
+                                  'then measure intensity for that nuclei run.')
         for field in COUNTS:
             if number(row[field], field, integer=True) != number(intensity['images'][mask][field], field, integer=True):
                 raise ValidationError(f'{field} differs between morphology and intensity: {mask}')
@@ -483,9 +507,12 @@ def latest_intensity(context, morphology, marker, checks):
 
 
 def typed_morphology(row):
-    numeric = set(MORPH_METRICS) | set(COUNTS) | {
+    metrics = (*MORPH_METRICS, *spatial.EXTRA_METRICS)
+    numeric = set(metrics) | set(COUNTS) | {
         'Nucleus_ID', 'Particle_size_px2', 'Orientation_deg', 'Centroid_X_px', 'Centroid_Y_px',
-    } | {f'{metric}_{stat}' for metric in MORPH_METRICS for stat in STATS}
+        'Pixel_size_X_um', 'Pixel_size_Y_um', 'Orientation_calibrated_deg',
+        'Centroid_X_um', 'Centroid_Y_um',
+    } | {f'{metric}_{stat}' for metric in metrics for stat in STATS}
     integers = set(COUNTS) | {'Nucleus_ID', 'Area_px2'}
     return {('Nuclei_run_ID' if key == 'Run_ID' else key):
             (number(value, key, integer=key in integers, blank=True) if key in numeric

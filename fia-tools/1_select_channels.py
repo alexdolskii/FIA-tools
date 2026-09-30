@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import imagej
+import spatial_calibration as spatial
 from scyjava import jimport
 from validate_folders import validate_input_file
 
@@ -228,11 +229,20 @@ def process_image(valid_folders: list) -> None:
             # WRITE METADATA TO THE TEXT FILE
             # ---------------------------------------------------
             # Retrieve calibration info
-            cal = imp.getCalibration()
-            pixel_width = cal.pixelWidth
-            pixel_height = cal.pixelHeight
-            pixel_depth = cal.pixelDepth if hasattr(cal, 'pixelDepth') else 0
-            unit = cal.getUnit()  # e.g. "micron"
+            original_calibration = imp.getCalibration().copy()
+            try:
+                calibration, original_shape = spatial.read_source(file_path)
+                if original_shape != (height, width):
+                    calibration = spatial.uncalibrated('Metadata and opened image dimensions differ.')
+            except Exception as error:
+                calibration = spatial.uncalibrated(f'Cannot read source calibration: {error}')
+            spatial.imagej_calibration(imp, calibration, jimport)
+            pixel_width = calibration['Pixel_size_X_um'] or 1.0
+            pixel_height = calibration['Pixel_size_Y_um'] or 1.0
+            z_cal = spatial.normalize(original_calibration.pixelDepth, original_calibration.pixelDepth, original_calibration.getZUnit())
+            pixel_depth = z_cal["Pixel_size_X_um"] if spatial.calibrated(z_cal) else original_calibration.pixelDepth
+            z_unit = "um" if spatial.calibrated(z_cal) else original_calibration.getZUnit()
+            unit = 'um' if spatial.calibrated(calibration) else 'pixel'
 
             # Write an entry for this image to the metadata file
             metadata_file.write(f"Image Name: {filename}\n")
@@ -242,6 +252,7 @@ def process_image(valid_folders: list) -> None:
             metadata_file.write(f"  Pixel Width: {pixel_width}\n")
             metadata_file.write(f"  Pixel Height: {pixel_height}\n")
             metadata_file.write(f"  Pixel Depth: {pixel_depth}\n")
+            metadata_file.write(f"  Z Unit: {z_unit}\n")
             metadata_file.write(f"  Unit: {unit}\n")
             metadata_file.write(f"  Channels: {channels}\n")
             metadata_file.write(f"  Slices: {slices}\n")
@@ -281,7 +292,9 @@ def process_image(valid_folders: list) -> None:
                 base_name = os.path.splitext(filename)[0]
                 nuclei_out = os.path.join(nuclei_folder,
                                           f"{base_name}_nuclei_projection.tif")
+                spatial.imagej_calibration(nuclei_proj, calibration, jimport)
                 IJ.saveAs(nuclei_proj, "Tiff", nuclei_out)
+                spatial.save_snapshot(nuclei_out, calibration, (height, width), file_path)
                 print(f"Nuclei (Max Z) saved to '{nuclei_out}'")
 
                 nuclei_proj.close()
@@ -307,7 +320,9 @@ def process_image(valid_folders: list) -> None:
                     # Save to the corresponding Foci folder
                     foci_out = os.path.join(foci_folders[foci_channel],
                                             f"{base_name}_foci_projection.tif")
+                    spatial.imagej_calibration(foci_proj, calibration, jimport)
                     IJ.saveAs(foci_proj, "Tiff", foci_out)
+                    spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                     print(f"Foci (SD Z) saved to '{foci_out}'")
 
                     foci_proj.close()
@@ -344,7 +359,9 @@ def process_image(valid_folders: list) -> None:
                 base_name = os.path.splitext(filename)[0]
                 nuclei_out = os.path.join(nuclei_folder,
                                           f"{base_name}_nuclei_projection.tif")
+                spatial.imagej_calibration(imp_nuclei, calibration, jimport)
                 IJ.saveAs(imp_nuclei, "Tiff", nuclei_out)
+                spatial.save_snapshot(nuclei_out, calibration, (height, width), file_path)
                 print(f"Nuclei channel saved to '{nuclei_out}'.")
                 imp_nuclei.close()
 
@@ -358,7 +375,9 @@ def process_image(valid_folders: list) -> None:
                     # Save to the corresponding Foci folder
                     foci_out = os.path.join(foci_folders[foci_channel],
                                             f"{base_name}_foci_projection.tif")
+                    spatial.imagej_calibration(imp_foci, calibration, jimport)
                     IJ.saveAs(imp_foci, "Tiff", foci_out)
+                    spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                     print(f"Foci channel saved to '{foci_out}'.")
                     imp_foci.close()
 

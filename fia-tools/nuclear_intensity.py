@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
+import spatial_calibration as spatial
 from nuclear_intensity_imagej import METRICS, ImageJEngine
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
@@ -22,13 +23,14 @@ IDENTIFIERS = [
     'Marker_folder', 'Marker_folder_path', 'Marker_channel',
     'Input_type', 'Projection', 'Z_planes', 'Width_px', 'Height_px',
     'Pixel_type',
-]
+] + spatial.CALIBRATION_COLUMNS
 COUNTS = ['Nuclei_count_total', 'Border_nuclei_count', 'Non_border_nuclei_count',
           'Nuclei_measured_count', 'Failed_nuclei_count']
-NUCLEI_COLUMNS = IDENTIFIERS + ['Nucleus_ID'] + list(METRICS) + [
+EXPORT_METRICS = [*METRICS, 'Area_um2']
+NUCLEI_COLUMNS = IDENTIFIERS + ['Nucleus_ID'] + EXPORT_METRICS + [
     'Nucleus_mask', 'ROI', 'Marker_image', 'Numbered_image']
 IMAGE_COLUMNS = IDENTIFIERS + ['Status', 'Error'] + COUNTS + [
-    f'{metric}_{stat}' for metric in METRICS for stat in ('Mean', 'Median', 'IQR')
+    f'{metric}_{stat}' for metric in EXPORT_METRICS for stat in ('Mean', 'Median', 'IQR')
 ] + ['Marker_image', 'Numbered_image']
 
 
@@ -322,8 +324,8 @@ def save_tables(output, nuclei, images, info):
 
 def summarize(rows):
     summary = {}
-    for metric in METRICS:
-        values = [row[metric] for row in rows]
+    for metric in EXPORT_METRICS:
+        values = [row[metric] for row in rows if row.get(metric) is not None]
         summary[f'{metric}_Mean'] = float(np.mean(values)) if values else None
         summary[f'{metric}_Median'] = float(np.median(values)) if values else None
         summary[f'{metric}_IQR'] = float(np.percentile(values, 75) - np.percentile(values, 25)) if values else None
@@ -337,7 +339,7 @@ def analyze_run(record, output, mode, engine, batch_path):
                        'Marker_channel': channel}
     nuclei, images = [], []
     info = {
-        'Schema_version': 2, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
+        'Schema_version': 3, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
         'Nuclei_run': str(record['path']), 'Intensity_run': str(output),
         'Particle_size_px2': record['metadata']['particle_size_pixels_squared'],
         'StarDist_source': record['metadata'].get('stardist_folder', ''),
@@ -347,7 +349,8 @@ def analyze_run(record, output, mode, engine, batch_path):
         'ImageJ_version': engine.version, 'BioFormats_version': engine.bioformats_version,
         'Batch_journal': str(batch_path),
         'Intensity_policy': 'Original values; no normalization, background subtraction or intensity threshold; zeros included',
-        'Geometry': 'Native XY pixels; no resizing; Area_px2 is ROI pixel count',
+        'Geometry': 'Native XY pixels; no resizing; Area_px2 is ROI pixel count; Area_um2 uses per-image physical XY calibration',
+        'Spatial_calibration_schema': 1,
         'Border_policy': 'Exclude all edge-touching IDs from measurements; count separately',
         'Summary_population': 'Equal weight per non-border nucleus, within each image and mask run',
         'Marker_StdDev': 'ImageJ sample standard deviation of pixels inside the nucleus ROI',
@@ -373,6 +376,7 @@ def analyze_run(record, output, mode, engine, batch_path):
                 'Nuclei_run_ID': record['path'].name, 'Intensity_run_ID': output.name,
                 'Particle_size_px2': info['Particle_size_px2'], 'StarDist_source': info['StarDist_source'],
                 **marker_identity, 'Input_type': mode, 'Projection': info['Projection'],
+                **(spatial.columns(pair['info']) if pair['info'].get('Calibration_status') else spatial.uncalibrated()),
                 **{key: pair['info'][key] for key in ('Width_px', 'Height_px', 'Z_planes', 'Pixel_type')},
             }
             marker = None
@@ -393,6 +397,8 @@ def analyze_run(record, output, mode, engine, batch_path):
                               Failed_nuclei_count=len(included))
                 marker = engine.marker(pair['source'], mode, channel, pair['info'])
                 rows, counts = engine.measure(marker, labels, image_folder)
+                for row in rows:
+                    row['Area_um2'] = spatial.area_um2(row['Area_px2'], identifiers)
                 # Recheck file metadata before accepting any image-level result.
                 for path, previous in pair['fingerprints'].items():
                     if fingerprint(path) != previous:

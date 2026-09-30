@@ -480,7 +480,7 @@ class TestProcessNucleiImage:
         image_keys = {r["Image Key"] for r in results}
         assert image_keys == {"1"}
 
-    def test_returns_empty_list_when_no_metadata_for_image(
+    def test_retains_pixel_results_when_no_metadata_for_image(
         self, data_dir, tmp_path
     ):
         # PRECONDITION: nuclei file exists, but metadata dict is empty,
@@ -509,8 +509,11 @@ class TestProcessNucleiImage:
             perform_colocalization=False,
         )
 
-        # RESULT: empty list because the image key "1" is absent from metadata.
-        assert results == []
+        # Missing calibration keeps pixel measurements and leaves physical areas blank.
+        assert results
+        assert all(row['Nucleus Area (pixels)'] >= 0 for row in results)
+        assert all(row['Nucleus Area (micron²)'] is None for row in results)
+        assert all(row['Calibration_status'] == 'uncalibrated' for row in results)
 
     def test_colocalization_adds_intersection_columns(
         self, data_dir, tmp_path

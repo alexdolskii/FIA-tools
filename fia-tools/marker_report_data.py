@@ -10,6 +10,7 @@ from zipfile import BadZipFile
 
 import collect_marker_intensity_results as collect
 import numpy as np
+import spatial_calibration as spatial
 from openpyxl import load_workbook
 
 ValidationError = collect.ValidationError
@@ -87,11 +88,11 @@ def _read_intensity(path, marker, files, copied):
     if meta.get('Status') != 'complete':
         raise ValidationError(f'Incomplete intensity: {marker}')
     meta['Schema_version'] = collect.number(meta.get('Schema_version'), 'Schema_version', integer=True)
-    if meta['Schema_version'] not in (1, 2):
+    if meta['Schema_version'] not in (1, 2, 3):
         raise ValidationError('Unsupported intensity schema')
     channel = int(MARKER_PATTERN.fullmatch(marker)[1])
     if (collect.number(meta.get('Marker_channel'), 'Marker_channel', integer=True) != channel
-            or (meta['Schema_version'] == 2 and meta.get('Marker_folder') != marker)):
+            or (meta['Schema_version'] in (2, 3) and meta.get('Marker_folder') != marker)):
         raise ValidationError('Marker identity differs from its metadata')
     run = Path(collect.basename(meta.get('Intensity_run', '')))
     if not collect.INTENSITY_PATTERN.fullmatch(run.name):
@@ -325,6 +326,7 @@ def filter_images(data, min_nuclei=0):
         f'Images with Non_border_nuclei_count < {min_nuclei} excluded before analysis.'
         if min_nuclei else 'Image count filtering disabled; zero-count images retained.')
     images = data['images']
+    data['calibration_images_before_filter'] = images
     data['image_columns'] = list(dict.fromkeys(key for row in images for key in row))
     data['images_before_filter'] = len(images)
     excluded = {row['Mask_name'] for row in images if row[COUNT] < min_nuclei}
@@ -349,16 +351,48 @@ def filter_images(data, min_nuclei=0):
     return data
 
 
-def metric_specs(markers):
+def metric_specs(markers, images=None):
     metrics = [('Nuclei', '', COUNT, 'Nuclei per image')]
+    has_physical = any(spatial.calibrated(row) for row in (images or []))
+    has_pixels = images is None or not images or any(not spatial.calibrated(row) for row in images)
     for field in collect.MORPH_METRICS:
         units = 'px2' if field == 'Area_px2' else ('px' if field.endswith('_px') else 'dimensionless')
-        metrics.append(('Morphology', '', field, units))
+        if field in spatial.PHYSICAL_FIELDS:
+            if has_physical:
+                metrics.append(('Morphology', '', spatial.PHYSICAL_FIELDS[field], 'um2' if field == 'Area_px2' else 'um'))
+            if has_pixels:
+                metrics.append(('Morphology', '', field, units))
+        else:
+            metrics.append(('Morphology', '', field, units))
     for marker in markers:
         metrics.extend(('Intensity', marker, marker + '_' + field,
                         'summed raw pixel values' if field == 'Marker_RawIntDen' else 'raw intensity')
                        for field in collect.INTENSITY_METRICS)
     return metrics
+
+
+def report_specs(data, markers=None):
+    return metric_specs(data['markers'] if markers is None else markers,
+                        data['images'] or data.get('calibration_images_before_filter', []))
+
+
+def metric_eligible(row, field):
+    if field in spatial.PHYSICAL_FIELDS:
+        return not spatial.calibrated(row)
+    if field in spatial.PHYSICAL_FIELDS.values():
+        return spatial.calibrated(row)
+    return True
+
+
+def measurement_field(row, field):
+    if spatial.calibrated(row) and field in spatial.CALIBRATED_SHAPES:
+        return spatial.CALIBRATED_SHAPES[field]
+    return field
+
+
+def metric_value(row, field):
+    """Never put a calibrated image in a pixel-unit plot or statistical comparison."""
+    return row.get(measurement_field(row, field)) if metric_eligible(row, field) else None
 
 
 def aggregate(data):
@@ -367,11 +401,14 @@ def aggregate(data):
     for nucleus in data['nuclei']:
         by_mask[nucleus['Mask_name']].append(nucleus)
     image_values, well_values, summary = [], [], []
-    for category, marker, field, unit in metric_specs(data['markers']):
+    for category, marker, field, unit in report_specs(data):
         per_well = defaultdict(list)
         for image in data['images']:
+            if not metric_eligible(image, field):
+                continue
             values = ([image[COUNT]] if field == COUNT else
-                      [row[field] for row in by_mask[image['Mask_name']] if row[field] is not None])
+                      [metric_value(row, field) for row in by_mask[image['Mask_name']]
+                       if metric_value(row, field) is not None])
             record = {'Category': category, 'Marker': marker, 'Metric': field, 'Unit': unit,
                       'Group': image['Group'], 'Well': image['Well'], 'Image_name': image['Image_name'],
                       'Mask_name': image['Mask_name'], 'N_nuclei': image[COUNT],
@@ -382,7 +419,8 @@ def aggregate(data):
                 # Existing image summaries are independently reconciled with individual nuclei.
                 for stat, value in zip(collect.STATS, (np.mean(values), np.median(values),
                                       np.percentile(values, 75) - np.percentile(values, 25))):
-                    recorded = collect.number(image.get(field + '_' + stat), field + '_' + stat, blank=True)
+                    source_field = measurement_field(image, field)
+                    recorded = collect.number(image.get(source_field + '_' + stat), source_field + '_' + stat, blank=True)
                     if recorded is None or not math.isclose(recorded, float(value), rel_tol=1e-9, abs_tol=1e-9):
                         raise ValidationError(f'Image summary disagrees with nuclei: {field}/{stat}')
         for annotation in data['design']:
@@ -396,13 +434,26 @@ def aggregate(data):
                                 'Value': float(np.mean(valid)) if valid else None})
         for group in data['groups']:
             population = data['images'] if field == COUNT else data['nuclei']
-            values = [row[field] for row in population if row['Group'] == group and row[field] is not None]
+            values = [metric_value(row, field) for row in population
+                      if row['Group'] == group and metric_value(row, field) is not None]
             summary.append({'Category': category, 'Marker': marker, 'Metric': field, 'Group': group,
                             'Unit': unit, 'Observation': 'image' if field == COUNT else 'nucleus',
                             'N': len(values), 'Mean': float(np.mean(values)) if values else None,
                             'Median': float(np.median(values)) if values else None,
                             'IQR': float(np.percentile(values, 75) - np.percentile(values, 25)) if values else None})
     data.update(image_values=image_values, well_values=well_values, summary=summary)
+    data['calibration_summary'] = []
+    for group in data['groups']:
+        for status in ('calibrated', 'uncalibrated'):
+            rows = [row for row in data['images'] if row['Group'] == group
+                    and spatial.calibrated(row) == (status == 'calibrated')]
+            data['calibration_summary'].append({
+                'Group': group, 'Calibration_status': status,
+                'Area_unit': 'um2' if status == 'calibrated' else 'px2',
+                'Length_unit': 'um' if status == 'calibrated' else 'px',
+                'Images': len(rows), 'Wells': len({row['Well'] for row in rows}),
+                'Non_border_nuclei': sum(row[COUNT] for row in rows),
+            })
     data['counts_by_group'] = {group: {'Nuclei': sum(r['Group'] == group for r in data['nuclei']),
                                       'Images': sum(r['Group'] == group for r in data['images']),
                                       'Wells': len({r['Well'] for r in data['images'] if r['Group'] == group})}

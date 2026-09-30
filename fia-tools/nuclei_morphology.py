@@ -1,4 +1,4 @@
-"""Export pixel-based nuclear morphology without modifying final masks."""
+"""Export pixel and calibrated nuclear morphology without modifying final masks."""
 
 import csv
 import math
@@ -6,28 +6,90 @@ import re
 from pathlib import Path
 
 import numpy as np
+import spatial_calibration as spatial
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from scyjava import jimport
-
 
 METRICS = [
     "Area_px2", "Perimeter_px", "Circularity", "Aspect_ratio", "Solidity",
     "Major_axis_px", "Minor_axis_px", "Feret_max_px", "Feret_min_px",
     "Equivalent_diameter_px", "Roundness", "Eccentricity",
 ]
+EXPORT_METRICS = METRICS + spatial.EXTRA_METRICS
 IDENTIFIERS = [
     "Dataset", "Dataset_path", "Image_name", "Mask_name", "Well",
     "Run_ID", "Particle_size_px2", "StarDist_source",
 ]
-NUCLEI_COLUMNS = IDENTIFIERS + ["Nucleus_ID"] + METRICS + [
+NUCLEI_COLUMNS = IDENTIFIERS + spatial.CALIBRATION_COLUMNS + ["Nucleus_ID"] + EXPORT_METRICS + [
     "Orientation_deg", "Centroid_X_px", "Centroid_Y_px", "Touches_border",
+    "Orientation_calibrated_deg", "Centroid_X_um", "Centroid_Y_um",
     "Label_map", "Numbered_image",
 ]
-IMAGE_COLUMNS = IDENTIFIERS + [
+IMAGE_COLUMNS = IDENTIFIERS + spatial.CALIBRATION_COLUMNS + [
     "Status", "Error", "Nuclei_count_total", "Border_nuclei_count",
     "Non_border_nuclei_count",
-] + [f"{metric}_{stat}" for metric in METRICS for stat in ("Mean", "Median", "IQR")]
+] + [f"{metric}_{stat}" for metric in EXPORT_METRICS for stat in ("Mean", "Median", "IQR")]
+
+
+def add_physical_measurements(records, labels_image, calibration):
+    """Scale square-pixel results; measure calibrated ROIs for anisotropic pixels."""
+    for row in records:
+        row.update(dict.fromkeys(spatial.EXTRA_METRICS + [
+            'Orientation_calibrated_deg', 'Centroid_X_um', 'Centroid_Y_um']))
+    if not spatial.calibrated(calibration):
+        return
+    sx, sy = calibration['Pixel_size_X_um'], calibration['Pixel_size_Y_um']
+    isotropic = math.isclose(sx, sy, rel_tol=1e-12)
+    labels = processor_pixels(labels_image) if not isotropic else None
+    for row in records:
+        row['Area_um2'] = spatial.area_um2(row['Area_px2'], calibration)
+        row['Equivalent_diameter_um'] = math.sqrt(4 * row['Area_um2'] / math.pi)
+        for axis, scale in (('X', sx), ('Y', sy)):
+            value = row.get(f'Centroid_{axis}_px')
+            row[f'Centroid_{axis}_um'] = value * scale if value is not None else None
+        for field, target in spatial.CALIBRATED_SHAPES.items():
+            row[target] = row.get(field)
+        if isotropic:
+            for field in spatial.LENGTH_FIELDS:
+                value = row.get(field)
+                row[spatial.PHYSICAL_FIELDS[field]] = value * sx if value is not None else None
+            row['Orientation_calibrated_deg'] = row.get('Orientation_deg')
+            continue
+        # ImageJ ROI perimeter and Feret calculations respect independent XY scales.
+        import jpype
+        binary = (labels == row['Nucleus_ID']).astype(np.uint8) * 255
+        processor = jimport('ij.process.ByteProcessor')(
+            labels.shape[1], labels.shape[0],
+            jpype.JArray(jpype.JByte)(binary.ravel().view(np.int8)), None)
+        processor.setThreshold(255, 255, processor.NO_LUT_UPDATE)
+        roi = jimport('ij.plugin.filter.ThresholdToSelection')().convert(processor)
+        image = jimport('ij.ImagePlus')('Calibrated nucleus geometry', processor)
+        try:
+            spatial.imagej_calibration(image, calibration, jimport)
+            image.setRoi(roi)
+            row['Perimeter_um'] = float(roi.getLength())
+            feret = roi.getFeretValues()
+            row['Feret_max_um'], row['Feret_min_um'] = float(feret[0]), float(feret[2])
+        finally:
+            image.close()
+        # Affinely transform the ImageJ fitted ellipse, not the raster image.
+        major, minor, angle = (row.get(key) for key in
+                               ('Major_axis_px', 'Minor_axis_px', 'Orientation_deg'))
+        if all(value is not None for value in (major, minor, angle)):
+            theta = math.radians(angle)
+            rotation = np.array([[math.cos(theta), -math.sin(theta)],
+                                 [math.sin(theta), math.cos(theta)]])
+            axes, lengths, _ = np.linalg.svd(np.diag([sx, sy]) @ rotation @ np.diag([major, minor]))
+            row['Major_axis_um'], row['Minor_axis_um'] = map(float, lengths)
+            row['Orientation_calibrated_deg'] = math.degrees(math.atan2(axes[1, 0], axes[0, 0])) % 180
+            row['Aspect_ratio_calibrated'] = float(lengths[0] / lengths[1]) if lengths[1] > 0 else None
+            row['Roundness_calibrated'] = 4 * row['Area_um2'] / (math.pi * lengths[0] ** 2) if lengths[0] > 0 else None
+            row['Eccentricity_calibrated'] = math.sqrt(max(0, 1 - (lengths[1] / lengths[0]) ** 2)) if lengths[0] > 0 else None
+        else:
+            for field in ('Aspect_ratio', 'Roundness', 'Eccentricity'):
+                row[spatial.CALIBRATED_SHAPES[field]] = None
+        row['Circularity_calibrated'] = min(1.0, 4 * math.pi * row['Area_um2'] / row['Perimeter_um'] ** 2) if row['Perimeter_um'] > 0 else None
 
 
 def processor_pixels(imp):
@@ -192,8 +254,22 @@ class NucleiMorphologyExport:
         label_path = qc / f"{stem}_ids.tif"
         preview_path = qc / f"{stem}_ids.png"
         try:
+            shape = (int(mask.getHeight()), int(mask.getWidth()))
+            calibration = spatial.snapshot_calibration(self.source / filename, shape)
+            if calibration is None:
+                projection = self.source.parent / 'Nuclei' / (
+                    Path(filename).stem.removesuffix('_StarDist_processed') + Path(filename).suffix)
+                calibration = spatial.projection_calibration(projection, shape)
+            add_physical_measurements(records, label_image, calibration)
+            spatial.imagej_calibration(label_image, calibration, jimport)
             qc.mkdir(exist_ok=True)
             FileSaver = jimport("ij.io.FileSaver")
+            mask_path = self.output / mask_name
+            if mask_path.is_file():
+                spatial.imagej_calibration(mask, calibration, jimport)
+                if not FileSaver(mask).saveAsTiff(str(mask_path)):
+                    raise OSError(f'Could not save calibrated final mask: {mask_path}')
+                spatial.save_snapshot(mask_path, calibration, shape)
             if not FileSaver(label_image).saveAsTiff(str(label_path)):
                 raise OSError(f"Could not save nucleus ID map: {label_path}")
             save_numbered_image(mask, records, preview_path)
@@ -202,7 +278,7 @@ class NucleiMorphologyExport:
         # Exclude edge-touching nuclei from every measurement table and summary.
         # Keep their IDs in QC images so the unchanged final mask remains traceable.
         included_records = [row for row in records if not row["Touches_border"]]
-        identifiers = self.identifiers(filename, mask_name)
+        identifiers = {**self.identifiers(filename, mask_name), **calibration}
         self.nuclei.extend({
             **identifiers, **row,
             "Label_map": str(label_path.relative_to(self.output)),
@@ -215,7 +291,7 @@ class NucleiMorphologyExport:
             "Non_border_nuclei_count": len(included_records),
         }
         # Orientation is axial and is deliberately not summarized by linear statistics.
-        for metric in METRICS:
+        for metric in EXPORT_METRICS:
             values = [row[metric] for row in included_records if row[metric] is not None]
             summary[f"{metric}_Mean"] = float(np.mean(values)) if values else None
             summary[f"{metric}_Median"] = float(np.median(values)) if values else None
@@ -239,9 +315,11 @@ class NucleiMorphologyExport:
                 row["Status"] == "complete" for row in self.images) else "incomplete"),
             ("ImageJ_version", self.ij_version),
             ("Measurement_method", "ImageJ ParticleAnalyzer on a duplicate final mask"),
-            ("Area_units", "pixels squared; no physical calibration"),
-            ("Length_units", "pixels of the processed image"),
-            ("Shape_space", "2D processed-image pixel coordinates"),
+            ("Spatial_calibration_schema", 1),
+            ("Area_units", "Area_px2 always retained; Area_um2 when valid per-image XY calibration exists"),
+            ("Length_units", "Pixel columns retained; additional _um columns when calibrated"),
+            ("Shape_space", "Pixel geometry retained; _calibrated shape columns use physical XY geometry"),
+            ("Anisotropic_geometry", "ImageJ calibrated ROI perimeter/Feret; affine transform of the ImageJ fitted ellipse; no image resampling"),
             ("Circularity", "ImageJ: min(1, 4*pi*Area/Perimeter^2)"),
             ("Aspect_ratio", "Major_axis_px / Minor_axis_px"),
             ("Roundness", "4*Area_px2/(pi*Major_axis_px^2)"),
