@@ -201,3 +201,74 @@ def test_bad_saved_dimensions_abort_success(tmp_path, monkeypatch, runtime):
         run(monkeypatch, [folder])
     assert "status=FAILED" in journal(folder)
     assert "output_files=0" in journal(folder)
+
+
+def existing_results(folder):
+    output = folder / "foci_assay"
+    output.mkdir()
+    (output / "1_log.log").write_text("previous log")
+    (output / "image_metadata.txt").write_text("previous metadata")
+    return {path: path.read_bytes() for path in output.iterdir()}
+
+
+def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path, monkeypatch, runtime):
+    first = source_folder(tmp_path, "first")
+    second = source_folder(tmp_path, "second")
+    previous = {**existing_results(first), **existing_results(second)}
+    events = []
+    initialize = mod.initialize_imagej
+
+    def start_imagej():
+        assert events == [str(first / "foci_assay"), str(second / "foci_assay")]
+        events.append("ImageJ")
+        return initialize()
+
+    choices = iter(("3", "1", "1", "2"))
+
+    def answer(prompt):
+        if "overwrite" in prompt:
+            assert "ImageJ" not in events
+            assert all(path.read_bytes() == content for path, content in previous.items())
+            assert all(not list(folder.glob("foci_assay/logs/*")) for folder in (first, second))
+            target = first if str(first) in prompt else second
+            events.append(str(target / "foci_assay"))
+            return "yes"
+        assert events[-1] == "ImageJ"
+        return next(choices)
+
+    # Both confirmations must occur before the first ImageJ call or log rotation.
+    monkeypatch.setattr(mod, "initialize_imagej", start_imagej)
+    monkeypatch.setattr("builtins.input", answer)
+    assert mod.process_image([str(first), str(second)]) == ["SUCCESS", "SUCCESS"]
+    assert events == [str(first / "foci_assay"), str(second / "foci_assay"), "ImageJ"]
+
+
+@pytest.mark.parametrize("first_exists", [False, True])
+def test_declining_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch, runtime, first_exists):
+    first = source_folder(tmp_path, "first")
+    second = source_folder(tmp_path, "second")
+    previous = existing_results(second)
+    if first_exists:
+        previous.update(existing_results(first))
+    initializer = MagicMock()
+    monkeypatch.setattr(mod, "initialize_imagej", initializer)
+    choices = ("yes", "no") if first_exists else ("n",)
+    with pytest.raises(ValueError, match="canceled by user before processing"):
+        run(monkeypatch, [first, second], choices)
+    initializer.assert_not_called()
+    runtime.openImage.assert_not_called()
+    assert all(path.read_bytes() == content for path, content in previous.items())
+    for folder in (first, second):
+        assert not (folder / "foci_assay" / "logs").exists()
+    if not first_exists:
+        assert not (first / "foci_assay").exists()
+
+
+def test_invalid_confirmation_does_not_allow_overwrite(tmp_path, monkeypatch, runtime, capsys):
+    folder = source_folder(tmp_path)
+    previous = existing_results(folder)
+    with pytest.raises(ValueError, match="canceled by user before processing"):
+        run(monkeypatch, [folder], ("maybe", "", "no"))
+    assert capsys.readouterr().out.count("Please enter yes or no.") == 2
+    runtime.openImage.assert_not_called()
+    assert all(path.read_bytes() == content for path, content in previous.items())

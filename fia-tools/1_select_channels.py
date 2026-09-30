@@ -117,6 +117,33 @@ def select_settings():
     return file_type, nuclei_channel, foci_channels
 
 
+def confirm_output_folders(valid_folders):
+    """Confirm every existing output folder before initializing or writing anything."""
+    output_folders = [Path(folder) / 'foci_assay' for folder in valid_folders]
+    existing = []
+    print("\nChecking output folders before analysis:")
+    for folder in output_folders:
+        if folder.exists():
+            if not folder.is_dir():
+                raise NotADirectoryError(f"Output path is not a directory: {folder}")
+            existing.append(folder)
+            print(f"Existing results: {folder}")
+        else:
+            print(f"New output folder: {folder}")
+
+    for folder in existing:
+        while True:
+            response = input(
+                f"The folder {folder} already exists. "
+                "Do you want to overwrite existing results? (yes/no): "
+            ).strip().lower()
+            if response in ('yes', 'y'):
+                break
+            if response in ('no', 'n'):
+                raise ValueError("Analysis canceled by user before processing; existing results were not changed.")
+            print("Please enter yes or no.")
+
+
 def process_image(valid_folders: list, input_json_path=None) -> list:
     """
     Process all files from the provided directories (.nd2 or .tif/.tiff)
@@ -142,6 +169,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
 
     if not valid_folders:
         raise ValueError("No supported input images were found; analysis was not started.")
+    confirm_output_folders(valid_folders)
     settings = None
     run_id = uuid4().hex
     script_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
@@ -152,13 +180,6 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
         # Create a new folder 'foci_assay' for processed images
         processed_folder = os.path.join(input_folder,
                                         'foci_assay')
-        if os.path.exists(processed_folder):
-            response = input(
-                f"The folder {processed_folder} already exists. "
-                "Do you want to overwrite existing results? (yes/no): "
-            ).strip().lower()
-            if response == 'no':
-                raise ValueError("Analysis canceled by user.")
         Path(processed_folder).mkdir(parents=True, exist_ok=True)
         print(f"\nProcessed images will be saved in: {processed_folder}")
 
