@@ -14,6 +14,7 @@ import pytest
 from marker_report_statistics import calculate_statistics
 from matplotlib.collections import PathCollection, PolyCollection
 from matplotlib.figure import Figure
+from PIL import Image
 
 MARKER = 'Foci_1_Channel_2'
 
@@ -58,21 +59,35 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
     original_save = Figure.savefig
 
     def inspect(fig, filename, **kwargs):
+        if filename.suffix == '.pdf':
+            return original_save(fig, filename, **kwargs)
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
-        axes = [ax for ax in fig.axes if ax.get_ylabel()]
+        axes = [ax for ax in fig.axes if ax.get_label().startswith('Block_')]
         for ax in axes:
             labels = ax.get_xticklabels()
             boxes = [label.get_window_extent(renderer) for label in labels]
             assert all(left.x1 < right.x0 for left, right in pairwise(boxes))
-            assert all('n=' in label.get_text() and '2 wells' in label.get_text() for label in labels)
+            samples = [text for text in ax.texts if text.get_gid() == 'sample_size']
+            assert len(samples) == len(labels)
+            assert all('n=' in label.get_text() and '2 wells' in label.get_text() for label in samples)
+            assert all(label.get_fontsize() == 14 for label in labels)
+            assert all(label.get_fontsize() == 12 for label in samples)
+            sample_boxes = [label.get_window_extent(renderer) for label in samples]
+            assert all(left.x1 < right.x0 for left, right in pairwise(sample_boxes))
+            assert all(label.y0 > sample.y1 for label, sample in zip(boxes, sample_boxes))
             assert ax.get_yscale() == 'linear'
+            significance = [text for text in ax.texts if text.get_gid() == 'significance']
+            for left, right in pairwise(significance):
+                assert not left.get_window_extent(renderer).overlaps(right.get_window_extent(renderer))
+            for text in significance:
+                assert not text.get_window_extent(renderer).overlaps(ax.title.get_window_extent(renderer))
             dots = sum(isinstance(c, PathCollection) for c in ax.collections)
             assert dots == (4 if filename.name.startswith('Nuclei_count') else 0)
-            for label in labels:
+            for label in labels + samples:
                 assert not label.get_window_extent(renderer).overlaps(fig.axes[-1].get_window_extent(renderer))
         snapshots.append((filename.name, [ax.get_ylim() for ax in axes],
-                          [t.get_text() for ax in axes for t in ax.texts if 'p=' in t.get_text() or t.get_text() == 'Not tested']))
+                          [t.get_text() for ax in axes for t in ax.texts if t.get_gid() == 'significance']))
         return original_save(fig, filename, **kwargs)
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
@@ -90,6 +105,11 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
         assert len(selected[0][1]) == 4
         assert len(selected[0][2]) == (0 if unit is None else 12)
         assert sum(len(item[2]) for item in selected[1:]) == len(selected[0][2])
+        assert all(text in ('ns', '*', '**', '***', '****', 'Not tested') for _, _, texts in selected for text in texts)
+    for plot in data['plots']:
+        assert (tmp_path / plot['PDF_file']).read_bytes().startswith(b'%PDF-')
+        with Image.open(tmp_path / plot['File']) as image:
+            assert image.info['dpi'][0] == pytest.approx(300, abs=0.01)
     tables = {'Plot_Info': report.as_table(data['plots']), 'Plot_Labels': report.as_table(data['plot_labels'])}
     report.write_workbook(tmp_path, tables, data['plots'])
     with ZipFile(tmp_path / report.WORKBOOK) as archive:
@@ -124,10 +144,12 @@ def test_more_than_four_blocks_share_one_complete_overview(tmp_path, monkeypatch
     original_save = Figure.savefig
 
     def inspect(fig, filename, **kwargs):
+        if filename.suffix == '.pdf':
+            return original_save(fig, filename, **kwargs)
         if '__Block_' not in filename.name:
             fig.canvas.draw()
             renderer = fig.canvas.get_renderer()
-            axes = [ax for ax in fig.axes if ax.get_ylabel()]
+            axes = [ax for ax in fig.axes if ax.get_label().startswith('Block_')]
             assert len(axes) == 5
             assert len({ax.get_ylim() for ax in axes}) == 1
             labels = [label for ax in axes for label in ax.get_xticklabels()]
@@ -136,7 +158,7 @@ def test_more_than_four_blocks_share_one_complete_overview(tmp_path, monkeypatch
                 box = label.get_window_extent(renderer)
                 assert not box.overlaps(fig.axes[-1].get_window_extent(renderer))
                 assert box.y0 >= 0 and box.y1 <= fig.bbox.height
-            assert sum(len(ax.texts) for ax in axes) == 15
+            assert sum(sum(t.get_gid() == 'significance' for t in ax.texts) for ax in axes) == 15
             snapshots.append(filename.name)
         return original_save(fig, filename, **kwargs)
 
@@ -163,6 +185,74 @@ def test_display_shortening_never_merges_conditions():
     data['design'].append(dict(data['design'][0], Color='conflicting color'))
     panels = plots.plot_panels(data)
     assert len(panels) == 1 and panels[0]['groups'] == data['groups']
+
+
+@pytest.mark.parametrize('p,expected', [(None, 'Not tested'), (1, 'ns'), (0.05, 'ns'),
+                                       (0.049, '*'), (0.01, '*'), (0.009, '**'),
+                                       (0.001, '**'), (0.0009, '***'), (0.0001, '***'), (0.00009, '****')])
+def test_plot_symbols_use_adjusted_p_and_preserve_exact_values(p, expected):
+    row = {'P_Holm': p, 'P_raw': 0.0000001}
+    original = dict(row)
+    assert plots.p_label(row) == expected
+    assert row == original
+
+
+def test_long_condition_token_wraps_without_losing_characters():
+    name = 'VeryLongTreatmentNameWithoutAnySpaces_10uM'
+    wrapped = plots.wrap_label(name, 90, 14)
+    assert '\n' in wrapped and wrapped.replace('\n', '') == name
+    font = plots.FontProperties(family=plots.plot_font(), size=14)
+    assert all(plots.TextPath((0, 0), line, prop=font).get_extents().width <= 90 for line in wrapped.split('\n'))
+
+
+def test_eight_panels_retain_all_blocks_with_short_caption(tmp_path, monkeypatch):
+    data = four_blocks('nucleus')
+    blocks = {}
+    for color, groups in data['blocks'].items():
+        members = list(groups)
+        blocks[color + '-a'] = {members[0]: True, members[1]: False}
+        blocks[color + '-b'] = {members[2]: True, members[3]: False}
+    data['blocks'] = blocks
+    calculate_statistics(data)
+    data['min_nuclei'] = 20
+    data['image_exclusion_rule'] = 'Images with Non_border_nuclei_count < 20 excluded before analysis.'
+    before = deepcopy(data)
+    captured = []
+    original_save = Figure.savefig
+
+    def inspect(fig, filename, **kwargs):
+        if filename.suffix == '.png' and '__Block_' not in filename.name:
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            axes = [ax for ax in fig.axes if ax.get_label().startswith('Block_')]
+            assert len(axes) == 8
+            assert [ax.get_title().split()[0] for ax in axes] == list('ABCDEFGH')
+            assert len({ax.get_ylim() for ax in axes}) == 1
+            assert len(fig.axes[0].texts) == 2
+            assert not any('Final_Nuclei_Mask' in t.get_text() for t in fig.axes[0].texts)
+            for ax in axes:
+                texts = list(ax.get_xticklabels()) + [t for t in ax.texts if t.get_gid() == 'sample_size']
+                for text in texts:
+                    box = text.get_window_extent(renderer)
+                    assert box.x0 >= 0 and box.x1 <= fig.bbox.width and box.y0 >= 0
+                    assert not box.overlaps(fig.axes[-1].get_window_extent(renderer))
+                    for other in axes:
+                        if other is not ax:
+                            assert not box.overlaps(other.get_window_extent(renderer))
+            captured.append(filename.name)
+        return original_save(fig, filename, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', inspect)
+    plots.render_plots(data, tmp_path / 'Plots')
+    assert captured == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
+    assert len(data['plots']) == 18
+    assert data['statistics'] == before['statistics']
+    assert data['plot_data'] == plots.plot_rows(before)
+    assert len(list((tmp_path / 'Plots').glob('*.pdf'))) == 18
+    for plot in data['plots']:
+        assert '≥20' in plot['Display_caption'] and 'Welch + Holm' in plot['Display_caption']
+        assert 'within-well dependence' in plot['Caption']
+        assert len(plot['Display_caption']) < len(plot['Caption'])
 
 
 def test_descriptive_template_retains_direct_colors_without_requiring_controls(tmp_path):
