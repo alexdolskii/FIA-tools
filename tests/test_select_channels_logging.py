@@ -60,8 +60,8 @@ def journal(folder):
 
 
 @pytest.mark.parametrize("file_type,filename,processing", [
-    ("1", "good.nd2", "nuclei_projection=MAX | foci_projection=SD"),
-    ("2", "good.tiff", "nuclei_projection=MAX | foci_projection=SD"),
+    ("1", "good.nd2", "nuclei_projection=MAX | marker_projection=SD"),
+    ("2", "good.tiff", "nuclei_projection=MAX | marker_projection=SD"),
     ("3", "good.tif", "projection=none (2D channel extraction)"),
 ])
 def test_success_logs_settings_outputs_and_preserves_calibration(
@@ -75,7 +75,7 @@ def test_success_logs_settings_outputs_and_preserves_calibration(
     assert "FINISHED | status=SUCCESS | input_images=1 | attempted=1 | completed=1 | failed=0" in log
     assert "output_files=2" in log
     assert "ignored_hidden_files=2 | ignored_unsupported_files=1" in log
-    assert "nuclei_channel=1 | foci_channels=[2]" in log
+    assert "nuclei_channel=1 | marker_channels=[2]" in log
     assert "pixel_X_um=0.2 | pixel_Y_um=0.3" in log
     assert str(manifest) in log
     assert "W=17 | H=10 | C=3 | Z=4 | T=1" in log

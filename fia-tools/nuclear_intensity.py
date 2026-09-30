@@ -75,7 +75,7 @@ def discover_markers(experiments):
         root = experiment['root']
         foci = root / 'foci_assay' / 'Foci'
         if not foci.is_dir():
-            print(f'No Foci marker catalog: {foci}')
+            print(f'No marker-channel catalog: {foci}')
             continue
         for folder in sorted(foci.iterdir()):
             if folder.name.startswith('.') or not folder.is_dir():
@@ -344,7 +344,7 @@ def analyze_run(record, output, mode, engine, batch_path):
         'Particle_size_px2': record['metadata']['particle_size_pixels_squared'],
         'StarDist_source': record['metadata'].get('stardist_folder', ''),
         **marker_identity, 'Input_type': mode,
-        'Channel_selection': 'Channel_N parsed from the selected Foci folder; no manual channel override',
+        'Channel_selection': 'Channel_N parsed from the selected marker folder; no manual channel override',
         'Projection': 'Already projected (assumed MAX)' if mode == 'tiff-2d' else 'MAX over all Z planes',
         'ImageJ_version': engine.version, 'BioFormats_version': engine.bioformats_version,
         'Batch_journal': str(batch_path),

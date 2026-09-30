@@ -88,29 +88,29 @@ def select_settings():
     if file_type not in [1, 2, 3]:
         raise ValueError("Invalid file type selection (must be 1-3).")
 
-    # Request channel number for Nuclei (1-based)
-    nuclei_channel = int(input("Enter the channel "
-                               "number for nuclei "
-                               "staining (starting from 1): "))
+    # Request the nuclei segmentation channel (1-based).
+    nuclei_channel = int(input("Enter the nuclei segmentation "
+                               "channel number (starting from 1): "))
     if nuclei_channel not in range(1, 13):
         raise ValueError("Invalid channel number for Nuclei (must be 1-12).")
 
-    # Request the number of Foci channels to process
-    num_foci_channels = int(input("How many Foci "
+    # Marker channels serve either the foci or nuclear-intensity workflow.
+    print("Marker channels can be used for foci analysis or nuclear marker-intensity measurements.")
+    num_foci_channels = int(input("How many marker "
                                   "channels do you want to process? "))
     if num_foci_channels < 1:
-        raise ValueError("Number of Foci "
+        raise ValueError("Number of marker "
                          "channels must be at least 1.")
 
-    # Request channel numbers for each Foci (1-based)
+    # Request channel numbers for each marker (1-based).
     foci_channels = []
     for i in range(num_foci_channels):
         channel = int(input(f"Enter the channel "
-                            f"number for Foci {i + 1} "
+                            f"number for marker {i + 1} "
                             f"(starting from 1): "))
         if channel not in range(1, 13):
             raise ValueError(f"Invalid channel "
-                             f"number for Foci {i + 1} "
+                             f"number for marker {i + 1} "
                              f"(must be 1-12).")
         foci_channels.append(channel)
 
@@ -120,17 +120,20 @@ def select_settings():
 def process_image(valid_folders: list, input_json_path=None) -> list:
     """
     Process all files from the provided directories (.nd2 or .tif/.tiff)
-    according to user-selected nuclei and foci channels.
+    according to user-selected nuclei segmentation and marker channels.
 
     Three types of input files are supported:
     1. ND2 files (multi-channel Z-stacks)
         * Nuclei -> Max Intensity Z-projection
-        * Foci   -> Standard Deviation Z-projection for each specified channel
+        * Markers -> Standard Deviation Z-projection for each specified channel
     2. Multi-channel TIFF files with Z-stacks (similar to ND2 structure)
         * Same processing as ND2 files
     3. 2D multi-channel TIFF files (already projections)
         * Nuclei -> ChannelSplitter channel for user input
-        * Foci   -> ChannelSplitter channel for each specified channel
+        * Markers -> ChannelSplitter channel for each specified channel
+
+    Prepared marker images support foci analysis. Nuclear-intensity measurements
+    use the selected channels in the original images, not these prepared pixels.
 
     Creates a text file (image_metadata.txt) in the 'foci_assay' folder,
     listing image calibration properties and dimension
@@ -170,7 +173,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                 settings = select_settings()
             file_type, nuclei_channel, foci_channels = settings
             run.logger.info("RUNTIME | ImageJ=%s", ij.getVersion())
-            run.logger.info("SETTINGS | input_type=%s | nuclei_channel=%d | foci_channels=%s",
+            run.logger.info("SETTINGS | input_type=%s | nuclei_channel=%d | marker_channels=%s",
                             {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type],
                             nuclei_channel, foci_channels)
             # Create subfolder for Nuclei
@@ -178,7 +181,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
             Path(nuclei_folder).mkdir(parents=True, exist_ok=True)
             print(f"Subfolder 'Nuclei' created in {processed_folder}")
 
-            # Create subfolders for each Foci channel
+            # Retain Foci folder names for compatibility with both workflows.
             foci_folders = {}
             for i, channel in enumerate(foci_channels):
                 folder_name = os.path.join(processed_folder,
@@ -269,7 +272,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                     # For ND2 files or Z-stack TIFFs (file types 1 and 2)
                     if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff')
                                                and file_type in (1, 2))):
-                        run.logger.info("PROCESSING | file=%s | nuclei_projection=MAX | foci_projection=SD | "
+                        run.logger.info("PROCESSING | file=%s | nuclei_projection=MAX | marker_projection=SD | "
                                         "output_bit_depth=8 | resize=False", filename)
                         # Check if channels exist
                         if (nuclei_channel > channels
@@ -308,9 +311,9 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                         nuclei_proj.close()
                         imp_nuclei.close()
 
-                        # Process FOCI: SD Z-projection for each channel
+                        # Prepare marker channels as SD Z-projections.
                         for foci_channel in foci_channels:
-                            print(f"Processing foci channel "
+                            print(f"Processing marker channel "
                                   f"{foci_channel} as SD Z-projection.")
                             imp.setC(foci_channel)
                             IJ.run(imp, "Duplicate...",
@@ -325,14 +328,14 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                             # Preserve native XY dimensions; convert segmentation input to 8-bit.
                             IJ.run(foci_proj, "8-bit", "")
 
-                            # Save to the corresponding Foci folder
+                            # Save to the corresponding marker folder.
                             foci_out = os.path.join(foci_folders[foci_channel],
                                                     f"{base_name}_foci_projection.tif")
                             spatial.imagej_calibration(foci_proj, calibration, jimport)
                             IJ.saveAs(foci_proj, "Tiff", foci_out)
                             spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                             run.saved(foci_out, (height, width))
-                            print(f"Foci (SD Z) saved to '{foci_out}'")
+                            print(f"Marker (SD Z) saved to '{foci_out}'")
 
                             foci_proj.close()
                             imp_foci.close()
@@ -375,21 +378,21 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                         print(f"Nuclei channel saved to '{nuclei_out}'.")
                         imp_nuclei.close()
 
-                        # ----- Process FOCI (2D TIFF) -----
+                        # ----- Prepare marker channels (2D TIFF) -----
                         for foci_channel in foci_channels:
-                            print(f"Extracting foci channel "
+                            print(f"Extracting marker channel "
                                   f"{foci_channel} from 2D TIFF.")
                             imp_foci = splitted_channels[foci_channel - 1]
                             IJ.run(imp_foci, "8-bit", "")
 
-                            # Save to the corresponding Foci folder
+                            # Save to the corresponding marker folder.
                             foci_out = os.path.join(foci_folders[foci_channel],
                                                     f"{base_name}_foci_projection.tif")
                             spatial.imagej_calibration(imp_foci, calibration, jimport)
                             IJ.saveAs(imp_foci, "Tiff", foci_out)
                             spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                             run.saved(foci_out, (height, width))
-                            print(f"Foci channel saved to '{foci_out}'.")
+                            print(f"Marker channel saved to '{foci_out}'.")
                             imp_foci.close()
 
                         # Close the original image

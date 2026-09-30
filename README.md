@@ -1,6 +1,6 @@
 # FIA-tools (Foci Imaging Assay
 
-FIA-tools is a modular, semi-interactive Python toolkit for processing confocal immunofluorescence images and quantifying nuclear foci. This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
+FIA-tools is a modular, semi-interactive Python toolkit for processing confocal immunofluorescence images, measuring nuclear morphology and marker intensity, and quantifying nuclear foci. This toolkit is optimized for medium-throughput, batch processing of large confocal images datasets from fibroblast/ECM 3D units, streamlining extraction and quantification of nuclear staining signals.
 
 FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools). The project was originally developed as part of the study [`Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts`](https://pubmed.ncbi.nlm.nih.gov/41884584/) in the [Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman).
 
@@ -18,7 +18,7 @@ For work following protocol version 1, use the corresponding `main` implementati
 For a complete guide to script usage, visit protocols.io.
 
 # Usage
-A modular, semi-interactive toolbox for quantifying nuclear foci (e.g., Ki-67, apoptotic markers) and their colocalization in 3D fibroblast/ECM unit assays. FIA-tools complements (UMA-tools)[https://github.com/alexdolskii/UMA-tools] by focusing on per-nucleus foci counts and/or colocolization between multiple foci channels, areas while preserving a reproducible, batch-friendly workflow.
+A modular, semi-interactive toolbox for nuclear morphology, nuclear marker intensity, and foci quantification with optional colocalization in 3D fibroblast/ECM unit assays. Channel preparation and nuclei segmentation are shared steps; the subsequent analysis can measure marker intensity per nucleus or detect and quantify individual foci.
 
 Input is a directory of .nd2 or .tif/.tiff confocal images representing Z-stacks with multiple detection channels (DAPI, fibronectin). To ensure correct channel mapping, keep the same channel order across every image.
 Core stack: Python + FIJI/ImageJ (headless), StarDist (2D_versatile_fluo)
@@ -55,12 +55,12 @@ Additional changes accompanying the revised protocol will be documented here as 
 ## Key features
 Robust nuclei detection in noisy data with StarDist; watershed + particle analysis to split touching nuclei.
 Flexible foci calls: user-defined thresholds per marker; supports multiple foci channels and co-localization (pairwise or multi-channel intersections).
-Projection-aware preprocessing: Max Intensity Z-prrojection for nuclei; StdDev Z-projection for foci (ND2).
+Projection-aware preprocessing: Max Intensity Z-projection for nuclei; StdDev Z-projection for prepared marker channels. Nuclear marker intensity is measured from originals, using MAX projection for stacks.
 Transparent: extensive logging, safety prompts before overwriting, and structured output folders.
 
-## Workflow (4 scripts)
+## Workflow: shared preparation and foci analysis
 **1) Image Pre-processing & Channel Extraction**
-Interactively select channels (1 nuclei + 1..N foci). For .nd2 .tiff stacks, create Max Intensity Z-projections for nuclei and StdDev Z-projections for foci (XY). Preserve native XY dimensions and convert prepared channels to 8-bit, save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
+Interactively select one nuclei segmentation channel and one or more marker channels, for either foci analysis or nuclear marker-intensity measurements. For .nd2/.tif/.tiff stacks, prepare Max Intensity Z-projections for nuclei and StdDev Z-projections for marker channels (XY). The intensity workflow later reads the selected marker channels from the originals and uses MAX projection for stacks. Preserve native XY dimensions and convert prepared channels to 8-bit, save into foci_assay/ with per-channel subfolders, and record calibration in image_metadata.txt (pixel size, units, dimensions).
 
 **2) Nuclei Segmentation & Mask Generation**
 Perform nuclei segmentation with StarDist (2D_versatile_fluo) after intensity normalization, then refine masks via ImageJ particle analysis and watershed to split touching objects, applying a minimum-size filter to remove debris; results are saved to timestamped nuclei-mask folders with detailed warning/error logs for QA.
@@ -150,7 +150,7 @@ Replace the example paths with your own. Despite the key name, each entry refers
 - Supported source formats are `.nd2`, `.tif`, and `.tiff`.
 - Stage 1 distinguishes ND2 stacks, multichannel TIFF stacks, and already projected 2D multichannel TIFF images.
 - Keep the channel order consistent across the images included in one batch.
-- Channel numbers start at **1**. Identify the nuclei channel and each foci marker channel before starting.
+- Channel numbers start at **1**. Identify the nuclei segmentation channel and each marker channel before starting.
 - Use absolute paths for input folders. When running under WSL, use paths visible inside WSL, such as `/mnt/c/...`.
 - Pass the same manifest to each stage. Run commands from the repository root when using the relative filename `input_paths.json`, or provide its absolute path in quotes.
 
@@ -164,9 +164,9 @@ For foci analysis, run the four stages in order and wait for each stage to finis
 select_channels -i input_paths.json
 ```
 
-The command asks you to confirm processing, select the input image type, choose the nuclei channel, and specify the number and indices of the foci channels. If `foci_assay` already exists, it also asks whether to overwrite existing results in that location.
+The command asks you to confirm processing, select the input image type, choose the nuclei segmentation channel, and specify the number and indices of the marker channels. These markers can be used for foci analysis or nuclear marker-intensity measurements. If `foci_assay` already exists, it also asks whether to overwrite existing results in that location.
 
-For stacks, the workflow prepares maximum-intensity projections for nuclei and standard-deviation projections for foci. Prepared channels retain the original width and height and are converted to 8-bit images for segmentation. No channel, mask or numbered QC image is resized. Z projection collapses only the Z dimension; the XY pixel grid is unchanged. They are saved under `foci_assay/Nuclei/` and `foci_assay/Foci/`; source metadata is written to `foci_assay/image_metadata.txt`.
+For stacks, the workflow prepares maximum-intensity projections for nuclei and standard-deviation projections for marker channels. Prepared channels retain the original width and height and are converted to 8-bit images for segmentation. No channel, mask or numbered QC image is resized. Z projection collapses only the Z dimension; the XY pixel grid is unchanged. They are saved under `foci_assay/Nuclei/` and `foci_assay/Foci/`; source metadata is written to `foci_assay/image_metadata.txt`. The existing `Foci/Foci_<index>_Channel_<channel>/` folder names and `*_foci_projection.tif` filenames are retained for compatibility with both workflows; they identify marker channels and do not imply that foci have already been detected. Nuclear-intensity measurements use the original images, with MAX projection for stacks, rather than the prepared SD/8-bit images.
 
 Each processed input folder has a readable `foci_assay/1_log.log`, including successful runs. It records the input folder/JSON, software versions, shared channel choices, actual projection methods, image dimensions, brief calibration information, saved output paths, per-image outcomes, counts and elapsed time. Hidden files (including macOS `._*`) are counted separately as ignored files, not failed images. Saved TIFF headers are checked for the original XY dimensions. Calibration details and file checksums remain in `spatial_calibration.json` for downstream programs; the log does not replace that file.
 
@@ -264,7 +264,7 @@ Use this branch for a diffuse nuclear marker such as phospho-Smad2. It measures 
 quantify_nuclear_intensity -i input_paths.json
 ```
 
-Select markers from the existing `foci_assay/Foci/Foci_<index>_Channel_<channel>/` folders. **`Channel_N` always selects channel N in the original multichannel image**; the `Foci` index is only the order assigned during preparation. For example, choosing `Foci_1_Channel_2` measures original channel 2. There is no separate channel prompt or `-c`/`--channel` option; previous commands containing that option must be updated. The command reads originals directly from the experiment folders in `paths_to_files`; it never uses the prepared 8-bit/standard-deviation foci images for intensity measurement.
+Select markers from the existing `foci_assay/Foci/Foci_<index>_Channel_<channel>/` folders. **`Channel_N` always selects channel N in the original multichannel image**; the `Foci` index is only the order assigned during preparation. For example, choosing `Foci_1_Channel_2` measures original channel 2. There is no separate channel prompt or `-c`/`--channel` option; previous commands containing that option must be updated. The command reads originals directly from the experiment folders in `paths_to_files`; it never uses the prepared 8-bit/standard-deviation marker images for intensity measurement.
 
 The terminal prompts proceed as follows:
 
@@ -495,7 +495,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 | Location | Contents |
 | --- | --- |
 | `foci_assay/Nuclei/` | Prepared nuclei-channel images |
-| `foci_assay/Foci/Foci_<index>_Channel_<channel>/` | Prepared images for each foci channel |
+| `foci_assay/Foci/Foci_<index>_Channel_<channel>/` | Prepared images for each marker channel (shared catalog for both workflows) |
 | `foci_assay/image_metadata.txt` | Source-image dimensions and calibration metadata |
 | `foci_assay/1_log.log` | Current channel-preparation run: settings, per-image outcomes and final status |
 | `foci_assay/logs/1_log_<timestamp>.log` | Previous channel-preparation journals preserved on rerun |
