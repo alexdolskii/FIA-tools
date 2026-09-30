@@ -9,12 +9,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import tifffile
+from terminal_progress import ProgressLogHandler
 
 
 class ChannelRunLog:
     """Keep a readable current log, archive previous runs, and count outcomes."""
 
-    def __init__(self, folder, input_json, run_id, script_digest):
+    def __init__(self, folder, input_json, run_id, script_digest, progress=None):
         self.folder = Path(folder)
         self.output = self.folder / "foci_assay"
         self.input_json = str(Path(input_json).resolve()) if input_json else "not supplied"
@@ -30,6 +31,7 @@ class ChannelRunLog:
         self.output_files = 0
         self.current_image = None
         self.status = "RUNNING"
+        self.progress = progress
 
     def __enter__(self):
         log_path = self.output / "1_log.log"
@@ -46,7 +48,7 @@ class ChannelRunLog:
         formatter.converter = time.gmtime
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
-        console = logging.StreamHandler()
+        console = ProgressLogHandler(self.progress) if self.progress else logging.StreamHandler()
         console.setLevel(logging.WARNING)
         console.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
         self.logger.addHandler(console)
@@ -80,18 +82,24 @@ class ChannelRunLog:
         self.image_started = time.monotonic()
         self.attempted += 1
         self.logger.info("IMAGE_STARTED | file=%s", filename)
+        if self.progress:
+            self.progress.begin_image(filename)
 
     def fail_image(self, reason):
         self.failed += 1
         self.logger.error("IMAGE_FAILED | file=%s | reason=%s | elapsed_s=%.3f",
                           self.current_image, reason, time.monotonic() - self.image_started)
         self.current_image = None
+        if self.progress:
+            self.progress.finish_image(False)
 
     def finish_image(self):
         self.completed += 1
         self.logger.info("IMAGE_COMPLETED | file=%s | elapsed_s=%.3f",
                          self.current_image, time.monotonic() - self.image_started)
         self.current_image = None
+        if self.progress:
+            self.progress.finish_image()
 
     def saved(self, path, shape):
         """Confirm a readable TIFF header and native XY size without loading pixels."""
@@ -122,9 +130,15 @@ class ChannelRunLog:
                              self.status, len(self.files), self.attempted, self.completed,
                              self.failed, len(self.files) - self.attempted, self.output_files,
                              time.monotonic() - self.started)
-            print(f"Folder status: {self.status}. Log: {self.output / '1_log.log'}")
+            message = f"Folder status: {self.status}. Log: {self.output / '1_log.log'}"
+            if self.progress:
+                self.progress.message(message)
+            else:
+                print(message)
         finally:
             for handler in self.logger.handlers[:]:
                 self.logger.removeHandler(handler)
                 handler.close()
+            if self.progress:
+                self.progress.logger = None
         return False

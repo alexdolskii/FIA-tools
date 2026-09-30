@@ -4,6 +4,7 @@ Set FIA_IMAGEJ_JAR and FIA_BIOFORMATS_JAR to installed JAR paths for native test
 """
 
 import csv
+import io
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import pytest
 import tifffile
 from openpyxl import load_workbook
 from PIL import Image
+from terminal_progress import CompactProgress
 
 
 @pytest.fixture
@@ -208,7 +210,13 @@ def test_native_reject_multi_series_timepoints_rgb_and_nonfinite(tmp_path, engin
         engine.marker(path, 'tiff-2d', 1, info)
 
 
-def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkeypatch):
+@pytest.mark.parametrize('interactive', [False, True])
+def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkeypatch, interactive):
+    stream = io.StringIO()
+    stream.isatty = lambda: interactive
+    monkeypatch.setenv('TERM', 'xterm')
+    monkeypatch.setenv('COLUMNS', '160')
+    monkeypatch.setattr(app, 'CompactProgress', lambda total=None: CompactProgress(total, stream))
     manifest, raw, run, _pixels, _labels = make_experiment(tmp_path)
     before = {p: p.read_bytes() for p in run.rglob('*') if p.is_file()}
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
@@ -216,6 +224,9 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
         answers = iter(['all', 'all', '1'])
         monkeypatch.setattr('builtins.input', lambda _, answers=answers: next(answers))
         assert app.main(manifest, mode='tiff-stack') == 0
+        assert engine.progress is None
+    assert 'Total 1/1 (100.0%)' in stream.getvalue()
+    assert ('\033[2K' in stream.getvalue()) == interactive
     outputs = list(run.parent.glob('Nuclear_Intensity_*'))
     assert len(outputs) == 2
     for output in outputs:

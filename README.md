@@ -158,6 +158,10 @@ Replace the example paths with your own. Despite the key name, each entry refers
 
 For foci analysis, run the four stages in order and wait for each stage to finish before starting the next. For per-nucleus marker intensity (for example, phospho-Smad2), run stages 1 and 2, then the optional nuclear-intensity command described below; foci masks are not required. Use `fia_collect_marker_intensity_results` afterward to gather spreadsheets for downstream analysis. Several stages ask questions in the terminal. Review their output and log files before continuing.
 
+`select_channels` and `quantify_nuclear_intensity` use a compact live terminal line for the current image, processing stage, elapsed time and successful-image counters (per folder/run and across the selected batch). An image advances the success counter only after its outputs have been saved; failures are counted separately. Intensity preflight validation has its own progress before run selection. Long filenames are shortened for display; full names remain in the journals.
+
+Bio-Formats ND2 block messages update the stage percentage when available instead of printing a new line for every block. **This percentage describes the ND2 structure scan, not the entire image analysis**, and may stop at 99% before processing advances to the next stage. Projection and saving stages show their names and elapsed time without inventing percentages. Warnings and errors appear on separate lines. Processing-stage Bio-Formats messages and phase changes are retained in `1_log.log` or `intensity.log`. Redirecting stdout to a file produces concise image start/completion lines without terminal control codes. If the Java logging backend cannot be connected, the command warns once and retains normal Bio-Formats output. These display changes do not alter image processing or scientific measurements.
+
 ### Stage 1. Select and prepare image channels
 
 ```bash

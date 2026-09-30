@@ -12,6 +12,7 @@ import spatial_calibration as spatial
 from nuclear_intensity_imagej import METRICS, ImageJEngine
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
+from terminal_progress import CompactProgress, ProgressLogHandler
 
 RUN_PATTERN = re.compile(r'^Final_Nuclei_Mask_(\d{8}_\d{6})$')
 MARKER_PATTERN = re.compile(r'^Foci_([1-9][0-9]*)_Channel_([1-9][0-9]*)$')
@@ -142,13 +143,15 @@ def fingerprint(path):
     return {'size_bytes': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
 
 
-def inspect_run(experiment, run, mode, marker, engine, cache):
+def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
     channel = marker['channel']
     record = {'dataset': experiment['root'], 'path': run, 'pairs': [],
               'metadata': {}, 'errors': [], 'mask_count': 0, 'marker': marker}
     try:
         masks = visible_files(run, {'.tif', '.tiff'})
         record['mask_count'] = len(masks)
+        if progress:
+            progress.group(f"Validating {experiment['root'].name} | {marker['name']} | {run.name}", len(masks))
         datetime.strptime(RUN_PATTERN.fullmatch(run.name)[1], '%Y%m%d_%H%M%S').replace(tzinfo=timezone.utc)
         metadata_path = run / 'nuclei_run.json'
         record['metadata_fingerprint'] = fingerprint(metadata_path)
@@ -179,6 +182,9 @@ def inspect_run(experiment, run, mode, marker, engine, cache):
             if raw.suffix.lower() in extensions:
                 sources.setdefault(raw.stem, []).append(raw)
         for mask in masks:
+            if progress:
+                progress.begin_image(mask.name)
+                progress.phase("Validating source and masks")
             try:
                 if not mask.stem.endswith(MASK_SUFFIX):
                     raise ValueError('Unrecognized final-mask filename suffix.')
@@ -196,8 +202,12 @@ def inspect_run(experiment, run, mode, marker, engine, cache):
                 engine.labels(mask, id_map, info)
                 record['pairs'].append({'source': source, 'mask': mask, 'ids': id_map,
                                         'info': info, 'fingerprints': fingerprints})
+                if progress:
+                    progress.finish_image()
             except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
                 record['errors'].append(f'{mask.name}: {error}')
+                if progress:
+                    progress.finish_image(False)
     except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
         record['errors'].append(str(error))
     record['eligible'] = bool(record['pairs']) and not record['errors']
@@ -249,8 +259,9 @@ def write_json(path, content):
     temporary.replace(path)
 
 
-def save_batch_journal(journal):
+def save_batch_journal(journal, progress=None):
     """Checkpoint the full batch in every created result, with a local fallback for I/O failures."""
+    message = progress.message if progress else print
     paths = [Path(item['output']) / 'batch.json' for item in journal['runs'] if item['output']]
     errors = []
     for path in paths:
@@ -267,14 +278,14 @@ def save_batch_journal(journal):
                 fallback = folder / 'batch.json'
                 write_json(fallback, {**journal, 'fallback_journal': str(fallback), 'journal_copy_errors': errors})
                 journal['fallback_journal'] = str(fallback)
-                print(f'Fallback batch journal: {fallback}')
+                message(f'Fallback batch journal: {fallback}')
             else:
                 write_json(Path(journal['fallback_journal']), {**journal, 'journal_copy_errors': errors})
         except OSError as error:
-            print(f'Could not preserve the fallback batch journal: {error}')
+            message(f'Could not preserve the fallback batch journal: {error}')
             return False
     for error in errors:
-        print(f"Could not update batch journal {error['path']}: {error['error']}")
+        message(f"Could not update batch journal {error['path']}: {error['error']}")
     return bool(paths) and not errors
 
 
@@ -332,7 +343,7 @@ def summarize(rows):
     return summary
 
 
-def analyze_run(record, output, mode, engine, batch_path):
+def analyze_run(record, output, mode, engine, batch_path, progress=None):
     channel = record['marker']['channel']
     marker_identity = {'Marker_folder': record['marker']['name'],
                        'Marker_folder_path': str(record['marker']['folder']),
@@ -367,6 +378,14 @@ def analyze_run(record, output, mode, engine, batch_path):
     handler = logging.FileHandler(output / 'intensity.log', encoding='utf-8')
     handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
     logger.addHandler(handler)
+    console = None
+    if progress:
+        progress.logger = logger
+        progress.group(f"Measuring {record['dataset'].name} | {record['marker']['name']} | {record['path'].name}",
+                       len(record['pairs']))
+        console = ProgressLogHandler(progress)
+        console.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
+        logger.addHandler(console)
     try:
         for index, pair in enumerate(record['pairs'], 1):
             identifiers = {
@@ -382,8 +401,11 @@ def analyze_run(record, output, mode, engine, batch_path):
             marker = None
             counts = dict.fromkeys(COUNTS)
             image_folder = output / f'image_{index:04d}'
-            print(f"Measuring {pair['source'].name}, {marker_identity['Marker_folder']}, "
-                  f"with {record['path'].name}...")
+            if progress:
+                progress.begin_image(pair['source'].name)
+                progress.phase('Checking input files')
+            logger.info('IMAGE_STARTED | file=%s | marker=%s | nuclei_run=%s',
+                        pair['source'], marker_identity['Marker_folder'], record['path'])
             try:
                 if fingerprint(record['path'] / 'nuclei_run.json') != record['metadata_fingerprint']:
                     raise ValueError('Nucleus run metadata changed after selection.')
@@ -419,18 +441,29 @@ def analyze_run(record, output, mode, engine, batch_path):
                 if image_folder.exists():
                     write_json(image_folder / 'FAILED.json', {'error': str(error), 'measurements_accepted': False})
                 logger.exception('Failed: %s', pair['source'])
-                print(f"Failed: {pair['source'].name}: {error}")
+                if not progress:
+                    print(f"Failed: {pair['source'].name}: {error}")
             finally:
                 if marker is not None:
                     marker.close()
             # Preserve completed image rows if a later image is interrupted.
+            if progress:
+                progress.phase('Saving spreadsheets')
             save_tables(output, nuclei, images, info)
+            logger.info('IMAGE_FINISHED | file=%s | status=%s', pair['source'], images[-1]['Status'])
+            if progress:
+                progress.finish_image(images[-1]['Status'] == 'complete')
         info['Status'] = 'complete' if images and all(row['Status'] == 'complete' for row in images) else 'incomplete'
         info['Finished_UTC'] = datetime.now(timezone.utc).isoformat()
         save_tables(output, nuclei, images, info)
         write_json(output / 'intensity_run.json', info)
         return info['Status']
     finally:
+        if console:
+            logger.removeHandler(console)
+            console.close()
+        if progress:
+            progress.logger = None
         logger.removeHandler(handler)
         handler.close()
 
@@ -438,6 +471,7 @@ def analyze_run(record, output, mode, engine, batch_path):
 def main(input_path, mode=None):
     """Interactive planning precedes output creation; failures return a nonzero status."""
     journal = None
+    engine = None
     try:
         experiments = discover(input_path)
         if not experiments:
@@ -462,27 +496,30 @@ def main(input_path, mode=None):
         print('Initializing ImageJ and validating candidate mask runs...')
         engine = ImageJEngine()
         records, cache, skipped = [], {}, []
-        for experiment in selected:
-            if not experiment['runs']:
-                print(f"No final-mask runs: {experiment['root']}")
-            for choice in markers:
-                folder = choice['folders'].get(experiment['root'])
-                if folder is None:
-                    reason = 'Selected marker folder is missing or has no visible TIFF images'
-                    skipped.append({'dataset': str(experiment['root']), 'marker': choice['name'],
-                                    'channel': choice['channel'], 'reason': reason})
-                    print(f"Skipping {experiment['root']} / {choice['name']}: {reason}.")
-                    continue
-                marker = {'name': choice['name'], 'channel': choice['channel'], 'folder': folder['path']}
-                for run in experiment['runs']:
-                    record = inspect_run(experiment, run, mode, marker, engine, cache)
-                    records.append(record)
-                    print(f"{run} | {marker['name']} | original channel {marker['channel']} "
-                          f"| -p {record['metadata'].get('particle_size_pixels_squared', '?')} "
-                          f"| masks: {record['mask_count']} | compatible pairs: {len(record['pairs'])} "
-                          f"| {'READY' if record['eligible'] else 'UNAVAILABLE'}")
-                    for error in record['errors']:
-                        print(f'  {error}')
+        with CompactProgress() as progress:
+            engine.progress = progress
+            for experiment in selected:
+                if not experiment['runs']:
+                    progress.message(f"No final-mask runs: {experiment['root']}")
+                for choice in markers:
+                    folder = choice['folders'].get(experiment['root'])
+                    if folder is None:
+                        reason = 'Selected marker folder is missing or has no visible TIFF images'
+                        skipped.append({'dataset': str(experiment['root']), 'marker': choice['name'],
+                                        'channel': choice['channel'], 'reason': reason})
+                        progress.message(f"Skipping {experiment['root']} / {choice['name']}: {reason}.")
+                        continue
+                    marker = {'name': choice['name'], 'channel': choice['channel'], 'folder': folder['path']}
+                    for run in experiment['runs']:
+                        record = inspect_run(experiment, run, mode, marker, engine, cache, progress)
+                        records.append(record)
+                        progress.message(f"{run} | {marker['name']} | original channel {marker['channel']} "
+                              f"| -p {record['metadata'].get('particle_size_pixels_squared', '?')} "
+                              f"| masks: {record['mask_count']} | compatible pairs: {len(record['pairs'])} "
+                              f"| {'READY' if record['eligible'] else 'UNAVAILABLE'}")
+                        for error in record['errors']:
+                            progress.message(f'  {error}')
+        engine.progress = None
         runs = select_runs(records)
         print(f"\nSelected {len(runs)} experiment/marker/mask-run combinations, "
               f"{sum(len(r['pairs']) for r in runs)} image measurements; input type {mode}. "
@@ -500,34 +537,38 @@ def main(input_path, mode=None):
                    'runs': [{'source': str(r['path']), 'marker': r['marker']['name'],
                              'marker_folder': str(r['marker']['folder']), 'channel': r['marker']['channel'],
                              'status': 'pending', 'output': None} for r in runs]}
-        for record, item in zip(runs, journal['runs']):
-            output = None
-            try:
-                output = new_output(record['path'].parent, f"Nuclear_Intensity_{record['marker']['name']}_")
-                item.update(status='running', output=str(output))
-                journal_path = output / 'batch.json'
-                saved = save_batch_journal(journal)
-                if not saved and journal.get('fallback_journal'):
-                    journal_path = Path(journal['fallback_journal'])
-                item['status'] = analyze_run(record, output, mode, engine, journal_path)
-            except (Cancelled, KeyboardInterrupt, EOFError):
-                item['status'] = 'interrupted'
-                raise
-            except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
-                item.update(status='failed', error=str(error))
+        with CompactProgress(sum(len(record['pairs']) for record in runs)) as progress:
+            engine.progress = progress
+            for record, item in zip(runs, journal['runs']):
+                output = None
+                try:
+                    output = new_output(record['path'].parent, f"Nuclear_Intensity_{record['marker']['name']}_")
+                    item.update(status='running', output=str(output))
+                    journal_path = output / 'batch.json'
+                    saved = save_batch_journal(journal, progress)
+                    if not saved and journal.get('fallback_journal'):
+                        journal_path = Path(journal['fallback_journal'])
+                    item['status'] = analyze_run(record, output, mode, engine, journal_path, progress)
+                except (Cancelled, KeyboardInterrupt, EOFError):
+                    item['status'] = 'interrupted'
+                    raise
+                except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
+                    progress.finish_image(False)
+                    item.update(status='failed', error=str(error))
+                    if output is not None:
+                        failed_path = output / 'intensity_run.json'
+                        try:
+                            failed_info = json.loads(failed_path.read_text(encoding='utf-8')) if failed_path.exists() else {}
+                            failed_info.update(Status='failed', Error=str(error))
+                            write_json(failed_path, failed_info)
+                        except OSError:
+                            pass  # The batch journal records failures even when the output volume is unavailable.
+                    progress.message(f"Run failed: {output or record['path']}: {error}")
+                finally:
+                    save_batch_journal(journal, progress)
                 if output is not None:
-                    failed_path = output / 'intensity_run.json'
-                    try:
-                        failed_info = json.loads(failed_path.read_text(encoding='utf-8')) if failed_path.exists() else {}
-                        failed_info.update(Status='failed', Error=str(error))
-                        write_json(failed_path, failed_info)
-                    except OSError:
-                        pass  # The batch journal records failures even when the output volume is unavailable.
-                print(f"Run failed: {output or record['path']}: {error}")
-            finally:
-                save_batch_journal(journal)
-            if output is not None:
-                print(f"Results: {output} ({item['status']})")
+                    progress.message(f"Results: {output} ({item['status']})")
+        engine.progress = None
         status = 'complete' if all(r['status'] == 'complete' for r in journal['runs']) else 'incomplete'
         saved = finish_batch_journal(journal, status)
         return 0 if status == 'complete' and saved else 1
@@ -541,3 +582,6 @@ def main(input_path, mode=None):
             finish_batch_journal(journal, 'failed', error)
         print(f'Nuclear intensity analysis could not complete: {error}')
         return 1
+    finally:
+        if engine is not None:
+            engine.progress = None

@@ -6,6 +6,7 @@ from pathlib import Path
 import fiji_config
 import numpy as np
 import spatial_calibration as spatial
+from bioformats_progress import bioformats_progress
 from scyjava import jimport
 
 METRICS = {
@@ -19,11 +20,16 @@ class ImageJEngine:
     """Keep source intensities and geometry separate from display rendering."""
 
     def __init__(self, initialize=True):
+        self.progress = None
         if initialize:
             import imagej
             self.gateway = imagej.init(fiji_config.FIJI_ENDPOINT, mode='headless')
         self.version = str(jimport('ij.IJ').getVersion())
         self.bioformats_version = str(jimport('loci.formats.FormatTools').VERSION)
+
+    def phase(self, name, percent=None):
+        if self.progress is not None:
+            self.progress.phase(name, percent)
 
     @contextmanager
     def reader(self, path):
@@ -32,7 +38,9 @@ class ImageJEngine:
             # A source file is one analysis unit; never group neighboring files.
             reader.setGroupFiles(False)
             reader.setMetadataStore(jimport('loci.formats.MetadataTools').createOMEXMLMetadata())
-            reader.setId(str(path))
+            self.phase('Reading source metadata')
+            with bioformats_progress(self.progress):
+                reader.setId(str(path))
             yield reader
         finally:
             reader.close()
@@ -95,6 +103,7 @@ class ImageJEngine:
             dtype = {'uint8': 'u1', 'int8': 'i1', 'uint16': 'u2',
                      'int16': 'i2', 'float': 'f4'}[info['Pixel_type']]
             dtype = np.dtype(('<' if info['Little_endian'] else '>') + dtype)
+            self.phase(f'Reading marker C{channel} planes', 0)
             for z in range(info['Z_planes']):
                 plane = reader.openBytes(reader.getIndex(z, channel - 1, 0))
                 raw = np.asarray(plane).astype(np.uint8).tobytes()
@@ -105,10 +114,12 @@ class ImageJEngine:
                     raise ValueError('Source channel contains NaN or infinite values.')
                 stack.addSlice(FloatProcessor(info['Width_px'], info['Height_px'],
                                jpype.JArray(jpype.JFloat)(pixels)))
+                self.phase(f'Reading marker C{channel} planes', int(100 * (z + 1) / info['Z_planes']))
         source = ImagePlus('Original marker channel', stack)
         projected = None
         try:
             if info['Z_planes'] > 1:
+                self.phase(f'Marker C{channel} MAX projection')
                 projector = jimport('ij.plugin.ZProjector')(source)
                 projector.setMethod(projector.MAX_METHOD)
                 projector.setStartSlice(1)
@@ -132,6 +143,7 @@ class ImageJEngine:
 
     def labels(self, mask_path, labels_path, info):
         """Validate existing final-mask IDs without resegmentation or renumbering."""
+        self.phase('Checking nucleus masks')
         IJ = jimport('ij.IJ')
         mask, ids = None, None
         try:
@@ -190,6 +202,7 @@ class ImageJEngine:
         marker.setCalibration(jimport('ij.measure.Calibration')())
         marker.getProcessor().resetThreshold()
         saved_calibration = getattr(self, '_active_calibration', spatial.uncalibrated())
+        self.phase('Saving marker image')
         spatial.imagej_calibration(marker, saved_calibration, jimport)
         if not FileSaver(marker).saveAsTiff(str(folder / 'marker.tif')):
             raise OSError('Could not save marker TIFF.')
@@ -202,6 +215,7 @@ class ImageJEngine:
         all_ids, border_ids, eligible_ids = self.populations(labels)
         rows = []
         try:
+            self.phase('Measuring nuclei', 0)
             for nucleus_id in eligible_ids:
                 binary = (labels == nucleus_id).astype(np.uint8) * 255
                 processor = ByteProcessor(labels.shape[1], labels.shape[0],
@@ -239,6 +253,8 @@ class ImageJEngine:
                 y, x = np.nonzero(binary)
                 canvas.drawString(str(nucleus_id), int(x.mean()), int(y.mean()))
                 rows.append({**row, 'Nucleus_mask': mask_name, 'ROI': roi_name})
+                self.phase('Measuring nuclei', int(100 * len(rows) / len(eligible_ids)))
+            self.phase('Saving numbered QC image')
             if not FileSaver(preview).saveAsPng(str(folder / 'numbered_nuclei.png')):
                 raise OSError('Could not save numbered QC image.')
         finally:
