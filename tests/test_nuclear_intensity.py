@@ -366,7 +366,7 @@ def test_stage1_native_channel_exports(tmp_path, engine, monkeypatch, mode):
         def getImage():
             return HeadlessCommands.current
 
-    monkeypatch.setattr(module, 'initialize_imagej', lambda: None)
+    monkeypatch.setattr(module, 'initialize_imagej', lambda: IJ)
     class HeadlessChannels:
         @staticmethod
         def split(imp):
@@ -394,6 +394,9 @@ def test_stage1_native_channel_exports(tmp_path, engine, monkeypatch, mode):
         assert prepared.dtype == np.uint8
     metadata = (root / 'foci_assay' / 'image_metadata.txt').read_text()
     assert 'Width: 1301' in metadata and 'Height: 73' in metadata
+    journal = (root / 'foci_assay' / '1_log.log').read_text()
+    assert 'FINISHED | status=SUCCESS' in journal
+    assert 'output_files=2' in journal
 
 
 def test_marker_catalog_filters_counts_and_preserves_full_folder_identity(tmp_path, capsys):
