@@ -73,11 +73,13 @@ def annotated(populations=None):
     for index, (well, values) in enumerate(populations):
         identity = {'Well': well, 'Group': 'Control' if well in ('A02', 'A03') else 'Treatment',
                     'Mask_name': f'mask_{index}', 'Image_name': f'field{index}_Well{well}.nd2'}
-        image = dict(identity, Non_border_nuclei_count=len(values))
+        image = dict(identity, Nuclei_count_total=len(values), Border_nuclei_count=0,
+                     Non_border_nuclei_count=len(values))
         for _, _, field, _ in specs[1:]:
-            for stat, value in zip(collector.STATS, (np.mean(values), np.median(values),
-                                                    np.percentile(values, 75) - np.percentile(values, 25))):
-                image[field + '_' + stat] = float(value)
+            summaries = (np.mean(values), np.median(values),
+                         np.percentile(values, 75) - np.percentile(values, 25)) if values else (None,) * 3
+            for stat, value in zip(collector.STATS, summaries):
+                image[field + '_' + stat] = float(value) if value is not None else None
         images.append(image)
         for nucleus_id, value in enumerate(values, 1):
             nuclei.append(dict(identity, Nucleus_ID=nucleus_id, **{field: value for _, _, field, _ in specs[1:]}))
@@ -255,6 +257,9 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
     assert status['Status'] == 'SUCCESS' and status['Non_border_nuclei'] == 2
     assert status['Planned_comparisons'] == 19
     assert len(sheet_rows(output / report.WORKBOOK, 'Nuclei')) == 2
+    assert sheet_rows(output / report.WORKBOOK, 'Excluded_Images') == []
+    assert (output / 'Excluded_Images.csv').is_file()
+    assert status['Images_before_filter'] == status['Images'] == 1 and status['Images_excluded'] == 0
     assert len(sheet_rows(output / report.WORKBOOK, 'Statistics')) == 19
     by_condition = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
     comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
@@ -275,9 +280,18 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
     assert (output / 'Inputs' / 'Collection' / 'Nuclei_Morphology.csv').read_bytes() == before[path / 'Nuclei_Morphology.csv']
 
 
-def test_empty_nuclei_are_zero_counts_not_zero_intensities(tmp_path):
-    path = collection(tmp_path, empty=True)
-    ok, output = report.create_report(path, path.parent, markers='all', stats_unit='well')
+@pytest.mark.parametrize('unit', ['nucleus', 'well', None])
+@pytest.mark.parametrize('border_count', [0, 3])
+def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path, unit, border_count):
+    morph = create_morphology(tmp_path / 'experiment', empty=True)
+    morph[1].images[0].update(Nuclei_count_total=border_count, Border_nuclei_count=border_count)
+    assert morph[1].save() == 'complete'
+    create_intensity(morph)
+    ok, path = collect(morph, [MARKER])
+    assert ok
+    plate(path / 'arbitrary layout.xlsx')
+    before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
+    ok, output = report.create_report(path, path.parent, markers='all', stats_unit=unit)
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Nuclei') == []
     summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
@@ -285,10 +299,73 @@ def test_empty_nuclei_are_zero_counts_not_zero_intensities(tmp_path):
     assert all(r['Control: N'] == 0 and r['Control: Mean'] is None and r['Control: SD'] is None for r in summary)
     comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
     assert all(r['Status'] == 'NOT_TESTED' and r['P_Holm'] is None for r in comparisons)
-    points = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
-    assert len(points) == 1 and points[0]['Value'] == 0 and points[0]['Observation'] == 'image'
-    with (output / 'Nuclei.csv').open(encoding='utf-8-sig') as handle:
-        assert 'Area_px2' in next(csv.reader(handle))
+    for table in ('Nuclei', 'Images', 'Image_Values', 'Plot_Data'):
+        assert sheet_rows(output / report.WORKBOOK, table) == []
+        with (output / (table + '.csv')).open(encoding='utf-8-sig') as handle:
+            assert 'Image_name' in next(csv.reader(handle))
+    excluded = sheet_rows(output / report.WORKBOOK, 'Excluded_Images')
+    assert len(excluded) == 1
+    assert excluded[0]['Source_file'] == str(morph[2])
+    assert excluded[0]['Nuclei_count_total'] == excluded[0]['Border_nuclei_count'] == border_count
+    assert excluded[0]['Non_border_nuclei_count'] == 0
+    assert excluded[0]['Well'] == 'A02' and excluded[0]['Group'] == 'Control'
+    assert excluded[0]['Reason'] == 'No usable non-border nuclei'
+    assert (output / 'Excluded_Images.csv').is_file()
+    counts = sheet_rows(output / report.WORKBOOK, 'Image_Filter_Summary')
+    assert counts == [
+        {'Group': 'Control', 'Images_total': 1, 'Images_excluded': 1, 'Images_used': 0,
+         'Wells_with_images': 1, 'Wells_used': 0},
+        {'Group': 'Treatment', 'Images_total': 0, 'Images_excluded': 0, 'Images_used': 0,
+         'Wells_with_images': 0, 'Wells_used': 0},
+    ]
+    assert all(row['Value'] is None and row['N_images_used'] == 0
+               for row in sheet_rows(output / report.WORKBOOK, 'Well_Values'))
+    assert all(row['N'] == 0 and row['Mean'] is None
+               for row in sheet_rows(output / report.WORKBOOK, 'Summary'))
+    assert all(row['Points'] == 0 for row in sheet_rows(output / report.WORKBOOK, 'Plot_Info'))
+    status = json.loads((output / 'report_status.json').read_text())
+    assert status['Images_before_filter'] == status['Images_excluded'] == 1 and status['Images'] == 0
+    assert all(p.read_bytes() == content for p, content in before.items())
+
+
+@pytest.mark.parametrize('unit', ['nucleus', 'well', None])
+def test_filter_precedes_all_aggregation_and_preserves_real_zero_intensity(unit):
+    data = annotated([('A02', []), ('A03', [0, 2]), ('A03', [6, 10]),
+                      ('A04', []), ('A04', [20, 30]), ('A05', [40, 60])])
+    data['images'][0].update(Nuclei_count_total=3, Border_nuclei_count=3)
+    data['groups'].append('Excluded condition')
+    data['blocks']['one color']['Excluded condition'] = False
+    data['design'].append({'Well': 'A06', 'Group': 'Excluded condition'})
+    data['images'].append(dict(data['images'][0], Well='A06', Group='Excluded condition',
+                               Mask_name='mask_6', Image_name='field6_WellA06.nd2'))
+    data['stats_unit'] = unit
+    original = deepcopy(data)
+    data_tools.exclude_empty_images(data)
+    data_tools.aggregate(data)
+    calculate_statistics(data)
+    assert len(data['excluded_images']) == 3 and len(data['images']) == 4
+    assert data['nuclei'] == original['nuclei']
+    assert data['design'] == original['design'] and data['blocks'] == original['blocks']
+    assert next(r for r in data['well_values'] if r['Well'] == 'A02')['Value'] is None
+    assert next(r for r in data['well_values'] if r['Well'] == 'A03' and r['Metric'] == RAW)['Value'] == 4.5
+    assert next(r for r in data['well_values'] if r['Well'] == 'A04' and r['Metric'] == data_tools.COUNT)['Value'] == 2
+    assert data['counts_by_group']['Control'] == {'Nuclei': 4, 'Images': 2, 'Wells': 1}
+    assert data['counts_by_group']['Excluded condition'] == {'Nuclei': 0, 'Images': 0, 'Wells': 0}
+    points = plot_rows(data)
+    assert all(row['Mask_name'] not in {'mask_0', 'mask_3', 'mask_6'} for row in points)
+    assert any(row['Metric'] == RAW and row['Value'] == 0 for row in points)
+    count_summary = next(r for r in data['summary'] if r['Metric'] == data_tools.COUNT and r['Group'] == 'Control')
+    assert count_summary['N'] == 2 and count_summary['Mean'] == 2
+    if unit is not None:
+        assert all(r['Family_size_planned'] == 38 for r in data['statistics'])
+        missing = [r for r in data['statistics'] if r['Treatment'] == 'Excluded condition']
+        assert all(r['N_treatment'] == 0 and r['Status'] == 'NOT_TESTED' for r in missing)
+        raw_test = next(r for r in data['statistics'] if r['Metric'] == RAW and r['Treatment'] == 'Treatment')
+        assert raw_test['Control_images'] == 2 and raw_test['Control_wells'] == 1
+        if unit == 'nucleus':
+            assert raw_test['P_raw'] == pytest.approx(ttest_ind([20, 30, 40, 60], [0, 2, 6, 10], equal_var=False).pvalue)
+        else:
+            assert raw_test['Status'] == 'NOT_TESTED'
 
 
 def test_changed_input_cannot_publish_success(tmp_path, monkeypatch):

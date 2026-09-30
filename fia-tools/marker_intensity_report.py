@@ -147,17 +147,18 @@ def morphology_tables(data):
 def report_tables(data, output, manifest):
     unit = data['stats_unit'] or 'disabled'
     notes = [
-        ('Population', 'Non-border nuclei only. No extra morphology or intensity filtering.'),
-        ('Count plot', 'One point = non-border nuclei in one image, including zero-count images.'),
+        ('Population', 'Non-border nuclei from images with Non_border_nuclei_count > 0. No intensity threshold or additional nucleus-level filtering.'),
+        ('Image exclusion', inputs.IMAGE_EXCLUSION_RULE + '. Applied to all metrics before aggregation and tests. Excluded_Images lists files and reasons; Image_Filter_Summary counts original, excluded and retained images per condition. Inputs remain unchanged.'),
+        ('Count plot', 'One point = non-border nuclei in one retained image; zero-count images are excluded.'),
         ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
         ('Morphology plots', 'Add a violin with an inner boxplot for each morphology metric with at least one tested control comparison having P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots.'),
-        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. Overview PNGs contain up to four panels; separate panel PNGs are also embedded in the workbook. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
+        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview PNG contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Separate panel PNGs are also embedded in the workbook. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
         ('Plot sample sizes', 'Labels give usable nuclei or images and contributing wells for each metric. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains every observation once per metric, irrespective of panel exports.'),
         ('Violin display', 'Equal maximum widths; Scott bandwidth; density limited to observed values. Fewer than five nuclei: box/range without density. Constant or single value: horizontal line. Empty groups retain n=0. Range lines retain extremes without outlier dots.'),
         ('Statistics unit', unit),
         ('Count test exception', 'Requested nucleus mode uses images for count tests; well mode uses wells.'),
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
-        ('Missing data', 'Missing marker measurements are blank, not zero. Empty images contribute zero to counts only.'),
+        ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no metric. Wells or conditions with no retained images keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
         ('Tests', 'Two-sided Welch comparisons of each treatment to the bold control in its plate-map color block.'),
         ('Multiplicity', 'Holm family includes count, 12 morphology metrics and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
         ('Confidence intervals', '95% Welch intervals for treatment minus control; nominal, not multiplicity-adjusted.'),
@@ -185,19 +186,21 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 1, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 2, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
         'Requested_statistics_unit': unit, 'Non_border_nuclei': len(data['nuclei']),
         'Morphology_summary_observation_unit': 'well' if data['stats_unit'] == 'well' else 'nucleus',
-        'Morphology_summary_population': 'Non-border nuclei only; no additional filtering.',
+        'Morphology_summary_population': 'Non-border nuclei from images with Non_border_nuclei_count > 0.',
         'Morphology_summary_N': 'Usable observations for each metric, in Morphology_summary_observation_unit.',
         'Morphology_summary_SD': 'Sample standard deviation (ddof=1); blank for fewer than two observations.',
         'Morphology_summary_well_values': 'Mean of usable per-image nucleus means within each well; equal image weight.',
         'Morphology_summary_tests': 'Existing Welch/Holm results from Statistics, including its full planned family across count, morphology and selected markers. No tests when Requested_statistics_unit is disabled.',
         'Morphology_plot_rule': 'At least one TESTED control comparison with P_Holm < 0.05 in the selected statistics unit; no morphology plots when statistics are disabled or no comparisons qualify.',
-        'Images': len(data['images']), 'Python': sys.version.split()[0],
+        'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
+        'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': inputs.IMAGE_EXCLUSION_RULE,
+        'Python': sys.version.split()[0],
         'NumPy': np.__version__, 'SciPy': scipy.__version__, 'Matplotlib': matplotlib.__version__,
         'openpyxl': openpyxl.__version__,
     }
@@ -207,8 +210,10 @@ def report_tables(data, output, manifest):
         'Statistics': as_table(data['statistics'], STAT_COLUMNS),
         'Summary': as_table(data['summary']),
         'Nuclei': as_table(data['nuclei'], data['nuclei_columns'] + ['Group']),
-        'Images': as_table(data['images']),
-        'Image_Values': as_table(data['image_values']),
+        'Images': as_table(data['images'], data['image_columns']),
+        'Excluded_Images': as_table(data['excluded_images'], inputs.EXCLUDED_IMAGE_COLUMNS),
+        'Image_Filter_Summary': as_table(data['image_filter_summary']),
+        'Image_Values': as_table(data['image_values'], inputs.IMAGE_VALUE_COLUMNS),
         'Well_Values': as_table(data['well_values']),
         'Plate_Map': as_table(data['design']),
         'Plot_Data': as_table(data['plot_data'], PLOT_COLUMNS),
@@ -294,6 +299,11 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         manifest_path = Path(manifest).expanduser().absolute() if manifest else None
         if manifest_path:
             collect.snapshot(manifest_path, data['files'])
+        stage = 'image exclusion'
+        inputs.exclude_empty_images(data)
+        logger.info('Image filter: %s; original=%s, excluded=%s, retained=%s',
+                    inputs.IMAGE_EXCLUSION_RULE, data['images_before_filter'],
+                    len(data['excluded_images']), len(data['images']))
         stage = 'aggregation and statistics'
         inputs.aggregate(data)
         calculate_statistics(data)
@@ -321,6 +331,8 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         write_status(output, 'SUCCESS', Collection=str(collection), Nuclei_run_ID=data['run_id'],
                      Statistics_unit=stats_unit or 'disabled', Markers=selected,
                      Non_border_nuclei=len(data['nuclei']), Images=len(data['images']),
+                     Images_before_filter=data['images_before_filter'],
+                     Images_excluded=len(data['excluded_images']), Image_exclusion_rule=inputs.IMAGE_EXCLUSION_RULE,
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
         print(f'SUCCESS: {output}')

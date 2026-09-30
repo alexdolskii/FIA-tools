@@ -17,6 +17,11 @@ COLLECTION_PATTERN = re.compile(r'^FIA_Marker_Intensity_Combined_Results_(\d{8}_
 MARKER_PATTERN = re.compile(r'^(?:Foci_[1-9][0-9]*_)?Channel_([1-9][0-9]*)$')
 WELL_PATTERN = re.compile(r'Well([A-H])(0?[1-9]|1[0-2])(?!\d)', re.IGNORECASE)
 COUNT = 'Non_border_nuclei_count'
+IMAGE_EXCLUSION_RULE = 'Non_border_nuclei_count == 0 (including images with border nuclei only)'
+EXCLUDED_IMAGE_COLUMNS = ['Image_name', 'Source_file', 'Mask_name', 'Well', 'Group',
+                          *collect.COUNTS, 'Reason']
+IMAGE_VALUE_COLUMNS = ['Category', 'Marker', 'Metric', 'Unit', 'Group', 'Well', 'Image_name',
+                       'Mask_name', 'N_nuclei', 'N_values', 'Value']
 
 
 def workbook_rows(path, sheet, files):
@@ -309,6 +314,32 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
                     del row[field]
     data.update(markers=markers, template=Path(template), template_sheet=sheet,
                 design=design, groups=groups, blocks=blocks, stats_unit=stats_unit)
+    return data
+
+
+def exclude_empty_images(data):
+    """Filter validated, annotated images once, before aggregation or statistical testing."""
+    images = data['images']
+    data['image_columns'] = list(dict.fromkeys(key for row in images for key in row))
+    data['images_before_filter'] = len(images)
+    excluded = {row['Mask_name'] for row in images if row[COUNT] == 0}
+    data['excluded_images'] = [
+        {**{key: row.get(key) for key in EXCLUDED_IMAGE_COLUMNS[:-1]},
+         'Reason': 'No usable non-border nuclei'}
+        for row in images if row['Mask_name'] in excluded
+    ]
+    data['image_filter_summary'] = []
+    for group in data['groups']:
+        original = [row for row in images if row['Group'] == group]
+        retained = [row for row in original if row['Mask_name'] not in excluded]
+        data['image_filter_summary'].append({
+            'Group': group, 'Images_total': len(original),
+            'Images_excluded': len(original) - len(retained), 'Images_used': len(retained),
+            'Wells_with_images': len({row['Well'] for row in original}),
+            'Wells_used': len({row['Well'] for row in retained}),
+        })
+    data['images'] = [row for row in images if row['Mask_name'] not in excluded]
+    data['nuclei'] = [row for row in data['nuclei'] if row['Mask_name'] not in excluded]
     return data
 
 

@@ -18,12 +18,12 @@ from matplotlib.figure import Figure
 MARKER = 'Foci_1_Channel_2'
 
 
-def four_blocks(unit):
+def four_blocks(unit, contexts=None):
     data = {'images': [], 'nuclei': [], 'groups': [], 'design': [], 'blocks': {}, 'markers': [MARKER],
             'stats_unit': unit, 'run_id': 'Final_Nuclei_Mask_20260929_100000'}
     fields = [field for _, _, field, _ in inputs.metric_specs([MARKER])[1:]]
-    for block, context in enumerate(('P4+8i old serum', 'P4+8i new serum',
-                                     'P4+13i old serum', 'P4+13i new serum')):
+    contexts = contexts or ('P4+8i old serum', 'P4+8i new serum', 'P4+13i old serum', 'P4+13i new serum')
+    for block, context in enumerate(contexts):
         color = f'color-{block}'
         data['blocks'][color] = {}
         for treatment in ('dmso', 'tgfb inhibitor', 'citric acid', 'tgfb ligand'):
@@ -115,6 +115,43 @@ def test_nucleus_density_has_no_dots_and_keeps_extremes(values):
             assert ax.dataLim.ymax == max(values)
     finally:
         plt.close(fig)
+
+
+def test_more_than_four_blocks_share_one_complete_overview(tmp_path, monkeypatch):
+    data = four_blocks('nucleus', contexts=[f'P4+{index}i old serum' for index in range(5)])
+    before = deepcopy(data)
+    snapshots = []
+    original_save = Figure.savefig
+
+    def inspect(fig, filename, **kwargs):
+        if '__Block_' not in filename.name:
+            fig.canvas.draw()
+            renderer = fig.canvas.get_renderer()
+            axes = [ax for ax in fig.axes if ax.get_ylabel()]
+            assert len(axes) == 5
+            assert len({ax.get_ylim() for ax in axes}) == 1
+            labels = [label for ax in axes for label in ax.get_xticklabels()]
+            assert len(labels) == 20
+            for label in labels:
+                box = label.get_window_extent(renderer)
+                assert not box.overlaps(fig.axes[-1].get_window_extent(renderer))
+                assert box.y0 >= 0 and box.y1 <= fig.bbox.height
+            assert sum(len(ax.texts) for ax in axes) == 15
+            snapshots.append(filename.name)
+        return original_save(fig, filename, **kwargs)
+
+    monkeypatch.setattr(Figure, 'savefig', inspect)
+    plots.render_plots(data, tmp_path / 'Plots')
+    assert snapshots == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
+    assert not list((tmp_path / 'Plots').glob('*__Page_*.png'))
+    assert len(data['plots']) == 12
+    assert data['statistics'] == before['statistics']
+    assert data['plot_data'] == plots.plot_rows(before)
+    for spec in plots.plot_specs(data):
+        views = [row for row in data['plots'] if row['Plot'] == spec[0]]
+        overview = next(row for row in views if row['View'] == 'overview')
+        assert len(overview['Panels'].split(', ')) == 5
+        assert overview['Points'] == sum(row['Points'] for row in views if row['View'] == 'panel')
 
 
 def test_display_shortening_never_merges_conditions():

@@ -141,7 +141,8 @@ def plot_note(data, name, observation, comparisons):
     effective = 'well' if data['stats_unit'] == 'well' else observation
     inference = ('Statistics disabled.' if data['stats_unit'] is None else
                  f'Test unit: {effective}. Two-sided Welch; p adjusted by Holm across all metrics and selected markers per color block.')
-    note = (description + ' Border nuclei excluded. Linear Y; shared limits across panels of this metric. '
+    note = (description + ' Border nuclei excluded. Images with zero non-border nuclei excluded before analysis. '
+            'Linear Y; shared limits across panels of this metric. '
             'Box: median and IQR; whiskers: 1.5 IQR. Labels: usable observations and contributing wells. ' + inference)
     if data['stats_unit'] == 'well':
         note += ' Well values: mean of image means (count: mean nuclei per image).'
@@ -155,7 +156,7 @@ def plot_note(data, name, observation, comparisons):
 
 
 def render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path):
-    """Render up to four panels with separately allocated title and caption space."""
+    """Render every selected panel, growing figure height rather than shrinking panels."""
     _, _, title, ylabel, observation = spec
     columns = min(2, len(panels))
     rows = math.ceil(len(panels) / columns)
@@ -233,9 +234,7 @@ def render_plots(data, folder):
                          for r in comparisons) for p in panels)
         limits = min(0, low - span * 0.05), high + span * (0.2 + levels * 0.11)
         note = plot_note(data, name, observation, comparisons)
-        views = [(name if start == 0 else f'{name}__Page_{start // 4 + 1:02d}',
-                  'overview' if len(panels) > 1 else 'panel', panels[start:start + 4])
-                 for start in range(0, len(panels), 4)]
+        views = [(name, 'overview' if len(panels) > 1 else 'panel', panels)]
         if len(panels) > 1:
             views += [(name + '__' + p['id'], 'panel', [p]) for p in panels]
         for filename, view, selected in views:
