@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import fiji_config
 import imagej
 import numpy as np
 import spatial_calibration as spatial
@@ -17,7 +18,6 @@ from scyjava import jimport
 from skimage.io import imread, imsave
 from stardist.models import StarDist2D
 from validate_folders import validate_input_file
-
 
 STARDIST_SETTINGS = {
     "model": "2D_versatile_fluo",
@@ -224,7 +224,7 @@ def initialize_imagej():
     # Attempt to initialize ImageJ headless mode
     print("Initializing ImageJ...")
     try:
-        ij = imagej.init('sc.fiji:fiji', mode='headless')
+        ij = imagej.init(fiji_config.FIJI_ENDPOINT, mode='headless')
     except Exception as e:
         raise ImageJInitializationError(
             f"Failed to initialize ImageJ: {e}")

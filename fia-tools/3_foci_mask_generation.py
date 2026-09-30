@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import datetime
 
+import fiji_config
 import imagej
 import spatial_calibration as spatial
 from scyjava import jimport
@@ -27,7 +28,7 @@ def initialize_imagej():
     # Attempt to initialize ImageJ headless mode
     print("Initializing ImageJ...")
     try:
-        ij = imagej.init('sc.fiji:fiji', mode='headless')
+        ij = imagej.init(fiji_config.FIJI_ENDPOINT, mode='headless')
     except Exception as e:
         raise ImageJInitializationError(
             f"Failed to initialize ImageJ: {e}")

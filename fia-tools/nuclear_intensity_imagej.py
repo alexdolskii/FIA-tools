@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from pathlib import Path
 
+import fiji_config
 import numpy as np
 import spatial_calibration as spatial
 from scyjava import jimport
@@ -20,7 +21,7 @@ class ImageJEngine:
     def __init__(self, initialize=True):
         if initialize:
             import imagej
-            self.gateway = imagej.init('sc.fiji:fiji', mode='headless')
+            self.gateway = imagej.init(fiji_config.FIJI_ENDPOINT, mode='headless')
         self.version = str(jimport('ij.IJ').getVersion())
         self.bioformats_version = str(jimport('loci.formats.FormatTools').VERSION)
 
