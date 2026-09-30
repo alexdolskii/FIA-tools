@@ -114,7 +114,7 @@ python -m pip install .
 
 Run `python -m pip install .` from the repository root. It installs the package into the active Python environment and creates the terminal commands. Package installation may resolve or update dependencies to satisfy `pyproject.toml`.
 
-All FIA commands that initialize ImageJ read the same `FIJI_ENDPOINT` from `fia-tools/fiji_config.py`. The current value remains `sc.fiji:fiji` (no pinned version), and initialization remains headless. A validated Fiji version can be selected in that one file for channel preparation, nuclei masks, foci masks and nuclear-intensity measurements. After changing it, reinstall the package and start a new command process. This shared setting does not change Java memory or compatibility options.
+All FIA commands that initialize ImageJ read the same `FIJI_ENDPOINT` from `fia-tools/fiji_config.py`. Fiji is pinned to `sc.fiji:fiji:2.14.0`, and initialization remains headless. This one setting applies to channel preparation, nuclei masks, foci masks and nuclear-intensity measurements. To use Fiji without a pinned version, replace the assignment with `FIJI_ENDPOINT = "sc.fiji:fiji"`, as shown in the source comment; this permits dependency versions to change. After changing it, reinstall the package and start a new command process. This shared setting does not change Java memory or compatibility options.
 
 ### 3. Check command availability
 

@@ -1,4 +1,7 @@
 """Shared Fiji endpoint for every FIA command that initializes ImageJ."""
 
-# Preserve the existing endpoint. Pin a version here after validating it.
-FIJI_ENDPOINT = "sc.fiji:fiji"
+# Pin Fiji for reproducible initialization across all FIA commands.
+FIJI_ENDPOINT = "sc.fiji:fiji:2.14.0"
+
+# To use Fiji without a pinned version, replace the assignment above with:
+# FIJI_ENDPOINT = "sc.fiji:fiji"
