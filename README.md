@@ -324,17 +324,19 @@ fia_marker_intensity_report -i input_paths.json --stats-unit well
 
 Omit `--stats-unit` for plots and descriptive tables without hypothesis tests. The report reads spreadsheets only: it does not start ImageJ, read image pixels, repeat segmentation or change upstream results. Archived collector spreadsheets suffice even if the original image-drive paths are no longer accessible.
 
-Select experiments, then the latest collection per experiment, all completed collections, or a manual selection. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Select one, several or all markers per collection, or none for morphology only. A legacy `Channel_N` result is excluded when a named `Foci_<index>_Channel_N` result exists. For example, `Foci_1_Channel_2` is used instead of `Channel_2`; these populations are never concatenated. Select at most one marker folder per original channel. The folder name is the marker identifier; no biological name is inferred.
+All valid experiment paths in the JSON are analyzed automatically. The default is the **latest completed collection per experiment**, with its full path and nuclei run printed before processing. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Use `--collections all` for every completed collection, or `--collections ask` for interactive selection (the menu accepts `latest`, `all`, `manual`, or their numeric aliases).
+
+Markers are selected **once for the entire batch, before any reports are generated**. A single marker is selected automatically; with multiple markers, choose one, several, all, or `none` for morphology only. The common catalog shows availability by collection. The choice is applied by exact folder name: a marker absent from a collection is skipped there with a note in the console, report log and Overview; if none of the selected markers is present, that collection receives a morphology-only report. A marker explicitly recorded as `MISSING` retains blank measurements and its planned tests. No other marker or channel is substituted. A legacy `Channel_N` result is excluded within a collection when a named `Foci_<index>_Channel_N` result exists. For example, `Foci_1_Channel_2` is used instead of `Channel_2`; these populations are never concatenated. Select at most one marker folder per original channel **within each collection**; an ambiguous interactive selection is requested again before processing. The folder name is the marker identifier; no biological name is inferred.
 
 For a run without selection prompts:
 
 ```bash
 fia_marker_intensity_report -i input_paths.json \
-  --all-experiments --collections latest --markers Foci_1_Channel_2 \
+  --markers Foci_1_Channel_2 \
   --stats-unit nucleus --template "/path/to/plate_map.xlsx"
 ```
 
-`--markers` accepts comma-separated folder names, `all`, or `none`. `--collections all` reports every completed collection separately. An explicit `--template` applies to every selected collection; otherwise each collection supplies its own plate map. The manifest uses the same `paths_to_files` key as the preceding FIA commands.
+`--markers` accepts comma-separated folder names, `all`, or `none`, and skips the common marker prompt. Unknown or duplicate names and conflicting same-channel selections are rejected before processing. `--all-experiments` remains accepted for compatibility; all valid JSON paths are now used without that flag. An explicit `--template` applies to every selected collection; otherwise each collection supplies its own plate map. The manifest uses the same `paths_to_files` key as the preceding FIA commands.
 
 #### Plate-map convention
 
@@ -446,9 +448,9 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 | `fia_marker_intensity_report` | `--stats-unit` | `nucleus` or `well` | No hypothesis tests |
 | `fia_marker_intensity_report` | `--min-nuclei` | Minimum non-border nuclei per image, inclusive; nonnegative integer | `0` (no image-count filtering) |
 | `fia_marker_intensity_report` | `--template`, `--sheet` | Plate-map XLSX and worksheet | Discover workbook; first worksheet |
-| `fia_marker_intensity_report` | `--collections` | `ask`, `latest`, or `all` | `ask` |
-| `fia_marker_intensity_report` | `--markers` | Folder names separated by commas, `all`, or `none` | Interactive |
-| `fia_marker_intensity_report` | `--all-experiments` | Select all manifest experiments without prompting | Interactive |
+| `fia_marker_intensity_report` | `--collections` | `ask`, `latest`, or `all` | `latest` completed per experiment |
+| `fia_marker_intensity_report` | `--markers` | Folder names separated by commas, `all`, or `none` | One batch selection; automatic for one marker |
+| `fia_marker_intensity_report` | `--all-experiments` | Compatibility option; all valid manifest experiments are always used | All valid JSON paths |
 | All seven commands | `-h`, `--help` | Show command-line options | Not applicable |
 
 The defaults document the implementation. Parameter selection should follow the experiment and the applicable protocol.

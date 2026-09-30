@@ -1,6 +1,7 @@
 """Create a spreadsheet-based marker-intensity report without starting ImageJ."""
 
 import argparse
+import csv
 import hashlib
 import json
 import logging
@@ -67,17 +68,19 @@ def choose_collections(roots, mode):
     candidates = [item for values in contexts.values() for item in values]
     if not candidates:
         raise inputs.ValidationError('Run fia_collect_marker_intensity_results first: no completed collections found')
-    for index, (path, run) in enumerate(candidates, 1):
-        print(f'{index}. {path} | {run}')
     if mode == 'ask':
+        for index, (path, run) in enumerate(candidates, 1):
+            print(f'{index}. {path} | {run}')
+        choices = {'1': 'latest', 'latest': 'latest', '2': 'all', 'all': 'all',
+                   '3': 'manual', 'manual': 'manual'}
         while True:
             answer = input('Collections: 1 = latest per experiment; 2 = all; 3 = manual; q = cancel: ').strip().lower()
             if answer == 'q':
                 raise collect.Cancelled()
-            if answer in ('1', '2', '3'):
-                mode = {'1': 'latest', '2': 'all', '3': 'manual'}[answer]
+            if answer in choices:
+                mode = choices[answer]
                 break
-            print('Enter 1, 2, 3, or q.')
+            print('Enter latest (1), all (2), manual (3), or q.')
     if mode == 'latest':
         selected = [values[-1][0] for values in contexts.values() if values]
     elif mode == 'all':
@@ -85,6 +88,10 @@ def choose_collections(roots, mode):
     else:
         selected = [candidates[index][0] for index in collect.choose_indices(
             'Select collection numbers, all, or q: ', len(candidates))]
+    print(f'Selected collections ({mode}):')
+    runs = dict(candidates)
+    for index, path in enumerate(selected, 1):
+        print(f'[{index}/{len(selected)}] {path} | {runs[path]}')
     return selected, missing
 
 
@@ -104,10 +111,87 @@ def choose_markers(data, selection):
     if not catalog:
         print('No marker columns: morphology-only report.')
         return []
+    if len(catalog) == 1:
+        print(f'Marker selected automatically: {catalog[0]} ({data["availability"][catalog[0]]})')
+        return catalog
     for index, marker in enumerate(catalog, 1):
         print(f'{index}. {marker}: {data["availability"][marker]}')
     return [catalog[index] for index in collect.choose_indices(
         'Select markers, all, none (morphology only), or q: ', len(catalog), allow_none=True)]
+
+
+def preview_markers(collection):
+    """Read image-level availability for selection; report validation still checks every source."""
+    columns, rows = collect.csv_snapshot(collection / 'FIA_Marker_Intensity_Images.csv', {}, ['Mask_name'])
+    markers = sorted(column.removesuffix('_Availability') for column in columns if column.endswith('_Availability'))
+    if any(not inputs.MARKER_PATTERN.fullmatch(marker) for marker in markers):
+        raise inputs.ValidationError('Invalid marker columns')
+    availability = {}
+    for marker in markers:
+        states = {row[marker + '_Availability'] for row in rows}
+        if len(states) != 1 or not states <= {'AVAILABLE', 'MISSING'}:
+            raise inputs.ValidationError(f'Inconsistent availability: {marker}')
+        availability[marker] = states.pop()
+    catalog, _ = inputs.marker_catalog({'markers': markers})
+    return {marker: availability[marker] for marker in catalog}
+
+
+def choose_batch_markers(collections, selection):
+    """Resolve one exact-name selection before creating any reports, without caching nucleus tables."""
+    catalogs = {}
+    for collection in collections:
+        try:
+            catalogs[collection] = preview_markers(collection)
+        except (OSError, ValueError, csv.Error) as error:
+            # Keep this collection scheduled so its normal validation writes failure diagnostics.
+            print(f'Cannot preview markers for {collection}: {error}. Full report validation will follow.')
+    catalog = sorted({marker for markers in catalogs.values() for marker in markers})
+    for index, marker in enumerate(catalog, 1):
+        states = '; '.join(f'collection {number}: {catalogs[path].get(marker, "NOT PRESENT")}'
+                           for number, path in enumerate(collections, 1) if path in catalogs)
+        print(f'{index}. {marker} | {states}')
+    while True:
+        if selection is not None:
+            selected = (catalog if selection == 'all' else [] if selection == 'none'
+                        else [name.strip() for name in selection.split(',') if name.strip()])
+        elif len(catalog) <= 1:
+            selected = catalog
+            print(f'Markers selected automatically: {", ".join(selected) or "none (morphology only)"}')
+        else:
+            selected = [catalog[index] for index in collect.choose_indices(
+                'Select markers for all collections, all, none (morphology only), or q: ',
+                len(catalog), allow_none=True)]
+        if len(set(selected)) != len(selected) or not set(selected) <= set(catalog):
+            raise inputs.ValidationError('Select unique marker folders from the displayed batch catalog')
+        conflicts = []
+        for path, markers in catalogs.items():
+            present = [marker for marker in selected if marker in markers]
+            if len({inputs.MARKER_PATTERN.fullmatch(marker)[1] for marker in present}) != len(present):
+                conflicts.append(str(path))
+        if not conflicts:
+            break
+        message = ('Multiple selected marker folders refer to the same channel in: ' + '; '.join(conflicts)
+                   + '. Select one result per channel in each collection.')
+        if selection is not None:
+            raise inputs.ValidationError(message)
+        print(message)
+    print(f'Batch markers: {", ".join(selected) or "none (morphology only)"}')
+    plans = {}
+    for path in collections:
+        present, notes = [], []
+        if path in catalogs:
+            for marker in selected:
+                state = catalogs[path].get(marker)
+                if state is None:
+                    notes.append(f'{marker}: not present in this collection; skipped without substitution.')
+                else:
+                    present.append(marker)
+                    if state == 'MISSING':
+                        notes.append(f'{marker}: MISSING; marker measurements remain blank, not zero.')
+        for note in notes:
+            print(f'{path}: {note}')
+        plans[path] = (present, notes)
+    return plans
 
 
 def as_table(rows, columns=()):
@@ -276,7 +360,7 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
 
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
-                  min_nuclei=0):
+                  min_nuclei=0, selection_notes=()):
     output = create_output(root)
     logger = logging.getLogger(f'fia_marker_report.{output.name}')
     logger.setLevel(logging.INFO)
@@ -289,6 +373,9 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         write_status(output, 'RUNNING', Collection=str(collection))
         logger.info('Starting report for %s; statistics=%s', collection, stats_unit or 'disabled')
         data = inputs.load_collection(collection)
+        data['notes'].extend(selection_notes)
+        for note in selection_notes:
+            logger.info('Selection: %s', note)
         selected = choose_markers(data, markers)
         plate_map = Path(template).expanduser().absolute() if template else inputs.find_template(Path(collection), sheet)
         if plate_map.name.startswith(('.', '~$')):
@@ -363,9 +450,10 @@ def main(argv=None):
                         help='Minimum non-border nuclei per image (inclusive); omit or use 0 to disable filtering')
     parser.add_argument('--template', help='96-well plate-map XLSX; otherwise discover it inside each collection folder')
     parser.add_argument('--sheet', help='Plate-map worksheet name; default: first sheet')
-    parser.add_argument('--all-experiments', action='store_true', help='Use all valid manifest folders without the experiment prompt')
-    parser.add_argument('--collections', choices=('ask', 'latest', 'all'), default='ask', help='Default: interactive selection')
-    parser.add_argument('--markers', help='Comma-separated marker folders, all, or none; default: interactive selection per collection')
+    parser.add_argument('--all-experiments', action='store_true', help='Compatibility option: all valid manifest folders are always used')
+    parser.add_argument('--collections', choices=('ask', 'latest', 'all'), default='latest',
+                        help='Default: latest completed collection per experiment; ask enables manual selection')
+    parser.add_argument('--markers', help='Comma-separated marker folders, all, or none; default: one batch selection (automatic for one marker)')
     args = parser.parse_args(argv)
     if args.min_nuclei < 0:
         parser.error('--min-nuclei must be a nonnegative integer')
@@ -373,17 +461,19 @@ def main(argv=None):
         roots = collect.discover_sources(args.input)
         if not roots:
             raise inputs.ValidationError('No existing experiment folders')
-        if not args.all_experiments:
-            for index, root in enumerate(roots, 1):
-                print(f'{index}. {root}')
-            roots = [roots[index] for index in collect.choose_indices('Select experiments, all, or q: ', len(roots))]
+        print(f'Experiments from JSON: {len(roots)} (all valid paths)')
         selected, missing = choose_collections(roots, args.collections)
+        marker_plans = choose_batch_markers(selected, args.markers)
         print(f'Statistics: {args.stats_unit or "disabled (descriptive only)"}. Reports remain separate per collection.')
         failures = len(missing)
-        for collection in selected:
+        for index, collection in enumerate(selected, 1):
+            markers, notes = marker_plans[collection]
+            print(f'[{index}/{len(selected)}] {collection.parent.name} | {collection.name} | '
+                  f'Markers: {", ".join(markers) or "none (morphology only)"}')
             try:
-                success, _ = create_report(collection, collection.parent, args.template, args.markers,
-                                           args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei)
+                success, _ = create_report(collection, collection.parent, args.template, markers,
+                                           args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
+                                           selection_notes=notes)
                 failures += not success
             except OSError as error:
                 print(f'Cannot write report for {collection}: {error}')

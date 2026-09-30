@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import shutil
 import subprocess
 import sys
 from copy import deepcopy
@@ -492,6 +493,136 @@ def test_discovery_ignores_unfinished_and_hidden_collections(tmp_path):
     (path.parent / ('._' + path.name)).mkdir()
     selected, missing = report.choose_collections([path.parent], 'latest')
     assert selected == [path] and missing == []
+
+
+def test_short_cli_uses_all_experiments_and_latest_collections_without_prompts(tmp_path):
+    first = collection(tmp_path / 'first')
+    second = collection(tmp_path / 'second')
+    older = first.parent / 'FIA_Marker_Intensity_Combined_Results_20000101_000000'
+    shutil.copytree(first, older)
+    (first.parent / 'FIA_Marker_Intensity_Combined_Results_20990101_000000').mkdir()
+    manifest = tmp_path / 'input_paths.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    result = subprocess.run([sys.executable, str(Path(report.__file__).resolve()),
+                             '-i', str(manifest), '--stats-unit', 'nucleus'],
+                            input='', text=True, capture_output=True, timeout=90, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count('SUCCESS:') == 2
+    assert 'Select experiments' not in result.stdout and 'Select markers' not in result.stdout
+    assert str(older) not in result.stdout
+    for path in (first, second):
+        status_file = next(path.parent.glob('FIA_Marker_Intensity_Report_*/report_status.json'))
+        status = json.loads(status_file.read_text())
+        assert status['Collection'] == str(path) and status['Markers'] == [MARKER]
+        assert status['Statistics_unit'] == 'nucleus'
+        assert str(path) in result.stdout
+
+
+def test_batch_choice_happens_once_before_reports_and_records_absent_markers(tmp_path, monkeypatch):
+    first = collection(tmp_path / 'first', missing=True)
+    second = collection(tmp_path / 'second')
+    manifest = tmp_path / 'input_paths.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    prompts, outputs = [], []
+    original = report.create_report
+
+    def answer(prompt):
+        assert not outputs
+        prompts.append(prompt)
+        return 'all'
+
+    def create(*args, **kwargs):
+        assert len(prompts) == 1
+        result = original(*args, **kwargs)
+        outputs.append(result)
+        return result
+
+    monkeypatch.setattr('builtins.input', answer)
+    monkeypatch.setattr(report, 'create_report', create)
+    assert report.main(['-i', str(manifest), '--stats-unit', 'nucleus']) == 0
+    assert len(prompts) == 1 and len(outputs) == 2 and all(ok for ok, _ in outputs)
+    first_status, second_status = [json.loads((path / 'report_status.json').read_text()) for _, path in outputs]
+    assert first_status['Markers'] == [MARKER, 'Foci_2_Channel_3']
+    assert second_status['Markers'] == [MARKER]
+    first_tests = sheet_rows(outputs[0][1] / report.WORKBOOK, 'Statistics')
+    assert {row['Family_size_planned'] for row in first_tests} == {25}
+    for (_, path), expected in zip(outputs, ('MISSING', 'not present')):
+        notes = sheet_rows(path / report.WORKBOOK, 'Overview')
+        assert any(row['Item'] == 'Selection note' and expected in row['Description'] for row in notes)
+        assert expected in (path / 'report.log').read_text()
+
+
+def marker_preview_folder(path, markers):
+    path.mkdir()
+    collector.write_csv(path / 'FIA_Marker_Intensity_Images.csv',
+                        ['Mask_name', *[marker + '_Availability' for marker in markers]],
+                        [{'Mask_name': 'image.tif', **{marker + '_Availability': state
+                                                     for marker, state in markers.items()}}])
+    return path
+
+
+def test_batch_exact_names_morphology_only_and_legacy_aliases(tmp_path, monkeypatch):
+    first = marker_preview_folder(tmp_path / 'first', {MARKER: 'AVAILABLE', 'Channel_2': 'AVAILABLE'})
+    second = marker_preview_folder(tmp_path / 'second', {'Channel_2': 'AVAILABLE'})
+    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('Explicit selection must not prompt'))
+    assert report.preview_markers(first) == {MARKER: 'AVAILABLE'}
+    plans = report.choose_batch_markers([first, second], MARKER)
+    assert plans[first] == ([MARKER], [])
+    assert plans[second][0] == [] and 'without substitution' in plans[second][1][0]
+    assert report.choose_batch_markers([first, second], 'none') == {first: ([], []), second: ([], [])}
+    assert report.choose_batch_markers([first, second], 'all') == {
+        first: ([MARKER], ['Channel_2: not present in this collection; skipped without substitution.']),
+        second: (['Channel_2'], [f'{MARKER}: not present in this collection; skipped without substitution.'])}
+
+
+def test_batch_conflict_resolved_before_processing_and_explicit_errors(tmp_path, monkeypatch):
+    other = 'Foci_2_Channel_2'
+    path = marker_preview_folder(tmp_path / 'collection', {MARKER: 'AVAILABLE', other: 'AVAILABLE'})
+    answers = iter(['all', '2'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    assert report.choose_batch_markers([path], None) == {path: ([other], [])}
+    for selection in ('all', f'{MARKER},{MARKER}', 'Foci_3_Channel_4'):
+        with pytest.raises(data_tools.ValidationError):
+            report.choose_batch_markers([path], selection)
+
+
+@pytest.mark.parametrize('answer', ['2', 'all', 'latest', 'manual'])
+def test_collection_menu_accepts_words_and_numbers(tmp_path, monkeypatch, answer):
+    root = tmp_path / 'experiment'
+    paths = [root / 'older', root / 'newer']
+    monkeypatch.setattr(report, 'discover_collections', lambda _: [(path, 'run') for path in paths])
+    answers = iter([answer, '1'])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    selected, missing = report.choose_collections([root], 'ask')
+    assert selected == ([paths[-1]] if answer == 'latest' else [paths[0]] if answer == 'manual' else paths)
+    assert missing == []
+
+
+def test_cancel_common_selection_creates_no_reports(tmp_path, monkeypatch):
+    path = collection(tmp_path, missing=True)
+    manifest = tmp_path / 'input_paths.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent)]}))
+    monkeypatch.setattr('builtins.input', lambda _: 'q')
+    assert report.main(['-i', str(manifest)]) == 130
+    assert not list(path.parent.glob('FIA_Marker_Intensity_Report_*'))
+
+
+def test_unreadable_marker_preview_still_writes_failure_and_continues(tmp_path, monkeypatch):
+    first = collection(tmp_path / 'first')
+    second = collection(tmp_path / 'second')
+    older = first.parent / 'FIA_Marker_Intensity_Combined_Results_20000101_000000'
+    shutil.copytree(first, older)
+    (first / 'FIA_Marker_Intensity_Images.csv').unlink()
+    manifest = tmp_path / 'input_paths.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('Single marker must not prompt'))
+    assert report.main(['-i', str(manifest)]) == 1
+    for path, expected in ((first, 'FAILED'), (second, 'SUCCESS')):
+        output = next(path.parent.glob('FIA_Marker_Intensity_Report_*'))
+        status = json.loads((output / 'report_status.json').read_text())
+        assert status['Collection'] == str(path) and status['Status'] == expected
+        if expected == 'FAILED':
+            assert (output / 'Report_Diagnostics.xlsx').is_file()
 
 
 @pytest.mark.parametrize('unit', ['nucleus', 'well', None])
