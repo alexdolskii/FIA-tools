@@ -17,6 +17,8 @@ PLOT_COLUMNS = ['Plot', 'Metric', 'Observation', 'Group', 'Well', 'Image_name', 
 LABEL_COLUMNS = ['Panel', 'Block', 'Figure_context', 'Panel_title', 'Group', 'Display_label']
 FONT_SIZES = {'title': 20, 'panel': 16, 'axis': 14, 'sample': 12, 'note': 12}
 PNG_DPI = 300
+# Display selection only: report_specs and the complete Holm families remain unchanged.
+MORPHOLOGY_PLOT_FIELDS = {'Area_um2', 'Area_px2', 'Aspect_ratio', 'Circularity', 'Solidity'}
 
 
 def plot_font():
@@ -61,7 +63,7 @@ def panel_letter(index):
 
 
 def plot_specs(data):
-    """Always plot the primary endpoints; add morphology only after a significant adjusted test."""
+    """Plot primary endpoints and selected morphology with a significant adjusted test."""
     specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
     specs += [(marker + '_Integrated_density', marker + '_Marker_RawIntDen',
                'Nuclear integrated density', 'Integrated density (sum of pixel values)', 'nucleus')
@@ -72,7 +74,7 @@ def plot_specs(data):
                        if row['Category'] == 'Morphology' and row['Status'] == 'TESTED'
                        and row['P_Holm'] is not None and 0 <= row['P_Holm'] < 0.05}
     for category, _, field, unit in report_specs(data, []):
-        if category == 'Morphology' and field in significant:
+        if category == 'Morphology' and field in MORPHOLOGY_PLOT_FIELDS and field in significant:
             label = field.removesuffix('_px2').removesuffix('_px').removesuffix('_um2').removesuffix('_um').replace('_', ' ').capitalize()
             display_unit = {'px2': 'px²', 'um2': 'µm²', 'um': 'µm'}.get(unit, unit)
             ylabel = label + f' ({display_unit})'
@@ -330,7 +332,7 @@ def render_plots(data, folder, progress=None):
     plots = []
     specs = plot_specs(data)
     if progress:
-        progress.phase('Plots', len(specs) * (1 + len(panels) if len(panels) > 1 else 1))
+        progress.phase('Plots', len(specs))
     for spec in specs:
         name, field, _, _, observation = spec
         points = [row for row in data['plot_data'] if row['Plot'] == name]
@@ -343,22 +345,18 @@ def render_plots(data, folder, progress=None):
                          for r in comparisons) for p in panels)
         limits = min(0, low - span * 0.05), high + span * (0.2 + levels * 0.11)
         note = plot_note(data, name, observation, comparisons)
-        views = [(name, 'overview' if len(panels) > 1 else 'panel', panels)]
-        if len(panels) > 1:
-            views += [(name + '__' + p['id'], 'panel', [p]) for p in panels]
-        for filename, view, selected in views:
-            path = folder / (filename + '.png')
-            render_figure(data, spec, selected, points, comparisons, limits, high, span, note, path)
-            groups = {group for p in selected for group in p['groups']}
-            count = sum(row['Group'] in groups for row in points)
-            plots.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Points': count,
-                          'View': view, 'Panels': ', '.join(p['id'] for p in selected),
-                          'Rendered_points': count if observation == 'image' else 0,
-                          'File': str(path.relative_to(folder.parent)),
-                          'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)),
-                          'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
-                          'Font': plot_font(), 'PNG_DPI': PNG_DPI})
-            if progress:
-                progress.advance(filename)
+        path = folder / (name + '.png')
+        render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path)
+        groups = {group for p in panels for group in p['groups']}
+        count = sum(row['Group'] in groups for row in points)
+        plots.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Points': count,
+                      'View': 'overview', 'Panels': ', '.join(p['id'] for p in panels),
+                      'Rendered_points': count if observation == 'image' else 0,
+                      'File': str(path.relative_to(folder.parent)),
+                      'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)),
+                      'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
+                      'Font': plot_font(), 'PNG_DPI': PNG_DPI})
+        if progress:
+            progress.advance(name)
     data['plots'] = plots
     return data

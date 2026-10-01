@@ -1,6 +1,7 @@
 """Plot regressions: readable panels, complete distributions and unchanged inference."""
 
 from copy import deepcopy
+from io import StringIO
 from itertools import pairwise
 from zipfile import ZipFile
 
@@ -15,6 +16,7 @@ from marker_report_statistics import calculate_statistics
 from matplotlib.collections import PathCollection, PolyCollection
 from matplotlib.figure import Figure
 from PIL import Image
+from table_workflow import TableProgress
 
 MARKER = 'Foci_1_Channel_2'
 
@@ -91,29 +93,36 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
         return original_save(fig, filename, **kwargs)
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
-    plots.render_plots(data, tmp_path / 'Plots')
+    progress = TableProgress(stream=StringIO())
+    plots.render_plots(data, tmp_path / 'Plots', progress)
     assert all(data[key] == value for key, value in before.items())
     assert data['plot_data'] == plots.plot_rows(before)
-    assert len(data['plots']) == 10
+    assert len(data['plots']) == 2
+    assert progress.done == progress.phase_total == 2
+    assert {path.name for path in (tmp_path / 'Plots').iterdir()} == {
+        name + suffix for name in ('Nuclei_count', MARKER + '_Integrated_density')
+        for suffix in ('.png', '.pdf')}
     assert len(data['plot_labels']) == 16
     assert {r['Display_label'] for r in data['plot_labels']} == {'dmso', 'tgfb inhibitor', 'citric acid', 'tgfb ligand'}
     assert {r['Figure_context'] for r in data['plot_labels']} == {'BK near (tert-blast)'}
     assert {r['Group'] for r in data['plot_labels']} == set(data['groups'])
     for metric in ('Nuclei_count', MARKER + '_Integrated_density'):
         selected = [item for item in snapshots if item[0].startswith(metric)]
+        assert len(selected) == 1
         assert len({limits for _, axes, _ in selected for limits in axes}) == 1
         assert len(selected[0][1]) == 4
         assert len(selected[0][2]) == (0 if unit is None else 12)
-        assert sum(len(item[2]) for item in selected[1:]) == len(selected[0][2])
         assert all(text in ('ns', '*', '**', '***', '****', 'Not tested') for _, _, texts in selected for text in texts)
     for plot in data['plots']:
+        assert plot['View'] == 'overview' and len(plot['Panels'].split(', ')) == 4
+        assert plot['Points'] == sum(row['Plot'] == plot['Plot'] for row in data['plot_data'])
         assert (tmp_path / plot['PDF_file']).read_bytes().startswith(b'%PDF-')
         with Image.open(tmp_path / plot['File']) as image:
             assert image.info['dpi'][0] == pytest.approx(300, abs=0.01)
     tables = {'Plot_Info': report.as_table(data['plots']), 'Plot_Labels': report.as_table(data['plot_labels'])}
     report.write_workbook(tmp_path, tables, data['plots'])
     with ZipFile(tmp_path / report.WORKBOOK) as archive:
-        assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 10
+        assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 2
 
 
 @pytest.mark.parametrize('values', [[], [7], [7] * 100, [1, 2, 3, 9], list(range(5000)) + [100000]])
@@ -166,14 +175,16 @@ def test_more_than_four_blocks_share_one_complete_overview(tmp_path, monkeypatch
     plots.render_plots(data, tmp_path / 'Plots')
     assert snapshots == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
     assert not list((tmp_path / 'Plots').glob('*__Page_*.png'))
-    assert len(data['plots']) == 12
+    assert len(data['plots']) == 2
+    assert not list((tmp_path / 'Plots').glob('*__Block_*'))
     assert data['statistics'] == before['statistics']
     assert data['plot_data'] == plots.plot_rows(before)
     for spec in plots.plot_specs(data):
         views = [row for row in data['plots'] if row['Plot'] == spec[0]]
+        assert len(views) == 1
         overview = next(row for row in views if row['View'] == 'overview')
         assert len(overview['Panels'].split(', ')) == 5
-        assert overview['Points'] == sum(row['Points'] for row in views if row['View'] == 'panel')
+        assert overview['Points'] == sum(row['Plot'] == spec[0] for row in data['plot_data'])
 
 
 def test_display_shortening_never_merges_conditions():
@@ -245,10 +256,11 @@ def test_eight_panels_retain_all_blocks_with_short_caption(tmp_path, monkeypatch
     monkeypatch.setattr(Figure, 'savefig', inspect)
     plots.render_plots(data, tmp_path / 'Plots')
     assert captured == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
-    assert len(data['plots']) == 18
+    assert len(data['plots']) == 2
     assert data['statistics'] == before['statistics']
     assert data['plot_data'] == plots.plot_rows(before)
-    assert len(list((tmp_path / 'Plots').glob('*.pdf'))) == 18
+    assert len(list((tmp_path / 'Plots').glob('*.pdf'))) == 2
+    assert not list((tmp_path / 'Plots').glob('*__Block_*'))
     for plot in data['plots']:
         assert '≥20' in plot['Display_caption'] and 'Welch + Holm' in plot['Display_caption']
         assert 'within-well dependence' in plot['Caption']

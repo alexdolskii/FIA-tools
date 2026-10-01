@@ -708,9 +708,11 @@ def test_morphology_plot_requires_significant_adjusted_test(adjusted, status, un
 def test_morphology_plot_selection_follows_statistics_unit_without_changing_tables():
     data = annotated([('A02', [1, 2, 1, 2]), ('A04', [10, 11, 10, 11])])
     calculate_statistics(data)
-    assert len(plot_specs(data)) == 14
-    assert {spec[1] for spec in plot_specs(data)[2:]} == set(collector.MORPH_METRICS)
     before = deepcopy(data['statistics'])
+    assert len(plot_specs(data)) == 6
+    assert {spec[1] for spec in plot_specs(data)[2:]} == {'Area_px2', 'Aspect_ratio', 'Circularity', 'Solidity'}
+    assert {r['Metric'] for r in data['statistics'] if r['Category'] == 'Morphology'} == set(collector.MORPH_METRICS)
+    assert all(r['Family_size_planned'] == 19 for r in data['statistics'])
     assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
     assert data['statistics'] == before
     data['stats_unit'] = 'well'
@@ -719,6 +721,21 @@ def test_morphology_plot_selection_follows_statistics_unit_without_changing_tabl
     assert len(plot_specs(data)) == 2
     assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
     assert all(r['Family_size_planned'] == 19 for r in data['statistics'])
+
+
+def test_significant_omitted_morphology_does_not_trigger_other_plots_or_change_tables():
+    data = annotated()
+    calculate_statistics(data)
+    selected = {'Area_px2', 'Aspect_ratio', 'Circularity', 'Solidity'}
+    for row in data['statistics']:
+        if row['Category'] == 'Morphology':
+            row.update(Status='TESTED', P_Holm=0.8 if row['Metric'] in selected else 0.001)
+    before = deepcopy(data)
+    tables_before = report.morphology_tables(data)
+    assert [spec[0] for spec in plot_specs(data)] == ['Nuclei_count', MARKER + '_Integrated_density']
+    assert {row['Metric'] for row in plot_rows(data)} == {data_tools.COUNT, RAW}
+    assert report.morphology_tables(data) == tables_before
+    assert data == before
 
 
 def test_significant_morphology_render_has_all_nuclei_and_comparisons(tmp_path):
