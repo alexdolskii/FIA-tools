@@ -59,7 +59,9 @@ def walk_metadata(root, limit, errors):
                             info = entry.stat(follow_symlinks=False)
                             if stat.S_ISLNK(info.st_mode) or getattr(info, 'st_file_attributes', 0) & 0x400:
                                 continue
-                            if info.st_dev != device:
+                            # Windows DirEntry.stat() may report st_dev=0;
+                            # junctions/volume mounts are excluded as reparse points above.
+                            if os.name != 'nt' and info.st_dev != device:
                                 errors.append(f'Skipped mount point: {path}')
                                 continue
                             is_dir = stat.S_ISDIR(info.st_mode)

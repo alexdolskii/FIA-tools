@@ -213,7 +213,8 @@ def test_diagnostics_is_lightweight_and_scan_limits_are_explicit(tmp_path):
     completed = subprocess.run([sys.executable, '-c',
         ('import runtime_diagnostics,sys; '
          'assert not any(m in sys.modules for m in ("imagej","scyjava","tensorflow","stardist","numpy","openpyxl"))')],
-        capture_output=True, text=True, check=False)
+        capture_output=True, text=True, check=False,
+        env={**os.environ, 'PYTHONPATH': str(SCRIPTS) + os.pathsep + os.environ.get('PYTHONPATH', '')})
     assert completed.returncode == 0, completed.stderr
     for index in range(5):
         (tmp_path / f'{index}.tmp').write_text('keep')
