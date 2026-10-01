@@ -1,6 +1,7 @@
 """Per-image spatial calibration; unknown scales never acquire physical units."""
 
 from assay_layout import ASSAY_DIR
+from run_resources import temporary_path
 
 import hashlib
 import json
@@ -151,7 +152,7 @@ def save_snapshot(path, calibration, shape, original=''):
     data = json.loads(manifest.read_text(encoding='utf-8')) if manifest.exists() else {}
     data[path.name] = {**columns(calibration), 'Shape_YX': list(shape),
                        'Image_SHA256': digest(path), 'Original_file': str(original)}
-    temporary = manifest.with_name('.' + MANIFEST + '.tmp')
+    temporary = temporary_path(manifest, manifest.with_name('.' + MANIFEST + '.tmp'))
     temporary.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
     temporary.replace(manifest)
 

@@ -2,6 +2,8 @@
 
 from assay_layout import ASSAY_DIR
 
+from run_resources import runtime_context
+
 import logging
 import platform
 import re
@@ -69,6 +71,8 @@ class ChannelRunLog:
         self.logger.addHandler(console)
         self.logger.info("STARTED | run_id=%s | input_folder=%s | input_json=%s | output_folder=%s",
                          self.run_id, self.folder.resolve(), self.input_json, self.output.resolve())
+        if runtime_context():
+            self.logger.info("TEMPORARY_RESOURCES | %s", runtime_context())
         try:
             package_version = version("fia-tools")
         except PackageNotFoundError:

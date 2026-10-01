@@ -10,7 +10,7 @@ FIA-tools processes multichannel confocal images to measure nuclear morphology, 
 
 Compared with the original implementation associated with protocol version 1:
 
-- Seven terminal commands are installed together in one Conda environment.
+- Seven analysis commands and `fia_diagnostics` are installed together in one Conda environment.
 - Native image width and height are preserved throughout preparation, masks and QC exports; the earlier 1024 × 1024 resizing is removed.
 - Nuclei generation exports morphology tables and numbered QC images. Validated StarDist masks can be reused when changing the minimum nucleus area.
 - Nuclear marker intensity can be measured directly from the original images within existing final nucleus IDs, independently of foci detection.
@@ -58,6 +58,8 @@ python -m pip install --no-deps .
 ```
 
 This reinstalls the updated code without changing dependencies. It assumes the environment already satisfies the current requirements; if requirements have changed, create a separate environment using the first-installation instructions. Do not repeatedly recreate the environment for ordinary analyses. In a new terminal, activate the environment you installed into. Use `git rev-parse HEAD` to record the code revision.
+
+When updating an existing environment to the version with managed temporary files, install its one new dependency with `python -m pip install "psutil>=5.9,<8"`, then reinstall FIA using the command above. This does not require updating StarDist, TensorFlow or Fiji.
 
 ## Prepare the inputs
 
@@ -140,11 +142,11 @@ Invalid interactive answers repeat the question. Enter accepts a default only wh
 
 ## Command-line parameters
 
-This table covers all seven installed commands. Options are case-sensitive; use `-i`, not `-I`. Each command also supports `--help`.
+This table covers the seven analysis commands and diagnostics. Options are case-sensitive; use `-i`, not `-I`. Each command also supports `--help`.
 
 | Command | Option | Meaning and accepted values | Default when omitted |
 | --- | --- | --- | --- |
-| All commands | `-i`, `--input` | Path to the JSON containing `paths_to_files`. | Required |
+| Analysis commands | `-i`, `--input` | Path to the JSON containing `paths_to_files`. | Required |
 | All commands | `-h`, `--help` | Show command usage and exit. | — |
 | `generate_nuclei_mask` | `-p`, `--particle_size` | Integer minimum nucleus area in **px²**; not a StarDist probability threshold. | `2500` |
 | `generate_foci_mask` | `-f`, `--foci_threshold` | Integer lower intensity threshold on prepared **8-bit** marker images; not a foci-area threshold. | `150` |
@@ -157,8 +159,25 @@ This table covers all seven installed commands. Options are case-sensitive; use 
 | `fia_marker_intensity_report` | `--collections` | `latest`, `all` or `ask`. | `latest` completed per experiment |
 | `fia_marker_intensity_report` | `--markers` | Exact folder names separated by commas, `all`, or `none`. Example: `Foci_1_Channel_2,Foci_2_Channel_3`. | One batch selection; automatic for one marker |
 | `fia_marker_intensity_report` | `--all-experiments` | Still accepted for compatibility; has no effect because all valid JSON experiment paths are always used. Unnecessary in new commands. | All valid JSON paths |
+| `fia_diagnostics` | `-i`, `--input` | Also inspect the experiment folders and journals listed in this JSON. | Inspect managed runs, known temporary locations, caches and system resources |
+| `fia_diagnostics` | `--max-entries` | Positive integer limit on directory entries inspected per location; reaching it is reported as a partial scan. | `100000` |
 
 `select_channels` and `fia_collect_marker_intensity_results` have no additional command-line parameters. Channel choices, StarDist reuse and colocalization are interactive, as listed above.
+
+### Temporary files and diagnostics
+
+Every analysis command creates a temporary directory for its run under `~/.fia-tools/tmp/`. The same mechanism applies to direct execution of the analysis scripts. Temporary files used to publish results safely stay on the result disk in owned `.fia_tmp_<run_id>` directories. After a successful process exit or normal cancellation, the supervisor cleans these directories once the observed worker processes have exited. Failures, uncertain process ownership or still-running descendants retain their resources for review. Image-processing settings and bit depths are unchanged.
+
+Inspect the computer and, optionally, the experiment folders:
+
+```bash
+fia_diagnostics
+fia_diagnostics -i input_paths.json
+```
+
+Diagnostics reports temporary resources, persistent caches, active managed processes, available RAM, swap and disk space. It deletes no files and stops no processes. The current journal is `~/.fia-tools/fia_diagnostics.log`; with `-i`, a copy is written to each existing `fia_assay/fia_diagnostics.log`. Previous journals move to the adjacent `logs` folder. Runtime records and cleanup outcomes are under `~/.fia-tools/runs/<run_id>/`.
+
+Set `FIA_RUNTIME_HOME` to an absolute writable directory to change the common runtime location; use the same setting for analysis and diagnostics. Permanent Fiji/StarDist caches keep their existing locations. See [resource ownership, cleanup and platform limitations](docs/REFERENCE.md#temporary-resources-and-system-diagnostics).
 
 ## Results, documentation and help
 

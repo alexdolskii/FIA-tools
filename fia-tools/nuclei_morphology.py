@@ -4,6 +4,7 @@ import csv
 import math
 import re
 from pathlib import Path
+from run_resources import temporary_path
 
 import numpy as np
 import spatial_calibration as spatial
@@ -354,7 +355,7 @@ class NucleiMorphologyExport:
         for name, columns, records in tables:
             csv_name = "Nuclei_Morphology.csv" if name == "Nuclei" else f"Nuclei_{name}.csv"
             csv_path = self.output / csv_name
-            temporary = csv_path.with_name("." + csv_name + ".tmp")
+            temporary = temporary_path(csv_path, csv_path.with_name("." + csv_name + ".tmp"))
             with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
                 writer = csv.DictWriter(handle, fieldnames=columns)
                 writer.writeheader()

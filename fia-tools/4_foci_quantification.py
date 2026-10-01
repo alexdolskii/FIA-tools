@@ -1,7 +1,11 @@
 #!/usr/bin/env python
+
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('quantify_foci'))
+
 from assay_layout import ASSAY_DIR
 
-import argparse
 import itertools
 import logging
 import os
@@ -677,23 +681,3 @@ def main_summarize_res(input_json_path: str, njobs=4):
         logging.info(f"Saved result: {output_csv}")
 
     logging.info("All processing completed.")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Parallel foci/nuclei analysis with "
-                    "optional universal colocalization "
-                    "and black-objects/white-bg masks."
-    )
-    parser.add_argument("-i",
-                        "--input",
-                        required=True,
-                        help="JSON file with folder paths.")
-    parser.add_argument("-j",
-                        "--jobs",
-                        required=False,
-                        default=4,
-                        help="Number of CPU to run the script. "
-                             "Default is 4")
-    args = parser.parse_args()
-    raise SystemExit(main_summarize_res(args.input, njobs=args.jobs))

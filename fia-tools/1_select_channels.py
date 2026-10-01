@@ -1,7 +1,11 @@
 #!/usr/bin/env python
+
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('select_channels'))
+
 from assay_layout import ASSAY_DIR, MARKERS_DIR
 
-import argparse
 import hashlib
 import os
 from pathlib import Path
@@ -458,14 +462,3 @@ def select_channel_name(input_json_path: str):
         print("\nPart 1 successfully completed.")
     else:
         print("\nPart 1 finished with incomplete results. Check each folder's 1_log.log.")
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i',
-                        '--input',
-                        type=str,
-                        help="JSON file with all paths of directories",
-                        required=True)
-    args = parser.parse_args()
-    raise SystemExit(select_channel_name(args.input))

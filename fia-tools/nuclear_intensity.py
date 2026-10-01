@@ -1,6 +1,12 @@
 """Select completed nucleus runs and export original nuclear marker intensity."""
 
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('quantify_nuclear_intensity'))
+
+
 from assay_layout import ASSAY_DIR, MARKERS_DIR
+from run_resources import temporary_path
 
 import csv
 import json
@@ -366,7 +372,7 @@ def new_output(parent, prefix):
 
 
 def write_json(path, content):
-    temporary = Path(str(path) + '.tmp')
+    temporary = temporary_path(path, Path(str(path) + '.tmp'))
     temporary.write_text(json.dumps(content, indent=2, default=str) + '\n', encoding='utf-8')
     temporary.replace(path)
 
@@ -422,7 +428,7 @@ def save_tables(output, nuclei, images, info):
            else value} for key, value in info.items()]),
     )
     for sheet_name, filename, columns, rows in tables:
-        temporary = output / (filename + '.tmp')
+        temporary = temporary_path(output / filename, output / (filename + '.tmp'))
         with temporary.open('w', encoding='utf-8-sig', newline='') as handle:
             writer = csv.DictWriter(handle, fieldnames=columns, extrasaction='ignore')
             writer.writeheader()
@@ -440,7 +446,7 @@ def save_tables(output, nuclei, images, info):
                     cell.data_type = 's'
                 cells.append(cell)
             sheet.append(cells)
-    temporary = output / 'Nuclear_Intensity.tmp.xlsx'
+    temporary = temporary_path(output / 'Nuclear_Intensity.xlsx', output / 'Nuclear_Intensity.tmp.xlsx')
     workbook.save(temporary)
     temporary.replace(output / 'Nuclear_Intensity.xlsx')
 

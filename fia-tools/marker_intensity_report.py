@@ -1,8 +1,14 @@
 """Create a spreadsheet-based marker-intensity report without starting ImageJ."""
 
-from assay_layout import ASSAY_DIR
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('fia_marker_intensity_report'))
 
-import argparse
+
+from assay_layout import ASSAY_DIR
+from run_resources import temporary_path
+
+from cli_arguments import parse_arguments
 import csv
 import hashlib
 import json
@@ -47,7 +53,7 @@ def create_output(root):
 
 def write_status(output, status, **details):
     payload = dict(Schema_version=1, Status=status, Updated_UTC=datetime.now(timezone.utc).isoformat(), **details)
-    temporary = output / '.report_status.partial.json'
+    temporary = temporary_path(output / 'report_status.json', output / '.report_status.partial.json')
     temporary.write_text(json.dumps(payload, indent=2, allow_nan=False), encoding='utf-8')
     temporary.replace(output / 'report_status.json')
 
@@ -388,7 +394,7 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
             image.height = height
             sheet.add_image(image, f'A{anchor}')
             anchor += int(height / 20) + 3
-    temporary = output / ('.' + filename + '.partial.xlsx')
+    temporary = temporary_path(output / filename, output / ('.' + filename + '.partial.xlsx'))
     book.save(temporary)
     temporary.replace(output / filename)
 
@@ -542,20 +548,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Report collected nuclear morphology and marker intensity; no image processing.')
-    parser.add_argument('-i', '--input', required=True, help='JSON with paths_to_files experiment folders')
-    parser.add_argument('--stats-unit', choices=('nucleus', 'well'), help='Omit for descriptive results without tests')
-    parser.add_argument('--min-nuclei', type=int, default=0,
-                        help='Minimum non-border nuclei per image (inclusive); omit or use 0 to disable filtering')
-    parser.add_argument('--template', help='96-well plate-map XLSX; otherwise discover it inside each collection folder')
-    parser.add_argument('--sheet', help='Plate-map worksheet name; default: first sheet')
-    parser.add_argument('--all-experiments', action='store_true', help='Compatibility option: all valid manifest folders are always used')
-    parser.add_argument('--collections', choices=('ask', 'latest', 'all'), default='latest',
-                        help='Default: latest completed collection per experiment; ask enables manual selection')
-    parser.add_argument('--markers', help='Comma-separated marker folders, all, or none; default: one batch selection (automatic for one marker)')
-    args = parser.parse_args(argv)
-    if args.min_nuclei < 0:
-        parser.error('--min-nuclei must be a nonnegative integer')
+    args = parse_arguments('fia_marker_intensity_report', argv)
     audit = TableJournal('5_marker_intensity_report.log', args.input)
     result = _main(args, audit)
     saved = audit.finish()
@@ -610,7 +603,3 @@ def _main(args, audit):
         audit.status = 'FAILED'
         audit.event(None, 'RUN_ABORTED | %s', error, level=logging.ERROR, exc_info=True)
         return 1
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())

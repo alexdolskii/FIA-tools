@@ -2,6 +2,8 @@
 
 from assay_layout import ASSAY_DIR
 
+from run_resources import runtime_context
+
 import logging
 import re
 import time
@@ -78,6 +80,9 @@ class IntensityJournal:
                               'incomplete': False, 'runs': {}}
         self.event(root, 'RUN_STARTED | run_id=%s | input_folder=%s | input_json=%s',
                    self.run_id, root, self.input_path)
+
+        if runtime_context():
+            self.event(root, "TEMPORARY_RESOURCES | %s", runtime_context())
 
     @contextmanager
     def logger(self, root=None, progress=None):

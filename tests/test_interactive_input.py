@@ -281,4 +281,10 @@ def test_installed_entry_points_preserve_cancellation_status(monkeypatch, comman
         getattr(script, method).return_value = 130
     monkeypatch.setattr(cli, '_load_script', lambda name: script)
     monkeypatch.setattr(sys, 'argv', [command, '-i', 'input.json'])
+    # Dispatch stays in-process for the mocked analysis functions. Real worker
+    # exit/cancellation propagation is exercised in test_run_resources.py.
+    def supervise(name, arguments):
+        assert name == command and arguments == ['-i', 'input.json']
+        return getattr(cli, name).__wrapped__()
+    monkeypatch.setattr('run_resources.run_command', supervise)
     assert getattr(cli, command)() == 130

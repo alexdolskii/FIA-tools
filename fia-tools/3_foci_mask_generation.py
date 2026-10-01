@@ -1,6 +1,10 @@
 #!/usr/bin/env python
+
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('generate_foci_mask'))
+
 from assay_layout import ASSAY_DIR, MARKERS_DIR
-import argparse
 import logging
 import os
 from datetime import datetime
@@ -359,20 +363,3 @@ def main_filter_foci(input_json_path: str, foci_threshold: int):
         filter_foci(folder_dict, chosen_subfolder, foci_threshold)
 
     print("\n--- All processing tasks completed ---")
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i',
-                        '--input',
-                        type=str,
-                        help="JSON file with all paths of directories",
-                        required=True)
-    parser.add_argument('-f',
-                        '--foci_threshold',
-                        type=int,
-                        help="Threshold value for foci analysis. "
-                             "Default is 150",
-                        default=150)
-    args = parser.parse_args()
-    raise SystemExit(main_filter_foci(args.input, args.foci_threshold))

@@ -1,5 +1,7 @@
 """Folder-level terminal progress and scoped journals for nuclei generation."""
 
+from run_resources import runtime_context
+
 import logging
 import shutil
 import sys
@@ -73,6 +75,8 @@ class NucleiLogSession:
         self._write(path, 'RUN_STARTED | run_id=%s | input_folder=%s | input_json=%s | '
                     'particle_size_pixels_squared=%s', self.run_id, path.parent.parent,
                     self.input_json, self.particle_size)
+        if runtime_context():
+            self._write(path, "TEMPORARY_RESOURCES | %s", runtime_context())
         self.journals[path] = {'started': time.monotonic(), 'stages': {}}
 
     def stage_finished(self, path, stage, status):

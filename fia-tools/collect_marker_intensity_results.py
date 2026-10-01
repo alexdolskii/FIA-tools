@@ -1,6 +1,12 @@
 """Collect nuclear morphology and marker-intensity spreadsheets without ImageJ."""
 
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('fia_collect_marker_intensity_results'))
+
+
 from assay_layout import ASSAY_DIR, MARKERS_DIR
+from run_resources import temporary_directory
 
 import csv
 import hashlib
@@ -10,7 +16,6 @@ import logging
 import math
 import re
 import shutil
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -733,7 +738,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
             checks.append(info_row('Copied spreadsheet', target, 'COPIED', path,
                                    digest=hashlib.sha256(snapshots[path]).hexdigest()))
         tables['Collection_Info'] = (INFO_COLUMNS, checks)
-        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=destination) as temporary:
+        with temporary_directory(destination) as temporary:
             staging = Path(temporary)
             if progress:
                 progress.phase('Copying source spreadsheets', len(copies))
@@ -770,7 +775,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
         # A failed collection contains a diagnostic spreadsheet only.
         if progress:
             progress.phase('Saving failure diagnostics')
-        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=destination) as temporary:
+        with temporary_directory(destination) as temporary:
             staging = Path(temporary)
             write_workbook(staging / 'Collection_Report.xlsx', {'Collection_Info': (INFO_COLUMNS, checks)})
             output = publish_staging(staging, destination, 'Collection_Report.xlsx', ['Collection_Report.xlsx'])

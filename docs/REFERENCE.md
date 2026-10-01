@@ -408,6 +408,45 @@ It asks whether to start processing and whether to perform colocalization analys
 python fia-tools/4_foci_quantification.py -i input_paths.json
 ```
 
+## Temporary resources and system diagnostics
+
+All seven installed analysis commands, and direct execution of their script files, use a lightweight supervisor. Argument validation and `--help` run before a worker or temporary directory is created. The analysis runs in a child Python process with the same interpreter, arguments, working directory and terminal streams. A fresh temporary directory is selected before importing processing libraries. `TMPDIR`, `TEMP` and `TMP` are set only in the worker environment; `fiji_config` supplies `-Djava.io.tmpdir=<directory>` before ImageJ starts. Existing heap limits, Fiji endpoint, StarDist model, image types and numerical settings are preserved. Imported Python functions called directly by another application do not automatically start this CLI lifecycle.
+
+The default runtime root is `~/.fia-tools` (`~` means the current user's home directory on each OS). An absolute writable `FIA_RUNTIME_HOME` can select another location. For example, in a macOS/Linux shell use `export FIA_RUNTIME_HOME="/path/to/FIA-runtime"`; in PowerShell use `$env:FIA_RUNTIME_HOME = "D:\FIA-runtime"`. Use the same setting for later diagnostics. The supervisor does not silently substitute another location if it cannot create its run storage. This setting does not relocate existing caches or search previous custom runtime roots.
+
+| Location | Purpose and lifetime |
+| --- | --- |
+| `<runtime root>/tmp/<run_id>/` | Python/library temporary files for one command invocation; Java uses this directory too |
+| `<result directory>/.fia_tmp_<run_id>/` | Registered staging directory on the destination filesystem, for atomic metadata/CSV/XLSX replacement or collection publication |
+| `<runtime root>/runs/<run_id>/run.json` | Command, arguments, host, timestamps, process identities, exit code, sampled resource peaks and cleanup outcome |
+| `<runtime root>/runs/<run_id>/worker.json` | Worker identity recorded before processing imports |
+| `<runtime root>/runs/<run_id>/resources.jsonl` | Registry of owned temporary directories, including those on external result disks |
+| `<runtime root>/runs/<run_id>/runtime.log` | Runtime start, process exit and cleanup outcome; retained after temporary data are removed |
+
+Run IDs combine a UTC timestamp and random suffix. Each owned directory has a `.fia-owner.json` marker. Distinct runs use distinct directories, including simultaneous runs. This isolates temporary storage; it does **not** make simultaneous writes to the same analysis outputs safe. Per-experiment stage journals include a `TEMPORARY_RESOURCES` line linking their own stage run ID to the common runtime record.
+
+Cleanup waits until the worker has actually exited, including its Python/JVM shutdown. The supervisor samples the process tree and checks PID **and process creation time**, not PID alone. After exit code `0` or a normal cancellation with code `130`, it removes only registered directories with the expected run name, verified owner marker and canonical path, and only if the observed processes have exited. It leaves final results, permanent caches and other programs' temporary files alone. A failure/nonzero exit, a still-running descendant, incomplete process observation or a registry problem retains temporary resources. A failed cleanup is recorded as `INCOMPLETE`. These runtime states describe process/resource handling, not scientific completeness: existing stage journals and report status files remain authoritative for analysis outcomes.
+
+Process inspection uses `psutil>=5.9,<8`, declared in both dependency manifests. macOS, Windows and Linux APIs are used through psutil; restricted permissions or an inconsistent process namespace produce an explicit unknown/partial state rather than permission to delete. On Windows, locked files can cause incomplete cleanup; the supervisor reports the error and leaves them for inspection. A killed supervisor cannot finish its journal, and a rapidly detached descendant may escape sampling. Such interrupted records remain possible remainders, not proof that cleanup is safe.
+
+The supervisor samples process-tree RSS and system swap approximately once per second while waiting. The recorded peaks are sampled observations: short spikes can be missed, summed RSS can count shared pages more than once, and system swap belongs to the whole computer. They do not identify the cause of a freeze or reconstruct resource use from an earlier unmonitored run. OS swap is not redirected into FIA temporary storage.
+
+`fia_diagnostics` runs without importing ImageJ, scyjava, TensorFlow, StarDist, NumPy or openpyxl. It inspects:
+
+- The selected runtime root and its registered temporary directories, including result-disk staging areas.
+- Known current-user temporary roots for top-level `openpyxl.*` files. These files remain `UNATTRIBUTED`: another Python application may own them.
+- Existing Fiji/jgo, Maven, StarDist model and Matplotlib cache locations, including relevant cache environment overrides where known. These are persistent caches, not disposable analysis remainders. Custom locations not represented by these settings may be outside the scan.
+- With `-i`, metadata of files below each `fia_assay`, recognizable old `.tmp`/`.partial` files and collection staging directories, plus the tails of current stage journals. Original images and workbook contents are not read. Missing experiment folders are reported.
+- Registered process identities and their current RSS, RAM availability, system swap and free space on the runtime/result disks. Unregistered Python/Java processes are not attributed to FIA.
+
+Resource categories are `ACTIVE`, `OWNED_REMAINDER` (verified directory belonging to an exited, observed run), `POSSIBLE_REMAINDER`, `UNKNOWN`, `UNATTRIBUTED` and `PERSISTENT_CACHE`. Age alone never establishes ownership or safe deletion. Missing final journal lines indicate an incomplete journal, not necessarily a dead process. No diagnostic option deletes files, stops processes or removes caches.
+
+The scan uses five terminal stages and per-experiment progress. Directory traversal does not follow symlinks/junctions or cross nested mount points. `--max-entries` defaults to `100000` per inspected location; a reached limit, access failure or unavailable process inspection appears in the journal and marks the scan `PARTIAL`. This is a bounded check of known locations, not an exhaustive scan of every system file or every plugin cache. Scan sizes are logical file sizes, not guaranteed reclaimable disk space.
+
+The current diagnostic journal is `<runtime root>/fia_diagnostics.log`, with previous copies archived under `<runtime root>/logs/`. When `-i` is supplied, the same diagnostic snapshot is also saved in each **existing** `fia_assay/fia_diagnostics.log`, with earlier versions in `fia_assay/logs/`. Thus these copies describe the complete requested diagnostic batch. Journals contain a readable summary followed by a detailed JSON snapshot. The exit code is `0` for a complete saved scan, `1` for an incomplete scan or save failure, `2` for invalid CLI/input JSON, and `130` for cancellation. Finding remainders does not itself make a scan incomplete.
+
+Permanent caches are deliberately reused in their existing locations; changing their paths would require downloading or migrating dependencies/models and could discard user configuration. The runtime manager neither relocates nor deletes them. Old temporary files created before this mechanism have no reliable run registration and remain candidates for review.
+
 ## Output files and journals
 
 Each input folder has its own analysis outputs. The following paths are relative to that input folder; `<timestamp>` represents the date and time generated by a stage.

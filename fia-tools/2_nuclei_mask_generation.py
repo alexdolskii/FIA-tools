@@ -1,7 +1,12 @@
 #!/usr/bin/env python
-from assay_layout import ASSAY_DIR
 
-import argparse
+if __name__ == '__main__':
+    from runtime_worker import launch_direct
+    raise SystemExit(launch_direct('generate_nuclei_mask'))
+
+from assay_layout import ASSAY_DIR
+from run_resources import temporary_path
+
 import hashlib
 import json
 import os
@@ -46,7 +51,7 @@ def create_output_folder(parent, prefix):
 def write_run_metadata(folder, filename, metadata):
     """Replace metadata atomically; interrupted runs retain an incomplete status."""
     path = Path(folder) / filename
-    temporary = path.with_name("." + filename + ".tmp")
+    temporary = temporary_path(path, path.with_name("." + filename + ".tmp"))
     temporary.write_text(json.dumps(metadata, indent=2) + "\n",
                          encoding="utf-8")
     temporary.replace(path)
@@ -563,20 +568,3 @@ def main(input_json_path: str,
         complete = process_nuclei(processed_folders, particle_size)
         status = "INCOMPLETE; check the folder logs" if complete is False else "finished"
         print(f"Step 2: Nuclei processing {status}. Total elapsed: {time.monotonic() - started:.1f}s.")
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-i',
-                        '--input',
-                        type=str,
-                        help="JSON file with all paths of directories",
-                        required=True)
-    parser.add_argument('-p',
-                        '--particle_size',
-                        type=int,
-                        help="Minimum size of nuclei to analyze (in pixels). "
-                             "Default is 2500",
-                        default=2500)
-    args = parser.parse_args()
-    raise SystemExit(main(args.input, args.particle_size))
