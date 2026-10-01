@@ -60,7 +60,7 @@ DATA_DIR = os.path.join(_ROOT, "data")
 
 @pytest.fixture(scope="session")
 def data_dir() -> str:
-    """Absolute path to the workspace *data/* folder (contains foci_assay/)."""
+    """Absolute path to the workspace *data/* folder (contains fia_assay/)."""
     return DATA_DIR
 
 

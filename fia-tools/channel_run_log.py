@@ -1,5 +1,7 @@
 """Per-folder audit logs for channel preparation, independent of the root logger."""
 
+from assay_layout import ASSAY_DIR
+
 import logging
 import platform
 import re
@@ -28,7 +30,7 @@ class ChannelRunLog:
 
     def __init__(self, folder, input_json, run_id, script_digest, progress=None):
         self.folder = Path(folder)
-        self.output = self.folder / "foci_assay"
+        self.output = self.folder / ASSAY_DIR
         self.input_json = str(Path(input_json).resolve()) if input_json else "not supplied"
         self.run_id = run_id
         self.script_digest = script_digest

@@ -183,11 +183,11 @@ class TestProcessImage:
                        side_effect=["3", "1", "1", "2"]):
                 mod.process_image([str(img_dir)])
 
-        # RESULT: foci_assay/Nuclei and foci_assay/Foci/... directories were
+        # RESULT: fia_assay/Nuclei and fia_assay/markers/... directories were
         # created, and image_metadata.txt was written.
-        foci_assay = img_dir / "foci_assay"
-        assert (foci_assay / "Nuclei").exists()
-        assert (foci_assay / "image_metadata.txt").exists()
+        fia_assay = img_dir / "fia_assay"
+        assert (fia_assay / "Nuclei").exists()
+        assert (fia_assay / "image_metadata.txt").exists()
 
     def test_invalid_file_type_selection_repeats_the_question(self):
         with patch("builtins.input", side_effect=["0", "abc", "3", "1", "1", "2"]):

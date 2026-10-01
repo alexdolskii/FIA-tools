@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from assay_layout import ASSAY_DIR
 
 import argparse
 import itertools
@@ -26,13 +27,13 @@ def validate_folders(input_json_path: str) -> dict:
         if not os.path.isdir(base_folder):
             logging.warning(f"Folder not found: {base_folder}")
             continue
-        foci_assay_folder = os.path.join(base_folder, "foci_assay")
-        if not os.path.isdir(foci_assay_folder):
-            logging.warning(f"No foci_assay folder in {base_folder}")
+        fia_assay_folder = os.path.join(base_folder, ASSAY_DIR)
+        if not os.path.isdir(fia_assay_folder):
+            logging.warning(f"No fia_assay folder in {base_folder}")
             continue
         folder_dicts[base_folder] = {
             "base_folder": base_folder,
-            "foci_assay_folder": foci_assay_folder
+            "fia_assay_folder": fia_assay_folder
         }
     return folder_dicts
 
@@ -61,16 +62,16 @@ def extract_metadata(metadata_path: str) -> dict:
     return spatial.read_text_metadata(metadata_path)
 
 
-def get_nuclei_mask_folder(foci_assay_folder: str) -> str:
+def get_nuclei_mask_folder(fia_assay_folder: str) -> str:
     """
     Finds the newest folder containing
     nuclei masks (e.g., Final_Nuclei_Mask_YYYYMMDD_HHMMSS).
     """
-    nuclei_mask_folders = [f for f in os.listdir(foci_assay_folder)
+    nuclei_mask_folders = [f for f in os.listdir(fia_assay_folder)
                            if f.startswith("Final_Nuclei_Mask_")]
     if not nuclei_mask_folders:
         raise FileNotFoundError(f"No 'Final_Nuclei_Mask_' "
-                                f"folders in {foci_assay_folder}.")
+                                f"folders in {fia_assay_folder}.")
 
     folder_timestamps = []
     for folder in nuclei_mask_folders:
@@ -81,24 +82,24 @@ def get_nuclei_mask_folder(foci_assay_folder: str) -> str:
     if not folder_timestamps:
         raise ValueError(f"Could not extract timestamps "
                          f"for 'Final_Nuclei_Mask_' "
-                         f"folders in {foci_assay_folder}.")
+                         f"folders in {fia_assay_folder}.")
 
     folder_timestamps.sort(key=lambda x: x[1], reverse=True)
     latest_folder = folder_timestamps[0][0]
-    return os.path.join(foci_assay_folder, latest_folder)
+    return os.path.join(fia_assay_folder, latest_folder)
 
 
-def get_latest_foci_folders(foci_assay_folder: str) -> dict:
+def get_latest_foci_folders(fia_assay_folder: str) -> dict:
     """
     Finds the newest folders with foci masks for
     each channel (e.g., Foci_1_Channel_1_YYYYMMDD_HHMMSS).
     Returns a dict {channel_name: folder_path}.
     """
-    foci_masks_folder = os.path.join(foci_assay_folder,
+    foci_masks_folder = os.path.join(fia_assay_folder,
                                      "Foci_Masks")
     if not os.path.exists(foci_masks_folder):
         raise FileNotFoundError(f"Foci_Masks folder "
-                                f"does not exist in {foci_assay_folder}.")
+                                f"does not exist in {fia_assay_folder}.")
 
     foci_folders = [f for f in os.listdir(foci_masks_folder)
                     if f.startswith("Foci_")]
@@ -511,16 +512,16 @@ def gather_paths_and_channels(base_folder: str):
     3) Finds the newest foci folders by channel,
     4) Builds channels_dict[nuc_key][channel_name] = path_to_foci_file
     """
-    foci_assay_folder = os.path.join(base_folder,
-                                     "foci_assay")
-    nuclei_mask_folder = get_nuclei_mask_folder(foci_assay_folder)
+    fia_assay_folder = os.path.join(base_folder,
+                                     ASSAY_DIR)
+    nuclei_mask_folder = get_nuclei_mask_folder(fia_assay_folder)
 
     nuclei_files = []
     for f in os.listdir(nuclei_mask_folder):
         if not f.startswith('.') and f.endswith(".tif"):
             nuclei_files.append(os.path.join(nuclei_mask_folder, f))
 
-    latest_foci = get_latest_foci_folders(foci_assay_folder)
+    latest_foci = get_latest_foci_folders(fia_assay_folder)
     channels_dict = {}
 
     for channel_name, foci_folder_path in latest_foci.items():
@@ -630,7 +631,7 @@ def main_summarize_res(input_json_path: str, njobs=4):
         "Do you want to perform colocalization analysis? (yes/no; q = cancel): ")
 
     for base_folder, info in folder_dicts.items():
-        foci_assay_folder = info["foci_assay_folder"]
+        fia_assay_folder = info["fia_assay_folder"]
         now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_folder = os.path.join(base_folder, "foci_analysis",
                                       f"Results_{now_str}")
@@ -641,7 +642,7 @@ def main_summarize_res(input_json_path: str, njobs=4):
         fh.setLevel(logging.INFO)
         logging.getLogger('').addHandler(fh)
 
-        metadata_path = os.path.join(foci_assay_folder,
+        metadata_path = os.path.join(fia_assay_folder,
                                      "image_metadata.txt")
         metadata = extract_metadata(metadata_path)
 

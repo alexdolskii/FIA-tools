@@ -49,7 +49,7 @@ def make_experiment(tmp_path, shape=(37, 1031)):
     pixels[:, 1, 10:13, 12:16] = 0  # Include true zero pixels in the ROI.
     pixels[2, 1, 10, 12] = 40
     tifffile.imwrite(raw, pixels, ome=True, metadata={'axes': 'ZCYX'}, photometric='minisblack')
-    run = root / 'foci_assay' / 'Final_Nuclei_Mask_20260923_120000'
+    run = root / 'fia_assay' / 'Final_Nuclei_Mask_20260923_120000'
     qc = run / 'Morphology_QC'
     qc.mkdir(parents=True)
     stem = raw.stem + app.MASK_SUFFIX
@@ -66,7 +66,7 @@ def make_experiment(tmp_path, shape=(37, 1031)):
     (run / 'nuclei_run.json').write_text(json.dumps(metadata))
     (root / ('._' + raw.name)).write_bytes(b'AppleDouble')
     (run / ('._' + stem + '.tif')).write_bytes(b'AppleDouble')
-    marker_folder = run.parent / 'Foci' / 'Foci_1_Channel_2'
+    marker_folder = run.parent / 'markers' / 'Foci_1_Channel_2'
     marker_folder.mkdir(parents=True)
     # Catalog contents must never be opened for intensity measurements.
     (marker_folder / 'prepared.tif').write_bytes(b'catalog only')
@@ -77,7 +77,7 @@ def make_experiment(tmp_path, shape=(37, 1031)):
 
 def marker_for(run, name='Foci_1_Channel_2'):
     return {'name': name, 'channel': int(name.rsplit('_', 1)[1]),
-            'folder': run.parent / 'Foci' / name}
+            'folder': run.parent / 'markers' / name}
 
 
 def test_selection_all_several_deduplicate_and_cancel():
@@ -397,15 +397,15 @@ def test_stage1_native_channel_exports(tmp_path, engine, monkeypatch, mode):
     answers = iter([mode, '1', '1', '2'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     module.process_image([str(root)])
-    outputs = list((root / 'foci_assay').rglob('*.tif'))
+    outputs = list((root / 'fia_assay').rglob('*.tif'))
     assert len(outputs) == 2
     for path in outputs:
         prepared = tifffile.imread(path)
         assert prepared.shape == (73, 1301)
         assert prepared.dtype == np.uint8
-    metadata = (root / 'foci_assay' / 'image_metadata.txt').read_text()
+    metadata = (root / 'fia_assay' / 'image_metadata.txt').read_text()
     assert 'Width: 1301' in metadata and 'Height: 73' in metadata
-    journal = (root / 'foci_assay' / '1_log.log').read_text()
+    journal = (root / 'fia_assay' / '1_log.log').read_text()
     assert 'FINISHED | status=SUCCESS' in journal
     assert 'output_files=2' in journal
 
@@ -413,7 +413,7 @@ def test_stage1_native_channel_exports(tmp_path, engine, monkeypatch, mode):
 def test_marker_catalog_filters_counts_and_preserves_full_folder_identity(tmp_path, capsys):
     roots = [tmp_path / 'A', tmp_path / 'B']
     for root in roots:
-        foci = root / 'foci_assay' / 'Foci'
+        foci = root / 'fia_assay' / 'markers'
         for name in ('Foci_1_Channel_2', 'Foci_2_Channel_1', 'Foci_10_Channel_3',
                      '._Foci_3_Channel_4', 'Foci_4_Channel_0', 'Foci_5_Channel_2_old'):
             folder = foci / name
@@ -424,12 +424,12 @@ def test_marker_catalog_filters_counts_and_preserves_full_folder_identity(tmp_pa
         for name in ('Foci_1_Channel_2', 'Foci_10_Channel_3'):
             (foci / name / 'image.TIFF').touch()
         (foci / 'Foci_1_Channel_2' / 'directory.tif').mkdir()
-    (roots[1] / 'foci_assay' / 'Foci' / 'Foci_1_Channel_2' / 'image.TIFF').unlink()
+    (roots[1] / 'fia_assay' / 'markers' / 'Foci_1_Channel_2' / 'image.TIFF').unlink()
     catalog = app.discover_markers([{'root': root} for root in roots])
     assert [marker['name'] for marker in catalog] == ['Foci_1_Channel_2', 'Foci_10_Channel_3']
     assert [marker['channel'] for marker in catalog] == [2, 3]
     assert catalog[0]['folders'] == {roots[0]: {
-        'path': roots[0] / 'foci_assay' / 'Foci' / 'Foci_1_Channel_2', 'image_count': 1}}
+        'path': roots[0] / 'fia_assay' / 'markers' / 'Foci_1_Channel_2', 'image_count': 1}}
     assert len(catalog[1]['folders']) == 2
     assert 'without visible TIFF images' in capsys.readouterr().out
 
@@ -443,7 +443,7 @@ def test_marker_catalog_filters_counts_and_preserves_full_folder_identity(tmp_pa
 def test_native_marker_selection_reads_matching_original_channels(
         tmp_path, engine, monkeypatch, selection, expected):
     manifest, _, run, pixels, labels = make_experiment(tmp_path)
-    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second = run.parent / 'markers' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').write_bytes(b'not an intensity input')
     answers = iter([selection])
@@ -457,7 +457,7 @@ def test_native_marker_selection_reads_matching_original_channels(
         folder, channel = metadata['Marker_folder'], metadata['Marker_channel']
         assert expected[folder] == channel
         assert output.name.startswith(f'Nuclear_Intensity_{folder}_')
-        assert metadata['Marker_folder_path'] == str(run.parent / 'Foci' / folder)
+        assert metadata['Marker_folder_path'] == str(run.parent / 'markers' / folder)
         saved = tifffile.imread(output / 'image_0001' / 'marker.tif')
         assert np.array_equal(saved, pixels[:, channel - 1].max(axis=0))
         with (output / 'Nuclear_Intensity.csv').open(encoding='utf-8-sig') as handle:
@@ -477,7 +477,7 @@ def test_native_all_markers_and_all_mask_runs_remain_separate(tmp_path, engine, 
     manifest, _, run, _, _ = make_experiment(tmp_path)
     newer = run.with_name('Final_Nuclei_Mask_20260923_130000')
     shutil.copytree(run, newer)
-    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second = run.parent / 'markers' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').touch()
     answers = iter(['all', '2'])
@@ -503,14 +503,14 @@ def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
         _, raw, run, _, _ = make_experiment(parent)
         roots.append(raw.parent)
         if name == 'B':
-            (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_2_Channel_1')
+            (run.parent / 'markers' / 'Foci_1_Channel_2').rename(run.parent / 'markers' / 'Foci_2_Channel_1')
     manifest = tmp_path / 'both.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(root) for root in roots]}))
     answers = iter(['all'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 1
-    journal = json.loads(next((roots[0] / 'foci_assay').glob('Nuclear_Intensity_*/batch.json')).read_text())
+    journal = json.loads(next((roots[0] / 'fia_assay').glob('Nuclear_Intensity_*/batch.json')).read_text())
     assert len(journal['runs']) == 2
     assert len(journal['skipped_markers']) == 2
     assert {(Path(row['source']).parent.parent, row['marker'], row['channel'])
@@ -521,7 +521,7 @@ def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
 
 def test_native_marker_channel_outside_source_is_rejected(tmp_path, engine, monkeypatch, capsys):
     manifest, _, run, _, _ = make_experiment(tmp_path)
-    (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_1_Channel_9')
+    (run.parent / 'markers' / 'Foci_1_Channel_2').rename(run.parent / 'markers' / 'Foci_1_Channel_9')
     answers = iter([])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
@@ -532,7 +532,7 @@ def test_native_marker_channel_outside_source_is_rejected(tmp_path, engine, monk
 
 def test_marker_selection_cancel_precedes_imagej_and_outputs(tmp_path, monkeypatch):
     manifest, _, run, _, _ = make_experiment(tmp_path)
-    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second = run.parent / 'markers' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').touch()
     answers = iter(['q'])

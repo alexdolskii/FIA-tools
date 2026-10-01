@@ -1,5 +1,7 @@
 """Per-image spatial calibration; unknown scales never acquire physical units."""
 
+from assay_layout import ASSAY_DIR
+
 import hashlib
 import json
 import math
@@ -175,7 +177,7 @@ def projection_calibration(path, shape, allow_bioformats=True):
     snapshot = snapshot_calibration(path, shape)
     if snapshot is not None:
         return snapshot
-    assay = next((parent for parent in path.parents if parent.name == 'foci_assay'), path.parent.parent)
+    assay = next((parent for parent in path.parents if parent.name == ASSAY_DIR), path.parent.parent)
     stem = path.stem.removesuffix('_nuclei_projection').removesuffix('_foci_projection')
     text = read_text_metadata(assay / 'image_metadata.txt').get(stem, {})
     if (text.get('XY processing') == 'native dimensions; no resizing'

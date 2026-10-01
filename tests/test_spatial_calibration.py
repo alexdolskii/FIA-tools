@@ -69,7 +69,7 @@ def test_snapshot_is_bound_to_pixels_and_dimensions(tmp_path):
 
 
 def test_native_metadata_exact_identity_and_no_z_requirement(tmp_path):
-    assay = tmp_path / 'foci_assay'
+    assay = tmp_path / 'fia_assay'
     folder = assay / 'Nuclei'
     folder.mkdir(parents=True)
     (assay / 'image_metadata.txt').write_text(
@@ -277,7 +277,7 @@ def test_native_calibration_survives_nuclei_intensity_and_collection(tmp_path, e
 
 
 def test_legacy_nd2_metadata_is_deferred_until_imagej_initialization(tmp_path, monkeypatch):
-    folder = tmp_path / 'foci_assay' / 'Nuclei'
+    folder = tmp_path / 'fia_assay' / 'Nuclei'
     folder.mkdir(parents=True)
     (tmp_path / 'image.nd2').write_bytes(b'original placeholder')
     def unexpected_read(path):

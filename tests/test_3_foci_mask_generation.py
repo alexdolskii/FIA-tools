@@ -2,7 +2,7 @@
 Unit tests for 3_foci_mask_generation.py.
 
 Covers:
-  - validate_folders()         – checks Foci/ and Nuclei_StarDist/ subfolders
+  - validate_folders()         – checks markers/ and Nuclei_StarDist/ subfolders
   - parse_metadata_file()      – reads image_metadata.txt
   - find_metadata_for_file()   – filename-to-calibration lookup
   - filter_foci()              – ImageJ-based mask creation (ImageJ mocked)
@@ -35,9 +35,9 @@ class TestValidateFolders:
     def test_returns_foci_and_nuclei_paths_for_valid_data_dir(
         self, test_input_json, data_dir
     ):
-        # PRECONDITION: data/ contains foci_assay/Foci/ and
-        # foci_assay/Nuclei_StarDist_mask_processed_<timestamp>/.
-        expected_foci = os.path.join(data_dir, "foci_assay", "Foci")
+        # PRECONDITION: data/ contains fia_assay/markers/ and
+        # fia_assay/Nuclei_StarDist_mask_processed_<timestamp>/.
+        expected_foci = os.path.join(data_dir, "fia_assay", "markers")
 
         # STEP: validate the directory described by the JSON.
         result = mod.validate_folders(test_input_json)
@@ -54,13 +54,13 @@ class TestValidateFolders:
     def test_selects_latest_nuclei_stardist_folder(
         self, tmp_path
     ):
-        # PRECONDITION: foci_assay contains two Nuclei_StarDist_mask_processed
-        # folders with different timestamps; foci_assay/Foci/ also exists.
+        # PRECONDITION: fia_assay contains two Nuclei_StarDist_mask_processed
+        # folders with different timestamps; fia_assay/markers/ also exists.
         base = tmp_path / "project"
-        foci_assay = base / "foci_assay"
-        (foci_assay / "Foci").mkdir(parents=True)
-        (foci_assay / "Nuclei_StarDist_mask_processed_20240101_120000").mkdir()
-        (foci_assay / "Nuclei_StarDist_mask_processed_20251231_235959").mkdir()
+        fia_assay = base / "fia_assay"
+        (fia_assay / "markers").mkdir(parents=True)
+        (fia_assay / "Nuclei_StarDist_mask_processed_20240101_120000").mkdir()
+        (fia_assay / "Nuclei_StarDist_mask_processed_20251231_235959").mkdir()
         json_file = tmp_path / "input.json"
         json_file.write_text(json.dumps({"paths_to_files": [str(base)]}))
 
@@ -71,18 +71,18 @@ class TestValidateFolders:
         assert "20251231_235959" in result[str(base)]["nuclei_folder"]
 
     def test_missing_foci_subfolder_not_in_result_dict(self, tmp_path):
-        # PRECONDITION: foci_assay exists but Foci/ subfolder is absent.
+        # PRECONDITION: fia_assay exists but markers/ subfolder is absent.
         base = tmp_path / "project"
-        foci_assay = base / "foci_assay"
-        foci_assay.mkdir(parents=True)
-        (foci_assay / "Nuclei_StarDist_mask_processed_20240101_120000").mkdir()
+        fia_assay = base / "fia_assay"
+        fia_assay.mkdir(parents=True)
+        (fia_assay / "Nuclei_StarDist_mask_processed_20240101_120000").mkdir()
         json_file = tmp_path / "input.json"
         json_file.write_text(json.dumps({"paths_to_files": [str(base)]}))
 
         # STEP: validate folders.
         result = mod.validate_folders(str(json_file))
 
-        # RESULT: 'foci_folder' key is absent because Foci/ was not found.
+        # RESULT: 'foci_folder' key is absent because markers/ was not found.
         assert "foci_folder" not in result.get(str(base), {})
 
 
@@ -93,9 +93,9 @@ class TestParseMetadataFile:
     """Tests for parse_metadata_file() in 3_foci_mask_generation.py."""
 
     def test_parses_real_metadata_file(self, data_dir):
-        # PRECONDITION: data/foci_assay/image_metadata.txt exists and contains
+        # PRECONDITION: data/fia_assay/image_metadata.txt exists and contains
         # at least one image entry with calibration data.
-        metadata_path = os.path.join(data_dir, "foci_assay", "image_metadata.txt")
+        metadata_path = os.path.join(data_dir, "fia_assay", "image_metadata.txt")
 
         # STEP: parse the metadata file.
         result = mod.parse_metadata_file(metadata_path)
@@ -113,7 +113,7 @@ class TestParseMetadataFile:
     def test_returns_correct_calibration_values(self, data_dir):
         # PRECONDITION: image_metadata.txt contains entries for images '1' and
         # '2' with pixel_width = 0.2071... as written by the pipeline.
-        metadata_path = os.path.join(data_dir, "foci_assay", "image_metadata.txt")
+        metadata_path = os.path.join(data_dir, "fia_assay", "image_metadata.txt")
 
         # STEP: parse the file.
         result = mod.parse_metadata_file(metadata_path)
@@ -211,18 +211,18 @@ class TestFilterFoci:
     """Tests for filter_foci() in 3_foci_mask_generation.py."""
 
     def _make_foci_folder_dict(self, tmp_path: Path, subfolder: str) -> dict:
-        """Build a minimal folder dict with one .tif file in Foci/<subfolder>/."""
-        foci_assay = tmp_path / "foci_assay"
-        foci_dir = foci_assay / "Foci" / subfolder
+        """Build a minimal folder dict with one .tif file in markers/<subfolder>/."""
+        fia_assay = tmp_path / "fia_assay"
+        foci_dir = fia_assay / "markers" / subfolder
         foci_dir.mkdir(parents=True)
         (foci_dir / "sample_foci.tif").touch()
         return {
-            "foci_assay_folder": str(foci_assay),
-            "foci_folder": str(foci_assay / "Foci"),
+            "fia_assay_folder": str(fia_assay),
+            "foci_folder": str(fia_assay / "markers"),
         }
 
     def test_processes_tif_files_and_calls_imagej_save(self, tmp_path):
-        # PRECONDITION: folder dict with one .tif in Foci/Foci_1_Channel_1/.
+        # PRECONDITION: folder dict with one .tif in markers/Foci_1_Channel_1/.
         # All ImageJ operations are mocked.
         subfolder = "Foci_1_Channel_1"
         folder_dict = self._make_foci_folder_dict(tmp_path, subfolder)
@@ -251,13 +251,13 @@ class TestFilterFoci:
         assert mock_IJ.saveAs.call_count == 1
 
     def test_skips_when_chosen_subfolder_not_present(self, tmp_path, capsys):
-        # PRECONDITION: folder dict whose Foci/ has no subfolder matching
+        # PRECONDITION: folder dict whose markers/ has no subfolder matching
         # the requested name.
-        foci_assay = tmp_path / "foci_assay"
-        (foci_assay / "Foci").mkdir(parents=True)
+        fia_assay = tmp_path / "fia_assay"
+        (fia_assay / "markers").mkdir(parents=True)
         folder_dict = {
-            "foci_assay_folder": str(foci_assay),
-            "foci_folder": str(foci_assay / "Foci"),
+            "fia_assay_folder": str(fia_assay),
+            "foci_folder": str(fia_assay / "markers"),
         }
 
         # STEP: call filter_foci with a subfolder that doesn't exist.
@@ -286,8 +286,8 @@ class TestFilterFoci:
             # STEP: call filter_foci.
             mod.filter_foci(folder_dict, subfolder, foci_threshold=100)
 
-        # RESULT: Foci_Masks/ directory was created inside foci_assay/.
-        foci_masks_base = os.path.join(folder_dict["foci_assay_folder"],
+        # RESULT: Foci_Masks/ directory was created inside fia_assay/.
+        foci_masks_base = os.path.join(folder_dict["fia_assay_folder"],
                                        "Foci_Masks")
         assert os.path.isdir(foci_masks_base)
 

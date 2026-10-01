@@ -1,5 +1,7 @@
 """Create a spreadsheet-based marker-intensity report without starting ImageJ."""
 
+from assay_layout import ASSAY_DIR
+
 import argparse
 import csv
 import hashlib
@@ -53,14 +55,11 @@ def write_status(output, status, **details):
 def discover_collections(root, audit=None, progress=None):
     candidates = []
     root = Path(root)
-    paths = []
-    for parent in (root, root / 'foci_assay'):
-        if parent.is_dir() and not parent.is_symlink():
-            paths.extend(parent.iterdir())
+    parent = root / ASSAY_DIR
+    paths = list(parent.iterdir()) if parent.is_dir() and not parent.is_symlink() else []
     paths = [path for path in paths if not path.is_symlink() and path.is_dir()
              and inputs.COLLECTION_PATTERN.fullmatch(path.name)]
-    # Prefer the new location only when timestamps are identical; all keeps both.
-    paths.sort(key=lambda path: (path.name, path.parent == root / 'foci_assay'))
+    paths.sort(key=lambda path: path.name)
     if progress:
         progress.phase('Checking collection manifests', len(paths))
     for path in paths:
@@ -396,7 +395,7 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
                   min_nuclei=0, selection_notes=(), audit=None, progress=None):
-    """Write a report under the experiment's foci_assay, including legacy inputs."""
+    """Write a report under the experiment's fia_assay directory."""
     root = Path(root).resolve()
     own_audit = audit is None
     audit = audit or TableJournal('5_marker_intensity_report.log', manifest)
@@ -425,7 +424,7 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
 
 def _create_report(collection, root, template, markers, stats_unit, sheet, manifest,
                    min_nuclei, selection_notes, logger, progress=None):
-    output = create_output(root / 'foci_assay')
+    output = create_output(root / ASSAY_DIR)
     logger.info('OUTPUT_FOLDER | %s', output)
     stage = 'input validation'
     try:
@@ -576,7 +575,7 @@ def _main(args, audit):
                     args.collections, args.stats_unit or 'disabled', args.min_nuclei, args.template, args.sheet)
         with audit.stage(None, 'Collection selection'):
             selected, missing = choose_collections(roots, args.collections, audit)
-        owners = {path: next(root for root in roots if path.parent in (root, root / 'foci_assay'))
+        owners = {path: next(root for root in roots if path.parent == root / ASSAY_DIR)
                   for path in selected}
         with audit.stage(None, 'Batch marker selection'):
             marker_plans = choose_batch_markers(selected, args.markers, audit, owners)

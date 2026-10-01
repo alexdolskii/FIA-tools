@@ -50,13 +50,13 @@ def test_collect_all_json_roots_rotates_once_for_multiple_runs(tmp_path, monkeyp
     monkeypatch.setattr('builtins.input', answer)
     snapshots = {}
     for root in roots:
-        assay = root / 'foci_assay'
+        assay = root / 'fia_assay'
         (assay / 'logs').mkdir()
         (assay / 'logs' / '1_log_previous.log').write_text('keep')
     for invocation in range(2):
         assert collect.main(path) == 0
         for root in roots:
-            assay = root / 'foci_assay'
+            assay = root / 'fia_assay'
             log = assay / '4_collect_marker_intensity.log'
             current = log.read_text()
             assert current.count('RUN_STARTED |') == current.count('RUN_FINISHED |') == 1
@@ -104,15 +104,19 @@ def test_early_cancel_archives_current_log_without_overwriting_collision(tmp_pat
     assert not list(assay.glob(report.OUTPUT_PREFIX + '*'))
 
 
-def test_report_legacy_and_new_collections_sort_by_time_and_write_inside_assay(
+def test_report_discovers_only_assay_collections_and_writes_inside_assay(
         tmp_path, monkeypatch, table_only_report):
     path = collection(tmp_path)
     root, assay = path.parent.parent, path.parent
-    older = root / (collect.OUTPUT_PREFIX + '20000101_000000')
-    newer = root / (collect.OUTPUT_PREFIX + '20990101_000000')
+    older = assay / (collect.OUTPUT_PREFIX + '20000101_000000')
+    newer = assay / (collect.OUTPUT_PREFIX + '20990101_000000')
     shutil.copytree(path, older)
     shutil.copytree(path, newer)
-    (newer / 'report.log').write_text('legacy log')
+    ignored = root / (collect.OUTPUT_PREFIX + '20991231_235959')
+    shutil.copytree(path, ignored)
+    old_assay = root / 'foci_assay'
+    old_assay.mkdir()
+    shutil.copytree(path, old_assay / ignored.name)
     assert report.choose_collections([root], 'latest') == ([newer], [])
     assert report.choose_collections([root], 'all') == ([older, path, newer], [])
     config = manifest(tmp_path, [root])
@@ -124,7 +128,7 @@ def test_report_legacy_and_new_collections_sort_by_time_and_write_inside_assay(
     assert status['Statistics_unit'] == 'nucleus' and status['Min_nuclei'] == 20
     assert status['Images_excluded'] == 1 and status['Images'] == 0
     assert not list(root.glob(report.OUTPUT_PREFIX + '*')) and not (output / 'report.log').exists()
-    assert (newer / 'report.log').read_text() == 'legacy log'
+    assert ignored.is_dir() and (old_assay / ignored.name).is_dir()
     log = (assay / '5_marker_intensity_report.log').read_text()
     for token in ('min_nuclei=20', 'IMAGE_EXCLUDED', 'INPUT_VERIFIED', 'REPORT_VERIFIED', 'status=COMPLETE'):
         assert token in log
@@ -134,8 +138,8 @@ def test_reports_all_collections_share_one_journal_and_keep_partial_batch_status
         tmp_path, monkeypatch, table_only_report):
     path = collection(tmp_path)
     root, assay = path.parent.parent, path.parent
-    legacy = root / path.name
-    shutil.copytree(path, legacy)
+    second = assay / (collect.OUTPUT_PREFIX + '20990101_000000')
+    shutil.copytree(path, second)
     missing = tmp_path / 'unavailable'
     config = manifest(tmp_path, [root, missing])
     monkeypatch.setattr('builtins.input', lambda _: pytest.fail('No selection prompt expected'))
@@ -194,8 +198,8 @@ def test_scoped_warning_logging_and_completed_folder_survives_later_cancel(tmp_p
     audit.status = 'CANCELLED'
     audit.result(second, 'one report', 'CANCELLED')
     assert audit.finish()
-    a = (first / 'foci_assay' / audit.filename).read_text()
-    b = (second / 'foci_assay' / audit.filename).read_text()
+    a = (first / 'fia_assay' / audit.filename).read_text()
+    b = (second / 'fia_assay' / audit.filename).read_text()
     assert 'first experiment warning' in a and 'first experiment warning' not in b
     assert 'RUN_FINISHED' in a and 'status=COMPLETE' in a
     assert 'status=CANCELLED' in b and 'Traceback' not in b

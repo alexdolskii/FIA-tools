@@ -20,7 +20,7 @@ def create_morphology(root, stamp='20260924_090000', particle_size=2, empty=Fals
     root.mkdir(parents=True, exist_ok=True)
     raw = root / 'field, WellA2.nd2'
     raw.write_bytes(b'not an image: the collector must never read pixels')
-    run = root / 'foci_assay' / f'Final_Nuclei_Mask_{stamp}'
+    run = root / 'fia_assay' / f'Final_Nuclei_Mask_{stamp}'
     run.mkdir(parents=True)
     source_name = raw.stem + '_nuclei_projection_StarDist_processed.tif'
     mask = Path(source_name).stem + '_processed.tif'
@@ -64,7 +64,7 @@ def create_intensity(morph, marker='Foci_1_Channel_2', stamp='20260924_100000',
                    'ID_map': str(run / 'Morphology_QC' / 'ids.tif'), 'Nuclei_run_ID': run.name,
                    'Intensity_run_ID': name, 'Particle_size_px2': export.particle_size,
                    'StarDist_source': str(export.source), 'Marker_folder': marker,
-                   'Marker_folder_path': str(run.parent / 'Foci' / marker), 'Marker_channel': channel,
+                   'Marker_folder_path': str(run.parent / 'markers' / marker), 'Marker_channel': channel,
                    'Input_type': 'nd2', 'Projection': 'MAX over all Z planes', 'Z_planes': 3,
                    'Width_px': 1031, 'Height_px': 37, 'Pixel_type': 'uint16'}
     for index, source in enumerate(export.nuclei):

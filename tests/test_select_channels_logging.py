@@ -58,7 +58,7 @@ def run(monkeypatch, folders, choices=("3", "1", "1", "2"), input_json=None):
 
 
 def journal(folder):
-    return (folder / "foci_assay" / "1_log.log").read_text()
+    return (folder / "fia_assay" / "1_log.log").read_text()
 
 
 @pytest.mark.parametrize("prefix", [[], ["1"], ["1", "1"], ["1", "1", "1"]])
@@ -82,9 +82,9 @@ def test_settings_cancellation_preserves_images_and_remaining_folder(
     runtime.openImage.assert_not_called()
     runtime.saveAs.assert_not_called()
     for path, content in previous.items():
-        if path != first / "foci_assay" / "1_log.log":
+        if path != first / "fia_assay" / "1_log.log":
             assert path.read_bytes() == content
-    assert list((first / "foci_assay" / "logs").glob("1_log_*.log"))[0].read_text() == "previous log"
+    assert list((first / "fia_assay" / "logs").glob("1_log_*.log"))[0].read_text() == "previous log"
     log = journal(first)
     assert "status=CANCELLED" in log and "attempted=0" in log
     assert "RUN_ABORTED" not in log and "Traceback" not in log
@@ -96,7 +96,7 @@ def test_settings_cancellation_preserves_images_and_remaining_folder(
 
 def test_channel_journal_omits_block_percentages_but_keeps_phases_and_diagnostics(tmp_path):
     folder = source_folder(tmp_path, filenames=("image.nd2",))
-    (folder / "foci_assay").mkdir()
+    (folder / "fia_assay").mkdir()
     stream = io.StringIO()
     with CompactProgress(1, stream) as progress:
         with ChannelRunLog(folder, None, "test", "digest", progress) as audit:
@@ -152,7 +152,7 @@ def test_success_logs_settings_outputs_and_preserves_calibration(
     assert "ImageJ=test ImageJ" in log
     assert logging.getLogger().handlers == root_handlers
     assert runtime.openImage.call_count == 1
-    nuclei = folder / "foci_assay" / "Nuclei"
+    nuclei = folder / "fia_assay" / "Nuclei"
     snapshot = json.loads((nuclei / "spatial_calibration.json").read_text())
     record = next(iter(snapshot.values()))
     assert record["Pixel_size_X_um"] == 0.2
@@ -177,7 +177,7 @@ def test_previous_log_is_archived_on_rerun(tmp_path, monkeypatch, runtime):
     run(monkeypatch, [folder])
     original = journal(folder)
     run(monkeypatch, [folder], ("yes", "3", "1", "1", "2"))
-    archives = list((folder / "foci_assay" / "logs").glob("1_log_*.log"))
+    archives = list((folder / "fia_assay" / "logs").glob("1_log_*.log"))
     assert len(archives) == 1
     assert archives[0].read_text() == original
     assert journal(folder) != original
@@ -249,7 +249,7 @@ def test_no_input_is_not_success(tmp_path, monkeypatch, runtime):
 @pytest.mark.parametrize("exception,status", [(OSError("write error"), "FAILED"), (KeyboardInterrupt(), "CANCELLED")])
 def test_handlers_close_after_abort(tmp_path, exception, status):
     folder = source_folder(tmp_path)
-    (folder / "foci_assay").mkdir()
+    (folder / "fia_assay").mkdir()
     audit = ChannelRunLog(folder, None, "test", "digest")
     with pytest.raises(type(exception)):
         with audit:
@@ -272,7 +272,7 @@ def test_bad_saved_dimensions_abort_success(tmp_path, monkeypatch, runtime):
 
 
 def existing_results(folder):
-    output = folder / "foci_assay"
+    output = folder / "fia_assay"
     output.mkdir()
     (output / "1_log.log").write_text("previous log")
     (output / "image_metadata.txt").write_text("previous metadata")
@@ -287,7 +287,7 @@ def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path,
     initialize = mod.initialize_imagej
 
     def start_imagej():
-        assert events == [str(first / "foci_assay"), str(second / "foci_assay")]
+        assert events == [str(first / "fia_assay"), str(second / "fia_assay")]
         events.append("ImageJ")
         return initialize()
 
@@ -297,9 +297,9 @@ def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path,
         if "overwrite" in prompt:
             assert "ImageJ" not in events
             assert all(path.read_bytes() == content for path, content in previous.items())
-            assert all(not list(folder.glob("foci_assay/logs/*")) for folder in (first, second))
+            assert all(not list(folder.glob("fia_assay/logs/*")) for folder in (first, second))
             target = first if str(first) in prompt else second
-            events.append(str(target / "foci_assay"))
+            events.append(str(target / "fia_assay"))
             return "yes"
         assert events[-1] == "ImageJ"
         return next(choices)
@@ -308,7 +308,7 @@ def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path,
     monkeypatch.setattr(mod, "initialize_imagej", start_imagej)
     monkeypatch.setattr("builtins.input", answer)
     assert mod.process_image([str(first), str(second)]) == ["SUCCESS", "SUCCESS"]
-    assert events == [str(first / "foci_assay"), str(second / "foci_assay"), "ImageJ"]
+    assert events == [str(first / "fia_assay"), str(second / "fia_assay"), "ImageJ"]
 
 
 @pytest.mark.parametrize("first_exists", [False, True])
@@ -326,9 +326,9 @@ def test_canceling_later_folder_preserves_the_whole_batch(tmp_path, monkeypatch,
     runtime.openImage.assert_not_called()
     assert all(path.read_bytes() == content for path, content in previous.items())
     for folder in (first, second):
-        assert not (folder / "foci_assay" / "logs").exists()
+        assert not (folder / "fia_assay" / "logs").exists()
     if not first_exists:
-        assert not (first / "foci_assay").exists()
+        assert not (first / "fia_assay").exists()
 
 
 def test_invalid_confirmation_does_not_allow_overwrite(tmp_path, monkeypatch, runtime, capsys):
@@ -420,10 +420,10 @@ def test_initial_decline_is_normal_exit_and_invalid_input_reprompts(monkeypatch,
 def test_output_path_error_is_still_an_error_before_any_writes(tmp_path, monkeypatch, runtime):
     first = source_folder(tmp_path, 'first')
     second = source_folder(tmp_path, 'second')
-    bad_output = second / 'foci_assay'
+    bad_output = second / 'fia_assay'
     bad_output.write_text('not a directory')
     with pytest.raises(NotADirectoryError, match='Output path is not a directory'):
         run(monkeypatch, [first, second], ())
     runtime.openImage.assert_not_called()
-    assert not (first / 'foci_assay').exists()
+    assert not (first / 'fia_assay').exists()
     assert bad_output.read_text() == 'not a directory'

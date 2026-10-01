@@ -38,7 +38,7 @@ class TestStarDistReuse(unittest.TestCase):
         self.source = self.make_source("first")
 
     def make_source(self, name):
-        folder = self.root / name / "foci_assay" / "Nuclei"
+        folder = self.root / name / "fia_assay" / "Nuclei"
         folder.mkdir(parents=True)
         image = np.zeros((16, 16), dtype=np.uint8)
         image[4:12, 4:12] = 200

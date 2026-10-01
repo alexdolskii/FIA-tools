@@ -100,7 +100,7 @@ def test_scoped_journal_restores_warnings_and_closes_on_every_exit(tmp_path, mon
 
 
 def make_source(root, name, count=1):
-    source = root / name / 'foci_assay' / 'Nuclei'
+    source = root / name / 'fia_assay' / 'Nuclei'
     source.mkdir(parents=True)
     image = np.arange(256, dtype=np.uint8).reshape(16, 16)
     for i in range(count):
@@ -314,7 +314,7 @@ def test_whole_command_joins_stages_and_archives_only_at_next_run(tmp_path, monk
 
 
 def test_rotation_uses_utc_and_preserves_archive_name_collisions(tmp_path, monkeypatch):
-    current = tmp_path / 'foci_assay' / '2_log.log'
+    current = tmp_path / 'fia_assay' / '2_log.log'
     current.parent.mkdir()
     current.write_text('old current')
     os.utime(current, (1700000000.125, 1700000000.125))

@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from assay_layout import ASSAY_DIR
 
 import argparse
 import hashlib
@@ -282,10 +283,10 @@ def validate_folders(input_json_path: str) -> list:
     for folder in valid_folders:
         if not Path(folder).is_dir():
             raise FileNotFoundError(f'Input folder does not exist: {folder}')
-        with NucleiRunLog(Path(folder) / 'foci_assay' / '2_log.log',
+        with NucleiRunLog(Path(folder) / ASSAY_DIR / '2_log.log',
                           'Input validation', quiet=True, stage='validation') as run:
             run.logger.info('INPUT | json=%s | folder=%s', input_json_path, folder)
-            nuclei_folder = os.path.join(folder, 'foci_assay', 'Nuclei')
+            nuclei_folder = os.path.join(folder, ASSAY_DIR, 'Nuclei')
             if os.path.exists(nuclei_folder):
                 files = [f for f in os.listdir(nuclei_folder) if not f.startswith('.')]
                 file_formats = set(os.path.splitext(f)[1] for f in files)
@@ -297,7 +298,7 @@ def validate_folders(input_json_path: str) -> list:
                 nuclei_folders.append(nuclei_folder)
                 run.finish('COMPLETE', show_counts=False, images=count)
             else:
-                run.logger.error("Nuclei folder not found in '%s/foci_assay'.", folder)
+                run.logger.error("Nuclei folder not found in '%s/fia_assay'.", folder)
                 run.finish('INCOMPLETE', show_counts=False)
     return nuclei_folders
 

@@ -102,7 +102,7 @@ def test_multi_selection_retries_format_and_range_errors(monkeypatch, choose):
 @pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
 def test_channel_journal_records_cancellation_without_failure_or_traceback(tmp_path, stop):
     (tmp_path / 'image.nd2').touch()
-    (tmp_path / 'foci_assay').mkdir()
+    (tmp_path / 'fia_assay').mkdir()
     stream = io.StringIO()
     with pytest.raises(prompts.CANCELLATION_EXCEPTIONS):
         with CompactProgress(1, stream) as progress:
@@ -113,7 +113,7 @@ def test_channel_journal_records_cancellation_without_failure_or_traceback(tmp_p
                 if isinstance(stop, str):
                     raise prompts.Cancelled()
                 raise stop
-    text = (tmp_path / 'foci_assay' / '1_log.log').read_text()
+    text = (tmp_path / 'fia_assay' / '1_log.log').read_text()
     assert 'IMAGE_CANCELLED' in text and 'RUN_CANCELLED' in text
     assert 'completed=0 | failed=0' in text and 'cancelled=1' in text
     assert 'status=CANCELLED' in text
@@ -122,7 +122,7 @@ def test_channel_journal_records_cancellation_without_failure_or_traceback(tmp_p
 
 
 def test_legacy_confirmation_retries_same_question(monkeypatch, tmp_path):
-    source = str(tmp_path / 'foci_assay' / 'Nuclei')
+    source = str(tmp_path / 'fia_assay' / 'Nuclei')
     candidate = {'usable': True, 'legacy': True, 'path': 'saved', 'count': 1}
     monkeypatch.setattr(nuclei, 'discover_stardist_folders', lambda path: [candidate])
     reader = answer_with(monkeypatch, ['', 'maybe', 'yes'])
@@ -132,7 +132,7 @@ def test_legacy_confirmation_retries_same_question(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
 def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, tmp_path, stop):
-    source = str(tmp_path / 'foci_assay' / 'Nuclei')
+    source = str(tmp_path / 'fia_assay' / 'Nuclei')
     candidate = {'usable': True, 'legacy': True, 'path': 'saved', 'count': 1}
     monkeypatch.setattr(nuclei, 'validate_folders', lambda path: [source])
     monkeypatch.setattr(nuclei, 'discover_stardist_folders', lambda path: [candidate])
@@ -142,13 +142,13 @@ def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, tmp_pat
     answer_with(monkeypatch, ['1', stop])
     assert nuclei.main('input.json', 2500) == 130
     process.assert_not_called()
-    journal = (tmp_path / 'foci_assay' / '2_log.log').read_text()
+    journal = (tmp_path / 'fia_assay' / '2_log.log').read_text()
     assert 'RUN_FINISHED' in journal and 'status=CANCELLED' in journal
     assert 'Traceback' not in journal
 
 
 def foci_folder(tmp_path, monkeypatch):
-    folder = tmp_path / 'Foci'
+    folder = tmp_path / 'markers'
     (folder / 'Foci_1_Channel_2').mkdir(parents=True)
     info = {'foci_folder': str(folder)}
     monkeypatch.setattr(foci, 'validate_folders', lambda path: {'sample': info})
@@ -176,7 +176,7 @@ def test_foci_cancellation_does_not_start_processing(tmp_path, monkeypatch, answ
 
 @pytest.mark.parametrize('answer,enabled', [('yes', True), ('no', False)])
 def test_colocalization_never_interprets_a_typo_as_no(tmp_path, monkeypatch, answer, enabled):
-    info = {'foci_assay_folder': str(tmp_path)}
+    info = {'fia_assay_folder': str(tmp_path)}
     monkeypatch.setattr(quantify, 'validate_folders', lambda path: {str(tmp_path): info})
     monkeypatch.setattr(quantify, 'extract_metadata', lambda path: {})
     monkeypatch.setattr(quantify, 'gather_paths_and_channels', lambda path: (['image.tif'], {}))

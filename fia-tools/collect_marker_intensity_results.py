@@ -1,5 +1,7 @@
 """Collect nuclear morphology and marker-intensity spreadsheets without ImageJ."""
 
+from assay_layout import ASSAY_DIR, MARKERS_DIR
+
 import csv
 import hashlib
 import io
@@ -328,7 +330,7 @@ def load_intensity(candidate):
     tables, info, copies = read_tables(run, 'intensity', bundle['files'])
     bundle.update(tables=tables, copies=copies)
     validate_rows(bundle, 'intensity')
-    if (parts(meta['Nuclei_run']) != bundle['namespace'] + ('foci_assay', basename(meta['Nuclei_run']))
+    if (parts(meta['Nuclei_run']) != bundle['namespace'] + (ASSAY_DIR, basename(meta['Nuclei_run']))
             or parts(info.get('Nuclei_run', '')) != parts(meta['Nuclei_run'])
             or basename(info.get('Intensity_run', '')) != run.name
             or number(info.get('Marker_channel'), 'Run_Info channel', integer=True) != bundle['channel']
@@ -394,9 +396,9 @@ def discover_sources(input_path, audit=None, skipped=None):
 
 def scan_source(root, audit=None, progress=None):
     context = {'root': root, 'morphology': [], 'intensity': [], 'markers': set(), 'checks': []}
-    assay = root / 'foci_assay'
+    assay = root / ASSAY_DIR
     if not assay.is_dir() or assay.is_symlink():
-        print(f'No regular foci_assay directory: {root}')
+        print(f'No regular fia_assay directory: {root}')
         return context
     runs = sorted(assay.iterdir(), reverse=True)
     runs = [run for run in runs if not run.name.startswith('.') and run.is_dir() and not run.is_symlink()
@@ -433,9 +435,9 @@ def scan_source(root, audit=None, progress=None):
                 print(f'Unavailable: {run}: {error}')
         if progress:
             progress.advance(run.name)
-    foci = assay / 'Foci'
-    if foci.is_dir() and not foci.is_symlink():
-        for folder in foci.iterdir():
+    markers = assay / MARKERS_DIR
+    if markers.is_dir() and not markers.is_symlink():
+        for folder in markers.iterdir():
             if folder.is_dir() and not folder.is_symlink() and MARKER_PATTERN.fullmatch(folder.name):
                 context['markers'].add(folder.name)
     return context
@@ -687,7 +689,7 @@ def collect_one(morphology, context, markers, manifest, audit=None, progress=Non
 
 def _collect_one(morphology, context, markers, manifest, logger, progress=None):
     root = morphology['root']
-    destination = root / 'foci_assay'
+    destination = root / ASSAY_DIR
     logger.info('PARAMETERS | nuclei_run=%s | particle_size_px2=%s | markers=%s | images=%s | non_border_nuclei=%s',
                 morphology['run'], morphology['particle_size'], markers,
                 len(morphology['images']), len(morphology['nuclei']))

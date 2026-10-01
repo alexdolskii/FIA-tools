@@ -2,7 +2,7 @@
 Unit tests for 2_nuclei_mask_generation.py.
 
 Covers:
-  - validate_folders()   – checks for foci_assay/Nuclei/ subdirectory
+  - validate_folders()   – checks for fia_assay/Nuclei/ subdirectory
   - find_nuclei()        – StarDist2D inference (StarDist is mocked)
   - process_nuclei()     – ImageJ-based processing (ImageJ is mocked)
   - initialize_imagej()  – success and failure paths
@@ -36,21 +36,21 @@ class TestValidateFolders:
     def test_returns_nuclei_folder_for_valid_data_directory(
         self, test_input_json, data_dir
     ):
-        # PRECONDITION: data/ folder has foci_assay/Nuclei/ with .tif images;
+        # PRECONDITION: data/ folder has fia_assay/Nuclei/ with .tif images;
         # test_input_json points to data/.
-        expected_nuclei = os.path.join(data_dir, "foci_assay", "Nuclei")
+        expected_nuclei = os.path.join(data_dir, "fia_assay", "Nuclei")
 
         # STEP: validate the folder described by the JSON file.
         result = mod.validate_folders(test_input_json)
 
-        # RESULT: the list contains the path to foci_assay/Nuclei/.
+        # RESULT: the list contains the path to fia_assay/Nuclei/.
         assert any(os.path.normpath(p) == os.path.normpath(expected_nuclei)
                    for p in result)
 
     def test_excludes_folder_without_nuclei_subfolder(self, tmp_path):
-        # PRECONDITION: a folder has foci_assay/ but NOT foci_assay/Nuclei/.
+        # PRECONDITION: a folder has fia_assay/ but NOT fia_assay/Nuclei/.
         base = tmp_path / "project"
-        (base / "foci_assay").mkdir(parents=True)
+        (base / "fia_assay").mkdir(parents=True)
         json_file = tmp_path / "input.json"
         json_file.write_text(json.dumps({"paths_to_files": [str(base)]}))
 
@@ -63,7 +63,7 @@ class TestValidateFolders:
     def test_reports_file_types_found_in_nuclei_folder(
         self, test_input_json, data_dir, capsys
     ):
-        # PRECONDITION: data/foci_assay/Nuclei/ contains .tif files.
+        # PRECONDITION: data/fia_assay/Nuclei/ contains .tif files.
         # STEP: validate folders and capture stdout.
         mod.validate_folders(test_input_json)
         captured = capsys.readouterr()

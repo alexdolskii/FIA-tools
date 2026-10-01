@@ -15,7 +15,7 @@ from test_nuclear_intensity import make_experiment
 @pytest.fixture
 def batch_setup(tmp_path, monkeypatch):
     manifest, _, run, _, labels = make_experiment(tmp_path)
-    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second = run.parent / 'markers' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').touch()
     home = tmp_path / 'home'
@@ -78,7 +78,7 @@ def test_failed_image_updates_all_copies_and_retains_diagnostics(batch_setup):
 
 def test_interruption_preserves_completed_interrupted_and_pending_runs(batch_setup):
     manifest, run, engine, _ = batch_setup
-    third = run.parent / 'Foci' / 'Foci_3_Channel_1'
+    third = run.parent / 'markers' / 'Foci_3_Channel_1'
     third.mkdir()
     (third / 'prepared.tif').touch()
     engine.measure.side_effect = [engine.measure.return_value, KeyboardInterrupt()]

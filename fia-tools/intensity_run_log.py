@@ -1,5 +1,7 @@
 """One rotating text journal per experiment for the full intensity command."""
 
+from assay_layout import ASSAY_DIR
+
 import logging
 import re
 import time
@@ -62,7 +64,7 @@ class IntensityJournal:
         root = Path(root).resolve()
         if root in self.folders:
             return
-        path = root / 'foci_assay' / self.filename
+        path = root / ASSAY_DIR / self.filename
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             archive = path.parent / 'logs'

@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+from assay_layout import ASSAY_DIR, MARKERS_DIR
 
 import argparse
 import hashlib
@@ -110,7 +111,7 @@ def select_settings():
 
 def confirm_output_folders(valid_folders):
     """Return selected/skipped folders, or None for cancellation, before any writes."""
-    output_folders = [Path(folder) / 'foci_assay' for folder in valid_folders]
+    output_folders = [Path(folder) / ASSAY_DIR for folder in valid_folders]
     existing = []
     print("\nChecking output folders before analysis:")
     for folder in output_folders:
@@ -163,7 +164,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
     Prepared marker images support foci analysis. Nuclear-intensity measurements
     use the selected channels in the original images, not these prepared pixels.
 
-    Creates a text file (image_metadata.txt) in the 'foci_assay' folder,
+    Creates a text file (image_metadata.txt) in the 'fia_assay' folder,
     listing image calibration properties and dimension
     info for each processed image.
     """
@@ -190,9 +191,9 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
     with CompactProgress(total) as progress:
         # Process images in each folder
         for folder_index, input_folder in enumerate(selected_folders, 1):
-            # Create a new folder 'foci_assay' for processed images
+            # Create a new folder 'fia_assay' for processed images
             processed_folder = os.path.join(input_folder,
-                                            'foci_assay')
+                                            ASSAY_DIR)
             Path(processed_folder).mkdir(parents=True, exist_ok=True)
             print(f"\nProcessed images will be saved in: {processed_folder}")
 
@@ -217,11 +218,11 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                     Path(nuclei_folder).mkdir(parents=True, exist_ok=True)
                     run.logger.info("Nuclei folder: %s", nuclei_folder)
 
-                    # Retain Foci folder names for compatibility with both workflows.
+                    # Channel identifiers are shared by both analysis workflows.
                     foci_folders = {}
                     for i, channel in enumerate(foci_channels):
                         folder_name = os.path.join(processed_folder,
-                                                   "Foci",
+                                                   MARKERS_DIR,
                                                    f"Foci_{i + 1}_Channel_{channel}")
                         Path(folder_name).mkdir(parents=True, exist_ok=True)
                         foci_folders[channel] = folder_name

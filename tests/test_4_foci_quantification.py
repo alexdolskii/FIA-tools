@@ -65,9 +65,9 @@ class TestExtractMetadata:
     """Tests for extract_metadata()."""
 
     def test_parses_real_metadata_file(self, data_dir):
-        # PRECONDITION: data/foci_assay/image_metadata.txt exists with
+        # PRECONDITION: data/fia_assay/image_metadata.txt exists with
         # two image entries (1.nd2 and 2.nd2).
-        meta_path = os.path.join(data_dir, "foci_assay", "image_metadata.txt")
+        meta_path = os.path.join(data_dir, "fia_assay", "image_metadata.txt")
 
         # STEP: extract metadata.
         result = mod.extract_metadata(meta_path)
@@ -80,7 +80,7 @@ class TestExtractMetadata:
 
     def test_pixel_width_matches_expected_value(self, data_dir):
         # PRECONDITION: same real metadata file with known pixel width.
-        meta_path = os.path.join(data_dir, "foci_assay", "image_metadata.txt")
+        meta_path = os.path.join(data_dir, "fia_assay", "image_metadata.txt")
 
         # STEP: extract metadata.
         result = mod.extract_metadata(meta_path)
@@ -125,12 +125,12 @@ class TestGetNucleiMaskFolder:
     """Tests for get_nuclei_mask_folder()."""
 
     def test_returns_final_nuclei_mask_folder_for_data_dir(self, data_dir):
-        # PRECONDITION: data/foci_assay/Final_Nuclei_Mask_20260705_190551/
+        # PRECONDITION: data/fia_assay/Final_Nuclei_Mask_20260705_190551/
         # exists.
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
 
         # STEP: find the nuclei mask folder.
-        result = mod.get_nuclei_mask_folder(foci_assay)
+        result = mod.get_nuclei_mask_folder(fia_assay)
 
         # RESULT: the returned path ends with the expected folder name.
         assert os.path.isdir(result)
@@ -138,26 +138,26 @@ class TestGetNucleiMaskFolder:
 
     def test_returns_latest_when_multiple_folders_exist(self, tmp_path):
         # PRECONDITION: two Final_Nuclei_Mask_ folders with different timestamps.
-        foci_assay = tmp_path / "foci_assay"
-        foci_assay.mkdir()
-        (foci_assay / "Final_Nuclei_Mask_20230101_100000").mkdir()
-        (foci_assay / "Final_Nuclei_Mask_20251231_235959").mkdir()
+        fia_assay = tmp_path / "fia_assay"
+        fia_assay.mkdir()
+        (fia_assay / "Final_Nuclei_Mask_20230101_100000").mkdir()
+        (fia_assay / "Final_Nuclei_Mask_20251231_235959").mkdir()
 
         # STEP: find the latest nuclei mask folder.
-        result = mod.get_nuclei_mask_folder(str(foci_assay))
+        result = mod.get_nuclei_mask_folder(str(fia_assay))
 
         # RESULT: the folder with the later timestamp is returned.
         assert "20251231_235959" in result
 
     def test_raises_when_no_matching_folder_exists(self, tmp_path):
-        # PRECONDITION: foci_assay/ exists but has no Final_Nuclei_Mask_ dir.
-        foci_assay = tmp_path / "foci_assay"
-        foci_assay.mkdir()
+        # PRECONDITION: fia_assay/ exists but has no Final_Nuclei_Mask_ dir.
+        fia_assay = tmp_path / "fia_assay"
+        fia_assay.mkdir()
 
         # STEP: attempt to find the folder.
         # RESULT: FileNotFoundError is raised.
         with pytest.raises(FileNotFoundError, match="Final_Nuclei_Mask_"):
-            mod.get_nuclei_mask_folder(str(foci_assay))
+            mod.get_nuclei_mask_folder(str(fia_assay))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,12 +167,12 @@ class TestGetLatestFociFolders:
     """Tests for get_latest_foci_folders()."""
 
     def test_returns_channel_dict_for_data_dir(self, data_dir):
-        # PRECONDITION: data/foci_assay/Foci_Masks/Foci_1_Channel_1_*/
+        # PRECONDITION: data/fia_assay/Foci_Masks/Foci_1_Channel_1_*/
         # folder exists.
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
 
         # STEP: get the latest foci folders by channel.
-        result = mod.get_latest_foci_folders(foci_assay)
+        result = mod.get_latest_foci_folders(fia_assay)
 
         # RESULT: the dict maps channel name to an existing directory path.
         assert isinstance(result, dict)
@@ -186,26 +186,26 @@ class TestGetLatestFociFolders:
     ):
         # PRECONDITION: Foci_Masks/ has two Foci_1_Channel_1_ entries with
         # different timestamps.
-        foci_masks = tmp_path / "foci_assay" / "Foci_Masks"
+        foci_masks = tmp_path / "fia_assay" / "Foci_Masks"
         foci_masks.mkdir(parents=True)
         (foci_masks / "Foci_1_Channel_1_20230101_100000").mkdir()
         (foci_masks / "Foci_1_Channel_1_20251231_235959").mkdir()
 
         # STEP: get the latest foci folders.
-        result = mod.get_latest_foci_folders(str(tmp_path / "foci_assay"))
+        result = mod.get_latest_foci_folders(str(tmp_path / "fia_assay"))
 
         # RESULT: only the later timestamp is in the returned path.
         assert "20251231_235959" in result["Foci_1_Channel_1"]
 
     def test_raises_when_foci_masks_folder_absent(self, tmp_path):
-        # PRECONDITION: foci_assay/ has no Foci_Masks/ subdirectory.
-        foci_assay = tmp_path / "foci_assay"
-        foci_assay.mkdir()
+        # PRECONDITION: fia_assay/ has no Foci_Masks/ subdirectory.
+        fia_assay = tmp_path / "fia_assay"
+        fia_assay.mkdir()
 
         # STEP: attempt to find foci folders.
         # RESULT: FileNotFoundError is raised.
         with pytest.raises(FileNotFoundError, match="Foci_Masks"):
-            mod.get_latest_foci_folders(str(foci_assay))
+            mod.get_latest_foci_folders(str(fia_assay))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -362,22 +362,22 @@ class TestBuildIntersectionMask:
 class TestValidateFolders:
     """Tests for validate_folders() in 4_foci_quantification.py."""
 
-    def test_returns_dict_with_foci_assay_path_for_data_dir(
+    def test_returns_dict_with_fia_assay_path_for_data_dir(
         self, test_input_json, data_dir
     ):
-        # PRECONDITION: data/ contains foci_assay/; test_input_json points there.
+        # PRECONDITION: data/ contains fia_assay/; test_input_json points there.
         # STEP: validate the folder from the JSON.
         result = mod.validate_folders(test_input_json)
 
-        # RESULT: data_dir is a key; value has 'foci_assay_folder'.
+        # RESULT: data_dir is a key; value has 'fia_assay_folder'.
         assert data_dir in result
-        assert "foci_assay_folder" in result[data_dir]
-        expected = os.path.join(data_dir, "foci_assay")
-        assert os.path.normpath(result[data_dir]["foci_assay_folder"]) == \
+        assert "fia_assay_folder" in result[data_dir]
+        expected = os.path.join(data_dir, "fia_assay")
+        assert os.path.normpath(result[data_dir]["fia_assay_folder"]) == \
                os.path.normpath(expected)
 
-    def test_excludes_folder_without_foci_assay_subfolder(self, tmp_path):
-        # PRECONDITION: base folder exists but has no foci_assay/ inside it.
+    def test_excludes_folder_without_fia_assay_subfolder(self, tmp_path):
+        # PRECONDITION: base folder exists but has no fia_assay/ inside it.
         base = tmp_path / "empty_project"
         base.mkdir()
         json_file = tmp_path / "input.json"
@@ -403,20 +403,20 @@ class TestProcessNucleiImage:
     ):
         # PRECONDITION: real nuclei mask file and foci mask file exist in data/;
         # metadata contains calibration for key "1".
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
         nuclei_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Final_Nuclei_Mask_20260705_190551",
             "1_nuclei_projection_StarDist_processed_processed.tif",
         )
         foci_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Foci_Masks",
             "Foci_1_Channel_1_20260705_190921",
             "processed_1_foci_projection.tif",
         )
         metadata = mod.extract_metadata(
-            os.path.join(foci_assay, "image_metadata.txt")
+            os.path.join(fia_assay, "image_metadata.txt")
         )
         results_folder = str(tmp_path / "results")
         os.makedirs(results_folder)
@@ -449,20 +449,20 @@ class TestProcessNucleiImage:
         self, data_dir, tmp_path
     ):
         # PRECONDITION: nuclei file base name strips to "1" via extract_image_key.
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
         nuclei_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Final_Nuclei_Mask_20260705_190551",
             "1_nuclei_projection_StarDist_processed_processed.tif",
         )
         foci_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Foci_Masks",
             "Foci_1_Channel_1_20260705_190921",
             "processed_1_foci_projection.tif",
         )
         metadata = mod.extract_metadata(
-            os.path.join(foci_assay, "image_metadata.txt")
+            os.path.join(fia_assay, "image_metadata.txt")
         )
         results_folder = str(tmp_path / "results_key")
         os.makedirs(results_folder)
@@ -485,14 +485,14 @@ class TestProcessNucleiImage:
     ):
         # PRECONDITION: nuclei file exists, but metadata dict is empty,
         # so no calibration data can be looked up.
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
         nuclei_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Final_Nuclei_Mask_20260705_190551",
             "1_nuclei_projection_StarDist_processed_processed.tif",
         )
         foci_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Foci_Masks",
             "Foci_1_Channel_1_20260705_190921",
             "processed_1_foci_projection.tif",
@@ -521,20 +521,20 @@ class TestProcessNucleiImage:
         # PRECONDITION: both a nuclei file and two foci-channel files exist
         # (here we use the same foci file for both channels to keep the test
         # self-contained); colocalization is requested.
-        foci_assay = os.path.join(data_dir, "foci_assay")
+        fia_assay = os.path.join(data_dir, "fia_assay")
         nuclei_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Final_Nuclei_Mask_20260705_190551",
             "1_nuclei_projection_StarDist_processed_processed.tif",
         )
         foci_file = os.path.join(
-            foci_assay,
+            fia_assay,
             "Foci_Masks",
             "Foci_1_Channel_1_20260705_190921",
             "processed_1_foci_projection.tif",
         )
         metadata = mod.extract_metadata(
-            os.path.join(foci_assay, "image_metadata.txt")
+            os.path.join(fia_assay, "image_metadata.txt")
         )
         results_folder = str(tmp_path / "results_coloc")
         os.makedirs(results_folder)

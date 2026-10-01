@@ -1,5 +1,7 @@
 """Select completed nucleus runs and export original nuclear marker intensity."""
 
+from assay_layout import ASSAY_DIR, MARKERS_DIR
+
 import csv
 import json
 import logging
@@ -64,7 +66,7 @@ def discover(input_path, audit=None, skipped=None):
             continue
         if audit:
             audit.register(root)
-        assay = root / 'foci_assay'
+        assay = root / ASSAY_DIR
         runs = sorted((p for p in assay.iterdir() if p.is_dir()
                        and RUN_PATTERN.fullmatch(p.name)), reverse=True) if assay.is_dir() else []
         raw = visible_files(root, {'.nd2', '.tif', '.tiff'})
@@ -76,15 +78,15 @@ def discover(input_path, audit=None, skipped=None):
 
 
 def discover_markers(experiments):
-    """Use visible nonempty Foci folders as the channel catalog, never as pixel inputs."""
+    """Use visible nonempty marker folders as the channel catalog, never as pixel inputs."""
     catalog = {}
     for experiment in experiments:
         root = experiment['root']
-        foci = root / 'foci_assay' / 'Foci'
-        if not foci.is_dir():
-            print(f'No marker-channel catalog: {foci}')
+        markers = root / ASSAY_DIR / MARKERS_DIR
+        if not markers.is_dir():
+            print(f'No marker-channel catalog: {markers}')
             continue
-        for folder in sorted(foci.iterdir()):
+        for folder in sorted(markers.iterdir()):
             if folder.name.startswith('.') or not folder.is_dir():
                 continue
             match = MARKER_PATTERN.fullmatch(folder.name)

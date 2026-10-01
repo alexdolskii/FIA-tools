@@ -1,5 +1,7 @@
 """Per-experiment journals and display-only progress for spreadsheet workflows."""
 
+from assay_layout import ASSAY_DIR
+
 import logging
 import shutil
 import time
@@ -109,13 +111,13 @@ class TableJournal:
         root = Path(root).resolve()
         if root in self.folders:
             return
-        path = root / 'foci_assay' / self.filename
+        path = root / ASSAY_DIR / self.filename
         record = {'path': path, 'handler': None, 'started': time.monotonic(),
                   'runs': {}, 'incomplete': False}
         self.folders[root] = record
         try:
             if path.parent.is_symlink():
-                raise OSError(f'Linked foci_assay directory is not accepted: {path.parent}')
+                raise OSError(f'Linked fia_assay directory is not accepted: {path.parent}')
             path.parent.mkdir(exist_ok=True)
             if path.exists():
                 if path.is_symlink() or not path.is_file():

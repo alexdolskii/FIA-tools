@@ -1,8 +1,10 @@
 #!/usr/bin/env python
+from assay_layout import ASSAY_DIR, MARKERS_DIR
 import argparse
 import logging
 import os
 from datetime import datetime
+from pathlib import Path
 
 import fiji_config
 import imagej
@@ -39,7 +41,7 @@ def initialize_imagej():
 
 def validate_folders(input_json_path: str) -> dict:
     valid_folders = validate_input_file(input_json_path)
-    # checking 'Foci' and the latest
+    # checking 'markers' and the latest
     # 'Nuclei_StarDist_mask_processed_<timestamp>' subfolder
     result = {}
     for folder in valid_folders:
@@ -55,41 +57,41 @@ def validate_folders(input_json_path: str) -> dict:
         logging.getLogger('').addHandler(file_handler)
 
         result[folder] = {}
-        foci_assay_folder = os.path.join(folder, 'foci_assay')
-        if not os.path.exists(foci_assay_folder):
-            logging.error(f"Subfolder 'foci_assay' "
+        fia_assay_folder = os.path.join(folder, ASSAY_DIR)
+        if not os.path.exists(fia_assay_folder):
+            logging.error(f"Subfolder 'fia_assay' "
                           f"not found in folder '{folder}'. "
                           f"Skipping this folder.")
             continue
         else:
-            result[folder]["foci_assay_folder"] = foci_assay_folder
+            result[folder]["fia_assay_folder"] = fia_assay_folder
 
-        # Check for 'Foci' subfolder
-        foci_folder = os.path.join(foci_assay_folder,
-                                   'Foci')
+        # Check for 'markers' subfolder
+        foci_folder = os.path.join(fia_assay_folder,
+                                   MARKERS_DIR)
         if not os.path.exists(foci_folder):
-            logging.error(f"Subfolder 'Foci' not found "
-                          f"in folder '{foci_assay_folder}'. "
+            logging.error(f"Subfolder 'markers' not found "
+                          f"in folder '{fia_assay_folder}'. "
                           f"Skipping this folder.")
         else:
             result[folder]["foci_folder"] = foci_folder
 
         # Look for the latest 'Nuclei_StarDist_mask_processed_<timestamp>'
         processed_folders = []
-        for name in os.listdir(foci_assay_folder):
+        for name in os.listdir(fia_assay_folder):
             if name.startswith('Nuclei_StarDist_mask_processed_'):
                 timestamp_str = name.replace('Nuclei_StarDist_mask_processed_',
                                              '')
                 timestamp = datetime.strptime(timestamp_str,
                                               '%Y%m%d_%H%M%S')
                 processed_folders.append((timestamp,
-                                          os.path.join(foci_assay_folder,
+                                          os.path.join(fia_assay_folder,
                                                        name)))
 
         if len(processed_folders) == 0:
             logging.error(f"No folders found "
                           f"starting with 'Nuclei_StarDist_mask_processed_' "
-                          f"in '{foci_assay_folder}'. Skipping.")
+                          f"in '{fia_assay_folder}'. Skipping.")
         else:
             # Select the latest folder
             latest_processed_folder = max(processed_folders,
@@ -99,13 +101,17 @@ def validate_folders(input_json_path: str) -> dict:
                   f"{latest_processed_folder}")
             result[folder]["nuclei_folder"] = latest_processed_folder
 
-        # Check for files in 'Foci'
+        # Check for files in 'markers'
         if "foci_folder" in result[folder]:
-            foci_files = [f for f in os.listdir(result[folder]["foci_folder"])
-                          if not f.startswith('.')
-                          and f.lower().endswith('.tif')]
+            marker_root = Path(result[folder]["foci_folder"])
+            foci_files = [str(path.relative_to(marker_root))
+                          for channel in sorted(marker_root.iterdir())
+                          if not channel.name.startswith('.') and channel.is_dir()
+                          for path in sorted(channel.iterdir())
+                          if not path.name.startswith('.') and path.is_file()
+                          and path.suffix.lower() in ('.tif', '.tiff')]
             if len(foci_files) == 0:
-                logging.error("No '.tif' files found in folder 'Foci'.")
+                logging.error("No TIFF files found in marker-channel subfolders of '%s'.", marker_root)
             else:
                 result[folder]["foci_files"] = foci_files
 
@@ -126,8 +132,8 @@ def validate_folders(input_json_path: str) -> dict:
         if "foci_folder" in result[folder]:
             foci_files = result[folder].get("foci_files", [])
             print(f"\n--- File information in folder "
-                  f"'{foci_assay_folder}' ---")
-            print(f"Number of files in 'Foci': {len(foci_files)}. "
+                  f"'{fia_assay_folder}' ---")
+            print(f"Number of files in 'markers': {len(foci_files)}. "
                   f"Data types: "
                   f"{set(os.path.splitext(f)[-1] for f in foci_files)}")
 
@@ -175,7 +181,7 @@ def filter_foci(folder: dict,
 
     Args:
         folder: dictionary containing at least:
-                - 'foci_assay_folder'
+                - 'fia_assay_folder'
                 - 'foci_folder'
         chosen_subfolder: name of the subfolder to analyze
         (e.g. "Foci_1_Channel_1")
@@ -183,7 +189,7 @@ def filter_foci(folder: dict,
     """
     # Extract the relevant paths
     foci_folder = folder['foci_folder']
-    foci_assay_folder = folder['foci_assay_folder']
+    fia_assay_folder = folder['fia_assay_folder']
 
     if chosen_subfolder.startswith('.'):
         logging.warning(f"Skipping hidden foci folder: {chosen_subfolder}")
@@ -217,7 +223,7 @@ def filter_foci(folder: dict,
     WindowManager = jimport('ij.WindowManager')
 
     # Create (or reuse) a "Foci_Masks" folder in the assay folder
-    foci_masks_base = os.path.join(foci_assay_folder, "Foci_Masks")
+    foci_masks_base = os.path.join(fia_assay_folder, "Foci_Masks")
     os.makedirs(foci_masks_base, exist_ok=True)
 
     # Create a timestamped subfolder for the chosen subfolder
@@ -307,9 +313,9 @@ def main_filter_foci(input_json_path: str, foci_threshold: int):
     if not isinstance(foci_threshold, int):
         raise ValueError('Foci threshold must be an integer!')
 
-    # Step=3 ensures we have 'foci_assay_folder', 'foci_folder', etc.
+    # Step=3 ensures we have 'fia_assay_folder', 'foci_folder', etc.
     folders = validate_folders(input_json_path)
-    folder_keys = list(folders.keys())
+    folder_keys = [key for key, info in folders.items() if 'foci_folder' in info]
     if not folder_keys:
         raise ValueError("No valid folders found in JSON. Exiting.")
 
@@ -324,14 +330,14 @@ def main_filter_foci(input_json_path: str, foci_threshold: int):
                     all_subfolders.add(d)
 
     if not all_subfolders:
-        print("No subfolders found in any Foci folder. Exiting.")
+        print("No channel subfolders found in any markers folder. Exiting.")
         return
 
     # Convert to a sorted list for consistent display
     all_subfolders_list = sorted(list(all_subfolders))
 
     # --- Ask user once: which subfolder to analyze? ---
-    print("\nSubfolders found across all Foci folders:")
+    print("\nChannel subfolders found across all markers folders:")
     for i, sb in enumerate(all_subfolders_list, start=1):
         print(f"  {i}) {sb}")
 

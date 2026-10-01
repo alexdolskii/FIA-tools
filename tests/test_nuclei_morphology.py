@@ -21,7 +21,7 @@ import nuclei_morphology as morphology
 
 @pytest.fixture
 def exporter(tmp_path):
-    output = tmp_path / "condition" / "foci_assay" / "Final_Nuclei_Mask_test"
+    output = tmp_path / "condition" / "fia_assay" / "Final_Nuclei_Mask_test"
     output.mkdir(parents=True)
     return morphology.NucleiMorphologyExport(
         output, output.parent / "Nuclei_StarDist_mask_processed_test", 2000, "test")
@@ -68,7 +68,7 @@ def test_empty_and_failed_images_have_distinct_counts(exporter):
 
 def test_measurement_failure_is_reported_without_losing_final_mask(tmp_path):
     mod = sys.modules["nuclei_mask_generation"]
-    source = tmp_path / "foci_assay" / "Nuclei_StarDist_mask_processed_test"
+    source = tmp_path / "fia_assay" / "Nuclei_StarDist_mask_processed_test"
     source.mkdir(parents=True)
     (source / "cell_StarDist_processed.tif").touch()
     (source / "._cell_StarDist_processed.tif").write_bytes(b"AppleDouble")
