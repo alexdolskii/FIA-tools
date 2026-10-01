@@ -15,7 +15,7 @@ import spatial_calibration as spatial
 from csbdeep.utils import normalize
 from interactive_input import ask_choice, ask_yes_no, cancelable
 from nuclei_morphology import NucleiMorphologyExport
-from nuclei_run_log import NucleiRunLog
+from nuclei_run_log import NucleiLogSession, NucleiRunLog, nuclei_log_session
 from scyjava import jimport
 from skimage.io import imread, imsave
 from stardist.models import StarDist2D
@@ -151,6 +151,7 @@ def inspect_stardist_folder(folder, nuclei_folder, sources, progress=None):
     return candidate
 
 
+@nuclei_log_session
 def discover_stardist_folders(nuclei_folder):
     """List timestamped runs, newest first, ignoring hidden entries."""
     prefix = "Nuclei_StarDist_mask_processed_"
@@ -167,8 +168,8 @@ def discover_stardist_folders(nuclei_folder):
     folders.sort(key=lambda item: item[0], reverse=True)
     if not folders:
         return []
-    with NucleiRunLog(Path(nuclei_folder).parent.parent / '2_val_log.log',
-                      'Reuse validation', len(nuclei_source_files(nuclei_folder)), mode='a') as run:
+    with NucleiRunLog(Path(nuclei_folder).parent / '2_log.log',
+                      'Reuse validation', len(nuclei_source_files(nuclei_folder)), stage='reuse_check') as run:
         run.logger.info('INPUT | folder=%s | candidate_runs=%s', nuclei_folder, len(folders))
         sources = source_fingerprints(nuclei_folder, run.progress)
         candidates = []
@@ -180,6 +181,7 @@ def discover_stardist_folders(nuclei_folder):
     return candidates
 
 
+@nuclei_log_session
 def select_stardist_sources(nuclei_folders):
     """Collect all reuse decisions before starting any new segmentation."""
     selected = {}
@@ -188,53 +190,62 @@ def select_stardist_sources(nuclei_folders):
     for nuclei_folder in nuclei_folders:
         print(f"\nChecking existing StarDist results for: {nuclei_folder}")
         candidates = discover_stardist_folders(nuclei_folder)
-        usable = [item for item in candidates if item["usable"]]
-        for item in candidates:
-            if not item["usable"]:
-                print(f"Unavailable: {item['path']} "
-                      f"({item['count']} masks; {item['reason']})")
-        if not usable:
-            print("No reusable StarDist results. A new run is required.")
-            selected[nuclei_folder] = None
-            continue
-        for index, item in enumerate(usable, 1):
-            note = "legacy; confirmation required" if item["legacy"] else "verified"
-            print(f"[{index}] {item['path']} ({item['count']} masks; {note})")
-
-        while True:
-            if reuse_remaining:
-                answer = "1"
-            else:
-                answer = ask_choice(
-                    "Reuse folder [number; Enter = 1], [n] run StarDist again, "
-                    "[a] reuse the latest valid run for this and remaining "
-                    "inputs, or [q] cancel: ",
-                    {**{str(i): str(i) for i in range(1, len(usable) + 1)},
-                     "n": "n", "a": "a"}, default="1",
-                    error="Please choose a listed folder or n, a, q.")
-            if answer == "n":
+        with NucleiRunLog(Path(nuclei_folder).parent / '2_log.log',
+                          'Mask selection', quiet=True, stage='selection') as run:
+            run.logger.info('INPUT | nuclei_folder=%s', nuclei_folder)
+            usable = [item for item in candidates if item["usable"]]
+            for item in candidates:
+                if not item["usable"]:
+                    print(f"Unavailable: {item['path']} "
+                          f"({item['count']} masks; {item['reason']})")
+            if not usable:
+                print("No reusable StarDist results. A new run is required.")
                 selected[nuclei_folder] = None
+                run.logger.info("STARDIST_NEW | reason=no reusable results")
+                continue
+            for index, item in enumerate(usable, 1):
+                note = "legacy; confirmation required" if item["legacy"] else "verified"
+                print(f"[{index}] {item['path']} ({item['count']} masks; {note})")
+
+            while True:
+                if reuse_remaining:
+                    answer = "1"
+                else:
+                    answer = ask_choice(
+                        "Reuse folder [number; Enter = 1], [n] run StarDist again, "
+                        "[a] reuse the latest valid run for this and remaining "
+                        "inputs, or [q] cancel: ",
+                        {**{str(i): str(i) for i in range(1, len(usable) + 1)},
+                         "n": "n", "a": "a"}, default="1",
+                        error="Please choose a listed folder or n, a, q.")
+                if answer == "n":
+                    selected[nuclei_folder] = None
+                    run.logger.info("STARDIST_NEW | reason=user requested new segmentation")
+                    break
+                if answer == "a":
+                    reuse_remaining = True
+                    answer = "1"
+                chosen = usable[int(answer) - 1]
+                if chosen["legacy"] and not legacy_remaining:
+                    print("This older run has no provenance metadata. File names, "
+                          "dimensions and readability passed validation, but "
+                          "unchanged source content and settings cannot be verified.")
+                    scope = "all reused legacy runs" if reuse_remaining else "this run"
+                    confirmed = ask_yes_no(
+                        f"Confirm unchanged source images and StarDist settings "
+                        f"for {scope} [y/N; Enter = no; q = cancel]: ", default=False)
+                    run.logger.info("LEGACY_REUSE_CONFIRMATION | source=%s | confirmed=%s",
+                                    chosen["path"], confirmed)
+                    if not confirmed:
+                        reuse_remaining = False
+                        print("Legacy reuse was not confirmed. Choose another option.")
+                        continue
+                    legacy_remaining = reuse_remaining
+                selected[nuclei_folder] = chosen["path"]
+                run.logger.info("STARDIST_REUSED | source=%s | masks=%s | legacy=%s",
+                                chosen["path"], chosen["count"], chosen["legacy"])
+                print(f"StarDist: reused ({chosen['count']} masks). Source: {chosen['path']}")
                 break
-            if answer == "a":
-                reuse_remaining = True
-                answer = "1"
-            chosen = usable[int(answer) - 1]
-            if chosen["legacy"] and not legacy_remaining:
-                print("This older run has no provenance metadata. File names, "
-                      "dimensions and readability passed validation, but "
-                      "unchanged source content and settings cannot be verified.")
-                scope = "all reused legacy runs" if reuse_remaining else "this run"
-                confirmed = ask_yes_no(
-                    f"Confirm unchanged source images and StarDist settings "
-                    f"for {scope} [y/N; Enter = no; q = cancel]: ", default=False)
-                if not confirmed:
-                    reuse_remaining = False
-                    print("Legacy reuse was not confirmed. Choose another option.")
-                    continue
-                legacy_remaining = reuse_remaining
-            selected[nuclei_folder] = chosen["path"]
-            print(f"StarDist: reused ({chosen['count']} masks). Source: {chosen['path']}")
-            break
     return selected
 
 
@@ -264,11 +275,15 @@ def initialize_imagej(progress=None):
     return ij
 
 
+@nuclei_log_session
 def validate_folders(input_json_path: str) -> list:
     valid_folders = validate_input_file(input_json_path)
     nuclei_folders = []
     for folder in valid_folders:
-        with NucleiRunLog(Path(folder) / '2_val_log.log', 'Input validation', quiet=True) as run:
+        if not Path(folder).is_dir():
+            raise FileNotFoundError(f'Input folder does not exist: {folder}')
+        with NucleiRunLog(Path(folder) / 'foci_assay' / '2_log.log',
+                          'Input validation', quiet=True, stage='validation') as run:
             run.logger.info('INPUT | json=%s | folder=%s', input_json_path, folder)
             nuclei_folder = os.path.join(folder, 'foci_assay', 'Nuclei')
             if os.path.exists(nuclei_folder):
@@ -287,18 +302,19 @@ def validate_folders(input_json_path: str) -> list:
     return nuclei_folders
 
 
+@nuclei_log_session
 def find_nuclei(nuclei_folders: list) -> list:
     """Generate StarDist masks with compact progress and a journal per folder."""
     model = None
     processed_folders = []
     for folder_index, nuclei_folder in enumerate(nuclei_folders, 1):
-        output_folder = create_output_folder(
-            os.path.dirname(nuclei_folder), "Nuclei_StarDist_mask_processed_")
-        processed_folders.append(output_folder)
         image_files = nuclei_source_files(nuclei_folder)
-        with NucleiRunLog(Path(output_folder) / '2_log.log',
+        with NucleiRunLog(Path(nuclei_folder).parent / '2_log.log',
                           f'Folder {folder_index}/{len(nuclei_folders)} | StarDist',
-                          len(image_files)) as run:
+                          len(image_files), stage='stardist') as run:
+            output_folder = create_output_folder(
+                os.path.dirname(nuclei_folder), "Nuclei_StarDist_mask_processed_")
+            processed_folders.append(output_folder)
             progress, logger = run.progress, run.logger
             progress.message(f'Input: {nuclei_folder}')
             progress.message(f'Output: {output_folder}')
@@ -376,19 +392,20 @@ def find_nuclei(nuclei_folders: list) -> list:
     return processed_folders
 
 
+@nuclei_log_session
 def process_nuclei(valid_folders: list, particle_size: int) -> bool:
     """Run the existing ImageJ/morphology pipeline, reporting stage-level progress."""
     ij = None
     all_complete = bool(valid_folders)
     for folder_index, input_folder in enumerate(valid_folders, 1):
-        processed_folder = create_output_folder(
-            os.path.dirname(input_folder), "Final_Nuclei_Mask_")
         entries = os.listdir(input_folder)
         image_files = [name for name in entries
                        if not name.startswith('.') and name.lower().endswith(('.tif', '.tiff'))]
-        with NucleiRunLog(Path(processed_folder) / 'nuclei_log.log',
+        with NucleiRunLog(Path(input_folder).parent / '2_log.log',
                           f'Folder {folder_index}/{len(valid_folders)} | ImageJ',
-                          len(image_files)) as run:
+                          len(image_files), stage='imagej') as run:
+            processed_folder = create_output_folder(
+                os.path.dirname(input_folder), "Final_Nuclei_Mask_")
             progress, logger = run.progress, run.logger
             progress.message(f'Input: {input_folder}')
             progress.message(f'Output: {processed_folder}')
@@ -516,32 +533,35 @@ def main(input_json_path: str,
     """
     Main function to analyze and process nuclei.
     """
-    started = time.monotonic()
-    # Step 1: Reuse validated masks or analyze nuclei using StarDist.
-    print("Starting Step 1: Preparing StarDist nuclei masks...")
-    nuclei_folders = validate_folders(input_json_path)
-    if not nuclei_folders:
-        print("No valid nuclei folders found. Nothing to process.")
-        return
-    selected = select_stardist_sources(nuclei_folders)
-    new_inputs = [folder for folder in nuclei_folders if selected[folder] is None]
-    if new_inputs:
-        new_outputs = find_nuclei(new_inputs)
-        for nuclei_folder, output_folder in zip(new_inputs, new_outputs):
-            metadata = json.loads((Path(output_folder) / STARDIST_METADATA)
-                                  .read_text(encoding="utf-8"))
-            if metadata["status"] != "complete":
-                raise ValueError(f"Incomplete StarDist results: {output_folder}. "
-                                 "ImageJ processing was not started.")
-            selected[nuclei_folder] = output_folder
-    processed_folders = [selected[folder] for folder in nuclei_folders]
-    print("Step 1 completed: Nuclei masks ready.")
+    with NucleiLogSession(input_json_path, particle_size, require_imagej=True):
+        started = time.monotonic()
+        # Step 1: Reuse validated masks or analyze nuclei using StarDist.
+        print("Starting Step 1: Preparing StarDist nuclei masks...")
+        nuclei_folders = validate_folders(input_json_path)
+        if not nuclei_folders:
+            print("No valid nuclei folders found. Nothing to process.")
+            return
+        selected = select_stardist_sources(nuclei_folders)
+        new_inputs = [folder for folder in nuclei_folders if selected[folder] is None]
+        if new_inputs:
+            new_outputs = find_nuclei(new_inputs)
+            for nuclei_folder, output_folder in zip(new_inputs, new_outputs):
+                with NucleiRunLog(Path(nuclei_folder).parent / '2_log.log',
+                                  'StarDist readiness', quiet=True, stage='stardist_check') as run:
+                    metadata = json.loads((Path(output_folder) / STARDIST_METADATA)
+                                          .read_text(encoding="utf-8"))
+                    if metadata["status"] != "complete":
+                        raise ValueError(f"Incomplete StarDist results: {output_folder}. "
+                                         "ImageJ processing was not started.")
+                    selected[nuclei_folder] = output_folder
+        processed_folders = [selected[folder] for folder in nuclei_folders]
+        print("Step 1 completed: Nuclei masks ready.")
 
-    # Step 2: Process nuclei using ImageJ
-    print("Starting Step 2: Processing nuclei with ImageJ...")
-    complete = process_nuclei(processed_folders, particle_size)
-    status = "INCOMPLETE; check the folder logs" if complete is False else "finished"
-    print(f"Step 2: Nuclei processing {status}. Total elapsed: {time.monotonic() - started:.1f}s.")
+        # Step 2: Process nuclei using ImageJ
+        print("Starting Step 2: Processing nuclei with ImageJ...")
+        complete = process_nuclei(processed_folders, particle_size)
+        status = "INCOMPLETE; check the folder logs" if complete is False else "finished"
+        print(f"Step 2: Nuclei processing {status}. Total elapsed: {time.monotonic() - started:.1f}s.")
 
 
 if __name__ == '__main__':

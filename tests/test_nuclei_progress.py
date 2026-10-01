@@ -3,7 +3,9 @@
 import io
 import json
 import logging
+import os
 import sys
+import time
 import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -12,7 +14,7 @@ import numpy as np
 import pytest
 from skimage.io import imread, imsave
 
-from nuclei_run_log import NucleiProgress, NucleiRunLog
+from nuclei_run_log import NucleiLogSession, NucleiProgress, NucleiRunLog
 
 mod = sys.modules['nuclei_mask_generation']
 
@@ -128,7 +130,8 @@ def test_many_images_have_compact_redirected_output_and_isolated_detailed_logs(
     assert stardist.from_pretrained.call_count == 1
     assert logging.getLogger().handlers == before
     for path, count in zip(outputs, (25, 2)):
-        journal = (Path(path) / '2_log.log').read_text()
+        journal = (Path(path).parent / '2_log.log').read_text()
+        assert not (Path(path) / '2_log.log').exists()
         assert journal.count('IMAGE_FINISHED') == count
         assert journal.count('is a low contrast image') == count
         assert '"prob_thresh": 0.7' in journal and '"nms_thresh": 0.9' in journal
@@ -139,8 +142,8 @@ def test_many_images_have_compact_redirected_output_and_isolated_detailed_logs(
         result = imread(Path(path) / 'cell_0_StarDist_processed.tif')
         assert result.dtype == np.uint16
         np.testing.assert_array_equal(result, labels)
-    assert str(second) not in (Path(outputs[0]) / '2_log.log').read_text()
-    assert str(first) not in (Path(outputs[1]) / '2_log.log').read_text()
+    assert str(second) not in (Path(outputs[0]).parent / '2_log.log').read_text()
+    assert str(first) not in (Path(outputs[1]).parent / '2_log.log').read_text()
     assert model.predict_instances.call_args.kwargs == {'nms_thresh': .9, 'prob_thresh': .7}
 
 
@@ -157,7 +160,7 @@ def test_reuse_checks_are_compact_and_logged_without_modifying_saved_run(tmp_pat
     assert before == {path.name: path.read_bytes() for path in saved.iterdir()}
     output = capsys.readouterr().out
     assert 'cell_0.tif' not in output
-    journal = (source.parent.parent / '2_val_log.log').read_text()
+    journal = (source.parent / '2_log.log').read_text()
     assert journal.count('VALIDATE_IMAGE') == 3
     assert 'dtype=uint8' in journal and 'dtype=uint16' in journal
     assert 'reusable=1' in output
@@ -224,10 +227,12 @@ def test_imagej_summary_distinguishes_masks_and_morphology_and_keeps_commands(
     metadata = json.loads((folder / 'nuclei_run.json').read_text())
     assert metadata['status'] == 'complete'
     assert metadata['morphology_status'] == ('incomplete' if fail_morphology else 'complete')
-    journal = (folder / 'nuclei_log.log').read_text()
+    journal = (folder.parent / '2_log.log').read_text()
+    assert not (folder / 'nuclei_log.log').exists()
     assert 'width=16 | height=16 | bits=16' in journal
     assert 'width=16 | height=16 | bits=8' in journal
     assert ('Traceback' in journal) is fail_morphology
+    assert f"status={'INCOMPLETE' if fail_morphology else 'COMPLETE'}" in journal
 
 
 def test_main_reports_incomplete_imagej_result(tmp_path, monkeypatch, capsys):
@@ -237,3 +242,149 @@ def test_main_reports_incomplete_imagej_result(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, 'process_nuclei', lambda paths, size: False)
     mod.main('input.json', 2000)
     assert 'Step 2: Nuclei processing INCOMPLETE' in capsys.readouterr().out
+
+
+def main_input(root, sources):
+    path = root / 'inputs.json'
+    path.write_text(json.dumps({'paths_to_files': [str(source.parent.parent) for source in sources]}))
+    return str(path)
+
+
+def fake_stardist(monkeypatch):
+    stardist = MagicMock()
+    labels = np.zeros((16, 16), dtype=np.uint16)
+    labels[3:9, 4:10] = 1
+    stardist.from_pretrained.return_value.predict_instances.return_value = (labels, {})
+    monkeypatch.setattr(mod, 'StarDist2D', stardist)
+    monkeypatch.setattr(mod, 'normalize', lambda image: image)
+    return stardist
+
+
+def test_whole_command_joins_stages_and_archives_only_at_next_run(tmp_path, monkeypatch):
+    source = make_source(tmp_path, 'dataset', 2)
+    manifest = main_input(tmp_path, [source])
+    current = source.parent / '2_log.log'
+    current.write_text('previous run')
+    first_log = source.parent / '1_log.log'
+    first_log.write_text('first program current')
+    archive = source.parent / 'logs'
+    archive.mkdir()
+    first_archive = archive / '1_log_20260101_000000.log'
+    first_archive.write_text('first program archive')
+    old_validation = source.parent.parent / '2_val_log.log'
+    old_validation.write_text('old validation journal')
+    legacy = source.parent / 'Nuclei_StarDist_mask_processed_20250101_010101'
+    legacy.mkdir()
+    (legacy / '2_log.log').write_text('old StarDist journal')
+    stardist = fake_stardist(monkeypatch)
+    fake_imagej(monkeypatch)
+
+    mod.main(manifest, 2000)
+    first_run = current.read_bytes()
+    text = first_run.decode()
+    assert text.count('RUN_STARTED |') == text.count('RUN_FINISHED |') == 1
+    for stage in ('validation', 'reuse_check', 'selection', 'stardist', 'stardist_check', 'imagej'):
+        assert f'STAGE_STARTED | stage={stage} |' in text
+    assert 'status=COMPLETE' in text.split('RUN_FINISHED |')[1]
+    archived = list(archive.glob('2_log_*.log'))
+    assert len(archived) == 1 and archived[0].read_text() == 'previous run'
+    saved = [path for path in source.parent.glob('Nuclei_StarDist_mask_processed_*') if path != legacy][0]
+    preserved = {path.name: path.read_bytes() for path in saved.iterdir()}
+    assert '2_log.log' not in preserved
+    final_folder = next(source.parent.glob('Final_Nuclei_Mask_*'))
+    assert not (final_folder / 'nuclei_log.log').exists()
+
+    # A second CLI invocation reuses the masks and archives the entire first run.
+    monkeypatch.setattr('builtins.input', lambda prompt: '')
+    mod.main(manifest, 1000)
+    second_run = current.read_text()
+    assert second_run.count('RUN_STARTED |') == second_run.count('RUN_FINISHED |') == 1
+    assert 'STARDIST_REUSED' in second_run and str(saved) in second_run
+    assert 'STAGE_STARTED | stage=stardist |' not in second_run
+    assert 'particle_size_pixels_squared=1000' in second_run
+    assert stardist.from_pretrained.call_count == 1
+    archived = list(archive.glob('2_log_*.log'))
+    assert len(archived) == 2
+    assert first_run in [path.read_bytes() for path in archived]
+    assert preserved == {path.name: path.read_bytes() for path in saved.iterdir()}
+    assert old_validation.read_text() == 'old validation journal'
+    assert (legacy / '2_log.log').read_text() == 'old StarDist journal'
+    assert first_log.read_text() == 'first program current'
+    assert first_archive.read_text() == 'first program archive'
+
+
+def test_rotation_uses_utc_and_preserves_archive_name_collisions(tmp_path, monkeypatch):
+    current = tmp_path / 'foci_assay' / '2_log.log'
+    current.parent.mkdir()
+    current.write_text('old current')
+    os.utime(current, (1700000000.125, 1700000000.125))
+    archive = current.parent / 'logs'
+    archive.mkdir()
+    collision = archive / '2_log_20231114_221320_125000.log'
+    collision.write_text('already archived')
+    monkeypatch.setattr(time, 'time', lambda: 1700000000.125)
+    # A local-time formatter would produce the wrong date even in a UTC test host.
+    monkeypatch.setattr(time, 'localtime', lambda seconds=None: time.gmtime(0))
+    with NucleiLogSession(), NucleiRunLog(current, 'Validation', quiet=True):
+        pass
+    assert collision.read_text() == 'already archived'
+    assert sorted(path.read_text() for path in archive.iterdir()) == ['already archived', 'old current']
+    assert current.read_text().startswith('2023-11-14 22:13:20,125Z |')
+
+
+@pytest.mark.parametrize('exception', [KeyboardInterrupt, OSError])
+def test_abort_records_active_and_pending_folders_and_archives_on_retry(
+        tmp_path, monkeypatch, exception):
+    sources = [make_source(tmp_path, name) for name in ('first', 'second')]
+    manifest = main_input(tmp_path, sources)
+    stardist = fake_stardist(monkeypatch)
+    fake_imagej(monkeypatch)
+    model = stardist.from_pretrained.return_value
+    model.predict_instances.side_effect = exception('inference interrupted')
+    if exception is KeyboardInterrupt:
+        assert mod.main(manifest, 2000) == 130
+    else:
+        with pytest.raises(OSError, match='inference interrupted'):
+            mod.main(manifest, 2000)
+    mod.initialize_imagej.assert_not_called()
+    status = 'CANCELLED' if exception is KeyboardInterrupt else 'FAILED'
+    records = [(source.parent / '2_log.log').read_text() for source in sources]
+    assert f'status={status}' in records[0].split('RUN_FINISHED |')[1]
+    assert ('Traceback' in records[0]) is (exception is OSError)
+    pending_status = 'CANCELLED' if exception is KeyboardInterrupt else 'INCOMPLETE'
+    assert f'status={pending_status}' in records[1].split('RUN_FINISHED |')[1]
+    assert 'BATCH_INTERRUPTED' in records[1]
+    assert str(sources[1]) not in records[0] and str(sources[0]) not in records[1]
+
+    model.predict_instances.side_effect = None
+    mod.main(manifest, 2000)
+    for source, previous in zip(sources, records):
+        archived = list((source.parent / 'logs').glob('2_log_*.log'))
+        assert len(archived) == 1 and archived[0].read_text() == previous
+        current = (source.parent / '2_log.log').read_text()
+        assert current.count('RUN_STARTED |') == 1
+        assert 'status=COMPLETE' in current.split('RUN_FINISHED |')[1]
+
+
+def test_later_folder_failure_keeps_completed_folder_status_and_its_own_diagnostics(
+        tmp_path, monkeypatch):
+    sources = [make_source(tmp_path, name) for name in ('first', 'second', 'third')]
+    manifest = main_input(tmp_path, sources)
+    fake_stardist(monkeypatch)
+    ij = fake_imagej(monkeypatch)
+    image = ij.openImage.return_value
+
+    def open_image(path):
+        if '/second/' in path:
+            raise OSError('second folder failed to open')
+        return image
+
+    ij.openImage.side_effect = open_image
+    with pytest.raises(OSError, match='second folder'):
+        mod.main(manifest, 2000)
+    logs = [(source.parent / '2_log.log').read_text() for source in sources]
+    for journal, status in zip(logs, ('COMPLETE', 'FAILED', 'INCOMPLETE')):
+        assert f'status={status}' in journal.split('RUN_FINISHED |')[1]
+        assert journal.count('RUN_STARTED |') == 1
+    assert 'Traceback' in logs[1]
+    assert 'second folder failed to open' not in logs[0] + logs[2]

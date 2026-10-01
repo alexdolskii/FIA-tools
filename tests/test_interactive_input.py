@@ -120,18 +120,20 @@ def test_channel_journal_records_cancellation_without_failure_or_traceback(tmp_p
     assert 'CANCELLED' in stream.getvalue() and 'INTERRUPTED' not in stream.getvalue()
 
 
-def test_legacy_confirmation_retries_same_question(monkeypatch):
+def test_legacy_confirmation_retries_same_question(monkeypatch, tmp_path):
+    source = str(tmp_path / 'foci_assay' / 'Nuclei')
     candidate = {'usable': True, 'legacy': True, 'path': 'saved', 'count': 1}
     monkeypatch.setattr(nuclei, 'discover_stardist_folders', lambda path: [candidate])
     reader = answer_with(monkeypatch, ['', 'maybe', 'yes'])
-    assert nuclei.select_stardist_sources(['source']) == {'source': 'saved'}
+    assert nuclei.select_stardist_sources([source]) == {source: 'saved'}
     assert reader.call_args_list[1] == reader.call_args_list[2]
 
 
 @pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
-def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, stop):
+def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, tmp_path, stop):
+    source = str(tmp_path / 'foci_assay' / 'Nuclei')
     candidate = {'usable': True, 'legacy': True, 'path': 'saved', 'count': 1}
-    monkeypatch.setattr(nuclei, 'validate_folders', lambda path: ['source'])
+    monkeypatch.setattr(nuclei, 'validate_folders', lambda path: [source])
     monkeypatch.setattr(nuclei, 'discover_stardist_folders', lambda path: [candidate])
     process = Mock()
     monkeypatch.setattr(nuclei, 'find_nuclei', process)
@@ -139,6 +141,9 @@ def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, stop):
     answer_with(monkeypatch, ['1', stop])
     assert nuclei.main('input.json', 2500) == 130
     process.assert_not_called()
+    journal = (tmp_path / 'foci_assay' / '2_log.log').read_text()
+    assert 'RUN_FINISHED' in journal and 'status=CANCELLED' in journal
+    assert 'Traceback' not in journal
 
 
 def foci_folder(tmp_path, monkeypatch):

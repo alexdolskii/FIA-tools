@@ -2,12 +2,137 @@
 
 import logging
 import shutil
+import sys
 import time
 import warnings
+from contextvars import ContextVar
+from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
+from uuid import uuid4
 
 from interactive_input import CANCELLATION_EXCEPTIONS
 from terminal_progress import CompactProgress
+
+
+_current_session = ContextVar('nuclei_log_session', default=None)
+
+
+def _file_handler(path, mode='a'):
+    handler = logging.FileHandler(path, mode=mode, encoding='utf-8')
+    formatter = logging.Formatter('%(asctime)sZ | %(levelname)s | %(message)s')
+    formatter.converter = time.gmtime
+    handler.setFormatter(formatter)
+    return handler
+
+
+class NucleiLogSession:
+    """Rotate once per folder and join all stages of one command in its journal.
+
+    Files are opened only while writing or running a stage, so a large batch
+    does not keep one file handle per input open. The context also covers
+    prompts and reports unfinished folders when a batch is stopped early.
+    """
+
+    def __init__(self, input_json=None, particle_size=None, require_imagej=False):
+        self.input_json = str(Path(input_json).resolve()) if input_json else 'not supplied'
+        self.particle_size = particle_size
+        self.require_imagej = require_imagej
+        self.run_id = f'{datetime.now(timezone.utc):%Y%m%d_%H%M%S_%f}_{uuid4().hex[:8]}'
+        self.journals = {}
+
+    def __enter__(self):
+        self.token = _current_session.set(self)
+        return self
+
+    def _write(self, path, message, *args, level=logging.INFO, exc_info=None):
+        logger = logging.Logger(f'nuclei.session.{self.run_id}', level=logging.INFO)
+        logger.propagate = False
+        handler = _file_handler(path)
+        logger.addHandler(handler)
+        try:
+            logger.log(level, message, *args, exc_info=exc_info)
+        finally:
+            logger.removeHandler(handler)
+            handler.close()
+
+    def prepare(self, path):
+        path = Path(path).resolve()
+        self.last_path = path
+        if path in self.journals:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            archive = path.parent / 'logs'
+            archive.mkdir(exist_ok=True)
+            stamp = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            archived = archive / f'{path.stem}_{stamp:%Y%m%d_%H%M%S_%f}.log'
+            if archived.exists():
+                archived = archive / f'{archived.stem}_{uuid4().hex}.log'
+            path.rename(archived)
+        self._write(path, 'RUN_STARTED | run_id=%s | input_folder=%s | input_json=%s | '
+                    'particle_size_pixels_squared=%s', self.run_id, path.parent.parent,
+                    self.input_json, self.particle_size)
+        self.journals[path] = {'started': time.monotonic(), 'stages': {}}
+
+    def stage_finished(self, path, stage, status):
+        self.journals[Path(path).resolve()]['stages'][stage] = status
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            # Errors between stages still need a traceback, once, in the most
+            # recently active folder. Errors inside stages are already recorded.
+            if (exc_type and not issubclass(exc_type, CANCELLATION_EXCEPTIONS)
+                    and self.journals
+                    and not any('FAILED' in record['stages'].values()
+                                for record in self.journals.values())):
+                path = self.last_path
+                if path not in self.journals:
+                    path = next(reversed(self.journals))
+                self._write(path, 'RUN_ABORTED | %s', exc, level=logging.ERROR,
+                            exc_info=(exc_type, exc, traceback))
+                self.journals[path]['stages']['run'] = 'FAILED'
+            for path, record in self.journals.items():
+                stages = record['stages']
+                states = set(stages.values())
+                # Preserve a folder already finished before a later folder failed.
+                completed = (stages.get('imagej') == 'COMPLETE'
+                             and states <= {'COMPLETE'})
+                if 'FAILED' in states:
+                    status = 'FAILED'
+                elif 'CANCELLED' in states:
+                    status = 'CANCELLED'
+                elif completed:
+                    status = 'COMPLETE'
+                elif exc_type and issubclass(exc_type, CANCELLATION_EXCEPTIONS):
+                    status = 'CANCELLED'
+                elif exc_type or states & {'INCOMPLETE', 'NO_INPUT'}:
+                    status = 'INCOMPLETE'
+                elif self.require_imagej:
+                    status = 'INCOMPLETE'
+                else:
+                    status = 'COMPLETE'
+                if exc_type and not completed and not states & {'FAILED', 'CANCELLED'}:
+                    self._write(path, 'BATCH_INTERRUPTED | remaining stages were not completed',
+                                level=logging.WARNING)
+                self._write(path, 'RUN_FINISHED | run_id=%s | status=%s | elapsed=%.3fs | stages=%s',
+                            self.run_id, status, time.monotonic() - record['started'], stages)
+                if self.require_imagej:
+                    print(f'Folder status: {status}. Log: {path}')
+        finally:
+            _current_session.reset(self.token)
+        return False
+
+
+def nuclei_log_session(function):
+    """Keep standalone helper calls scoped; share the command session when present."""
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if _current_session.get() is not None:
+            return function(*args, **kwargs)
+        with NucleiLogSession():
+            return function(*args, **kwargs)
+    return wrapped
 
 
 class NucleiProgress(CompactProgress):
@@ -110,9 +235,10 @@ class _TerminalWarnings(logging.Handler):
 class NucleiRunLog:
     """Own and close all handlers; never attach journals to the root logger."""
 
-    def __init__(self, path, label, total=0, mode='w', stream=None, quiet=False):
-        self.path = Path(path)
-        self.label, self.total, self.mode = label, total, mode
+    def __init__(self, path, label, total=0, stream=None, quiet=False, stage=None):
+        self.path = Path(path).resolve()
+        self.label, self.total = label, total
+        self.stage = stage or label
         self.quiet = quiet
         self.progress = NucleiProgress(stream)
         self.logger = logging.Logger(f'nuclei.{self.path}', level=logging.INFO)
@@ -124,12 +250,23 @@ class NucleiRunLog:
 
     def __enter__(self):
         self.started = time.monotonic()
-        handler = logging.FileHandler(self.path, mode=self.mode, encoding='utf-8')
-        handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s'))
+        self.session = _current_session.get()
+        self.owns_session = self.session is None
+        if self.owns_session:
+            self.session = NucleiLogSession()
+            self.session.__enter__()
+        try:
+            self.session.prepare(self.path)
+            handler = _file_handler(self.path)
+        except BaseException:
+            if self.owns_session:
+                self.session.__exit__(*sys.exc_info())
+            raise
         self.logger.addHandler(handler)
         self.logger.addHandler(_TerminalWarnings(self.progress))
         self.progress.logger = self.logger
-        self.logger.info('STARTED | stage=%s | images=%s', self.label, self.total)
+        self.logger.info('STAGE_STARTED | stage=%s | label=%s | images=%s',
+                         self.stage, self.label, self.total)
         self.progress.__enter__()
         if not self.quiet:
             self.progress.group(self.label, self.total)
@@ -185,7 +322,8 @@ class NucleiRunLog:
                        f' | elapsed={time.monotonic() - self.started:.1f}s')
             if self.details:
                 summary += f' | {self.details}'
-            self.logger.info('FINISHED | %s', summary)
+            self.logger.info('STAGE_FINISHED | stage=%s | %s', self.stage, summary)
+            self.session.stage_finished(self.path, self.stage, self.status)
             with self.progress._lock:
                 self.progress.active = False
                 self.progress.image = None
@@ -203,4 +341,6 @@ class NucleiRunLog:
             for handler in list(self.logger.handlers):
                 self.logger.removeHandler(handler)
                 handler.close()
+            if self.owns_session:
+                self.session.__exit__(exc_type, exc, traceback)
         return False
