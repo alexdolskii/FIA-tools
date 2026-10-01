@@ -22,6 +22,8 @@ def parse_arguments(command, argv=None):
                             help='Input format; auto-detected for ND2, prompted for TIFF/mixed inputs when omitted')
     elif command == 'fia_marker_intensity_report':
         parser.add_argument('--stats-unit', choices=('nucleus', 'well'), help='Omit for descriptive results without tests')
+        parser.add_argument('--plot-format', choices=('pdf', 'png', 'both'), default='pdf',
+                            help='Standalone plot files: pdf (default), png, or both; Excel always includes plots')
         parser.add_argument('--min-nuclei', type=int, default=0,
                             help='Minimum non-border nuclei per image (inclusive); omit or use 0 to disable filtering')
         parser.add_argument('--template', help='96-well plate-map XLSX; otherwise discover it inside each collection folder')

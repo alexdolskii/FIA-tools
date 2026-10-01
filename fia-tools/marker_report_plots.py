@@ -1,6 +1,7 @@
 """Panelled distributions retain every non-border nucleus, independently of the test unit."""
 
 import math
+from io import BytesIO
 
 import matplotlib
 
@@ -204,10 +205,10 @@ def plot_note(data, name, observation, comparisons):
     return note
 
 
-def render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path):
+def render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path, plot_format='pdf'):
     """Keep the existing overview and panels, applying the same style to PNG and vector PDF."""
     with plt.rc_context({'font.family': plot_font(), 'font.size': FONT_SIZES['axis'], 'pdf.fonttype': 42}):
-        _render_figure(data, spec, panels, points, comparisons, limits, high, span, path)
+        return _render_figure(data, spec, panels, points, comparisons, limits, high, span, path, plot_format)
 
 
 def short_plot_note(data, observation, field=None):
@@ -227,7 +228,7 @@ def short_plot_note(data, observation, field=None):
     return population + filtering + ' Box: median and IQR.' + inference + cohort
 
 
-def _render_figure(data, spec, panels, points, comparisons, limits, high, span, path):
+def _render_figure(data, spec, panels, points, comparisons, limits, high, span, path, plot_format):
     name, field, title, ylabel, observation = spec
     columns = min(2, len(panels))
     rows = math.ceil(len(panels) / columns)
@@ -317,14 +318,25 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
         footer.set_axis_off()
         footer.text(0, 1, caption, fontsize=FONT_SIZES['note'], va='top', transform=footer.transAxes)
         footer.text(0, 0, 'Run: ' + data['run_id'], fontsize=FONT_SIZES['note'], va='bottom', transform=footer.transAxes)
-        fig.savefig(path, dpi=PNG_DPI)
-        fig.savefig(path.with_suffix('.pdf'))
+        if plot_format in ('png', 'both'):
+            fig.savefig(path.with_suffix('.png'), dpi=PNG_DPI)
+        if plot_format in ('pdf', 'both'):
+            fig.savefig(path.with_suffix('.pdf'))
+        if plot_format == 'pdf':
+            # Excel embeds raster previews; PDF-only runs need no PNG files on disk.
+            with BytesIO() as preview:
+                fig.savefig(preview, format='png', dpi=PNG_DPI)
+                return preview.getvalue()
     finally:
         plt.close(fig)
 
 
-def render_plots(data, folder, progress=None):
+def render_plots(data, folder, progress=None, plot_format='pdf'):
+    if plot_format not in ('pdf', 'png', 'both'):
+        raise ValueError('plot_format must be pdf, png, or both')
     folder.mkdir(exist_ok=True)
+    data['plot_format'] = plot_format
+    data['plot_previews'] = {}
     data['plot_data'] = plot_rows(data)
     panels = plot_panels(data)
     data['plot_labels'] = [dict(zip(LABEL_COLUMNS, (p['id'], p['block'], p['context'], p['title'], group, p['labels'][group])))
@@ -345,17 +357,20 @@ def render_plots(data, folder, progress=None):
                          for r in comparisons) for p in panels)
         limits = min(0, low - span * 0.05), high + span * (0.2 + levels * 0.11)
         note = plot_note(data, name, observation, comparisons)
-        path = folder / (name + '.png')
-        render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path)
+        path = folder / (name + ('.pdf' if plot_format == 'pdf' else '.png'))
+        preview = render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path, plot_format)
+        if preview is not None:
+            data['plot_previews'][name] = preview
         groups = {group for p in panels for group in p['groups']}
         count = sum(row['Group'] in groups for row in points)
         plots.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Points': count,
                       'View': 'overview', 'Panels': ', '.join(p['id'] for p in panels),
                       'Rendered_points': count if observation == 'image' else 0,
                       'File': str(path.relative_to(folder.parent)),
-                      'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)),
+                      'PNG_file': str(path.with_suffix('.png').relative_to(folder.parent)) if plot_format != 'pdf' else '',
+                      'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)) if plot_format != 'png' else '',
                       'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
-                      'Font': plot_font(), 'PNG_DPI': PNG_DPI})
+                      'Font': plot_font(), 'PNG_DPI': PNG_DPI if plot_format != 'pdf' else None})
         if progress:
             progress.advance(name)
     data['plots'] = plots

@@ -15,6 +15,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 
 import collect_marker_intensity_results as collect
@@ -271,8 +272,8 @@ def report_tables(data, output, manifest):
         ('Count plot', 'One point = non-border nuclei in one retained image. With no --min-nuclei threshold (or 0), zero-count images are included.'),
         ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
         ('Morphology plots', 'Only Area (separate um2/px2 cohorts), Aspect_ratio, Circularity and Solidity are eligible. Add a violin with an inner boxplot when that metric has at least one tested control comparison with P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots. All morphology metrics remain in summary and comparison tables and the full Holm family.'),
-        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview PNG contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Only complete overview PNGs are embedded in the workbook; no separate panel exports. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
-        ('Plot typography and export', 'Arial with Liberation Sans/DejaVu Sans fallback. Titles 20 pt; panel headings 16 pt; conditions, axes and significance 14 pt; sample sizes and short captions 12 pt. One overview PNG at 300 dpi plus a matching vector PDF per plotted metric. Plot_Info stores PDF paths, full methods and short display captions. Run IDs appear in the footer.'),
+        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Complete overview previews are embedded in the workbook for every export format; no separate panel exports. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
+        ('Plot typography and export', 'Arial with Liberation Sans/DejaVu Sans fallback. Titles 20 pt; panel headings 16 pt; conditions, axes and significance 14 pt; sample sizes and short captions 12 pt. Standalone format: ' + data['plot_format'] + '. PDF is vector; PNG and embedded Excel previews use 300 dpi. PDF-only previews are generated in memory without standalone PNG files. Plot_Info stores only exported file paths, full methods and short display captions. Run IDs appear in the footer.'),
         ('Plot significance', 'Brackets show Holm-adjusted significance only: ns for p >= 0.05; * for p < 0.05; ** for p < 0.01; *** for p < 0.001; **** for p < 0.0001. Not tested is distinct from ns. Exact raw and adjusted p-values remain in Statistics and morphology comparison tables.'),
         ('Plot sample sizes', 'Labels give usable nuclei or images and contributing wells for each metric. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains every usable observation once per plotted metric across all panels.'),
         ('Violin display', 'Equal maximum widths; Scott bandwidth; density limited to observed values. Fewer than five nuclei: box/range without density. Constant or single value: horizontal line. Empty groups retain n=0. Range lines retain extremes without outlier dots.'),
@@ -319,7 +320,8 @@ def report_tables(data, output, manifest):
         'Morphology_summary_well_values': 'Mean of usable per-image nucleus means within each well; equal image weight.',
         'Morphology_summary_tests': 'Existing Welch/Holm results from Statistics, including its full planned family across count, morphology and selected markers. No tests when Requested_statistics_unit is disabled.',
         'Morphology_plot_rule': 'Only Area_um2, Area_px2, Aspect_ratio, Circularity and Solidity; each requires at least one TESTED control comparison with P_Holm < 0.05 in the selected statistics unit. Physical/pixel area cohorts stay separate. No morphology plots when statistics are disabled or no eligible comparisons qualify. All morphology tests remain in the full Holm family.',
-        'Plot_export_policy': 'One complete overview PNG and PDF per plotted metric, with all panels. Only overview PNGs embedded in Excel; no separate panel files.',
+        'Plot_format': data['plot_format'],
+        'Plot_export_policy': 'One complete overview per plotted metric in the selected format (pdf, png or both), with all panels. Excel always embeds raster previews; PDF-only previews stay in memory. No separate panel files.',
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
         'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
         'Min_nuclei': data['min_nuclei'],
@@ -349,7 +351,7 @@ def report_tables(data, output, manifest):
     }
 
 
-def write_workbook(output, tables, plots, filename=WORKBOOK):
+def write_workbook(output, tables, plots, filename=WORKBOOK, previews=None):
     book = openpyxl.Workbook(write_only=True)
     for title, (columns, rows) in tables.items():
         if len(columns) > 16384 or len(rows) + 1 > 1048576:
@@ -388,7 +390,8 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
         sheet = book.create_sheet('Plots')
         anchor = 1
         for plot in plots:
-            image = Image(output / plot['File'])
+            preview = (previews or {}).get(plot['Plot'])
+            image = Image(BytesIO(preview) if preview is not None else output / plot['PNG_file'])
             height = image.height * min(1, 1050 / image.width)
             image.width = min(1050, image.width)
             image.height = height
@@ -400,7 +403,7 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
 
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
-                  min_nuclei=0, selection_notes=(), audit=None, progress=None):
+                  min_nuclei=0, selection_notes=(), audit=None, progress=None, plot_format='pdf'):
     """Write a report under the experiment's fia_assay directory."""
     root = Path(root).resolve()
     own_audit = audit is None
@@ -411,7 +414,7 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
     try:
         with audit.stage(root, f'Report | {Path(collection).name}', progress) as logger:
             success, output = _create_report(collection, root, template, markers, stats_unit, sheet,
-                                             manifest, min_nuclei, selection_notes, logger, progress)
+                                             manifest, min_nuclei, selection_notes, logger, progress, plot_format)
         audit.result(root, collection, 'SUCCESS' if success else 'FAILED', output)
         audit.status = 'COMPLETE' if success else 'INCOMPLETE'
         return success, output
@@ -429,16 +432,16 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
 
 
 def _create_report(collection, root, template, markers, stats_unit, sheet, manifest,
-                   min_nuclei, selection_notes, logger, progress=None):
+                   min_nuclei, selection_notes, logger, progress=None, plot_format='pdf'):
     output = create_output(root / ASSAY_DIR)
     logger.info('OUTPUT_FOLDER | %s', output)
     stage = 'input validation'
     try:
         if progress:
             progress.phase('Reading and validating collection')
-        write_status(output, 'RUNNING', Collection=str(collection))
-        logger.info('PARAMETERS | collection=%s | statistics=%s | min_nuclei=%s | requested_markers=%s',
-                    collection, stats_unit or 'disabled', min_nuclei, markers)
+        write_status(output, 'RUNNING', Collection=str(collection), Plot_format=plot_format)
+        logger.info('PARAMETERS | collection=%s | statistics=%s | min_nuclei=%s | requested_markers=%s | plot_format=%s',
+                    collection, stats_unit or 'disabled', min_nuclei, markers, plot_format)
         data = inputs.load_collection(collection, progress=progress)
         data['notes'].extend(selection_notes)
         for note in selection_notes:
@@ -479,16 +482,19 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         logger.info('STATISTICS | planned=%s | tested=%s', len(data['statistics']),
                     sum(row['Status'] == 'TESTED' for row in data['statistics']))
         stage = 'plots'
-        render_plots(data, output / 'Plots', progress=progress)
+        render_plots(data, output / 'Plots', progress=progress, plot_format=plot_format)
         for plot in data['plots']:
-            logger.info('PLOT_SAVED | %s | %s', output / plot['File'], output / plot['PDF_file'])
+            for key in ('PNG_file', 'PDF_file'):
+                if plot[key]:
+                    logger.info('PLOT_SAVED | %s', output / plot[key])
         stage = 'spreadsheet export'
         if progress:
             progress.phase('Saving CSV and Excel')
         tables = report_tables(data, output, manifest_path)
         for title, table in tables.items():
             collect.write_csv(output / (title + '.csv'), *table)
-        write_workbook(output, tables, data['plots'])
+        write_workbook(output, tables, data['plots'], previews=data['plot_previews'])
+        data['plot_previews'].clear()
         morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
         write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
         logger.info('TABLES_SAVED | folder=%s | workbooks=%s | csv_tables=%s',
@@ -518,7 +524,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                      Non_border_nuclei=len(data['nuclei']), Images=len(data['images']),
                      Images_before_filter=data['images_before_filter'],
                      Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
-                     Min_nuclei=data['min_nuclei'],
+                     Min_nuclei=data['min_nuclei'], Plot_format=plot_format,
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
         logger.info('REPORT_VERIFIED | status=SUCCESS | %s', output / 'report_status.json')
@@ -564,8 +570,8 @@ def _main(args, audit):
         for root in skipped:
             audit.event(None, 'SKIPPED_EXPERIMENT | %s', root, level=logging.WARNING)
         print(f'Experiments from JSON: {len(roots)} (all valid paths)')
-        audit.event(None, 'PARAMETERS | collections=%s | statistics=%s | min_nuclei=%s | template=%s | sheet=%s',
-                    args.collections, args.stats_unit or 'disabled', args.min_nuclei, args.template, args.sheet)
+        audit.event(None, 'PARAMETERS | collections=%s | statistics=%s | min_nuclei=%s | template=%s | sheet=%s | plot_format=%s',
+                    args.collections, args.stats_unit or 'disabled', args.min_nuclei, args.template, args.sheet, args.plot_format)
         with audit.stage(None, 'Collection selection'):
             selected, missing = choose_collections(roots, args.collections, audit)
         owners = {path: next(root for root in roots if path.parent == root / ASSAY_DIR)
@@ -577,6 +583,7 @@ def _main(args, audit):
             audit.event(owners[collection], 'MARKERS_SELECTED | collection=%s | markers=%s | notes=%s',
                         collection, *marker_plans[collection])
         print(f'Statistics: {args.stats_unit or "disabled (descriptive only)"}. Reports remain separate per collection.')
+        print(f'Plot format: {args.plot_format}. Excel includes all plots.')
         failures = len(missing) + len(skipped)
         with TableProgress() as progress:
             for index, collection in enumerate(selected, 1):
@@ -587,7 +594,8 @@ def _main(args, audit):
                 try:
                     success, _ = create_report(collection, root, args.template, markers,
                                                args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
-                                               selection_notes=notes, audit=audit, progress=progress)
+                                               selection_notes=notes, audit=audit, progress=progress,
+                                               plot_format=args.plot_format)
                     failures += not success
                 except OSError as error:
                     progress.message(f'Cannot write report for {collection}: {error}')

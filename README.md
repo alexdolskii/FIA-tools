@@ -113,6 +113,8 @@ fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nucle
 
 The default report selects the latest completed collection per experiment. Use `--collections all` to report every completed collection, or `--collections ask` to choose. Use `--markers all` to select all available markers without the marker prompt, or `--markers none` for morphology only.
 
+Plots are saved as **PDF only by default**. Add `--plot-format png` for PNG only or `--plot-format both` for both formats. Excel includes all plots in every mode; PDF-only runs create no standalone PNG previews.
+
 Omit `--stats-unit` for descriptive tables and plots without tests. Choose `--stats-unit well` for tests on equal-image-weight well means. Nucleus/image tests do not account for dependence within a well, and neither mode establishes independent biological replication. Tests use Welch comparisons with Holm correction; details are in the [statistics reference](docs/REFERENCE.md#plots-and-statistical-units).
 
 The collector and report read spreadsheets; they do not rerun image analysis. They handle nuclear morphology and marker intensity, not foci-count or colocalization tables.
@@ -154,6 +156,7 @@ This table covers the seven analysis commands and diagnostics. Options are case-
 | `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack` or `tiff-2d`; one mode applies to the batch. | Automatic for all-ND2 inputs; otherwise prompted |
 | `fia_marker_intensity_report` | `--stats-unit` | `nucleus` or `well`. Count tests use images in nucleus mode and wells in well mode. | Descriptive results, no tests |
 | `fia_marker_intensity_report` | `--min-nuclei` | Nonnegative integer minimum **non-border nuclei per image**, inclusive. Images below it are excluded from all report metrics. `0` disables this filter. | `0` |
+| `fia_marker_intensity_report` | `--plot-format` | `pdf`, `png` or `both` for standalone plots. Excel always includes plots. | `pdf` |
 | `fia_marker_intensity_report` | `--template` | Path to the plate-map `.xlsx`; the same workbook applies to every selected collection. | Discover one layout inside each collection |
 | `fia_marker_intensity_report` | `--sheet` | Name of the plate-map worksheet. | First worksheet |
 | `fia_marker_intensity_report` | `--collections` | `latest`, `all` or `ask`. | `latest` completed per experiment |
@@ -189,7 +192,7 @@ Paths below are relative to each original experiment folder. Results from differ
 | `fia_assay/Final_Nuclei_Mask_<timestamp>/` | Final masks, morphology Excel/CSV tables and numbered QC images |
 | `fia_assay/Nuclear_Intensity_<marker>_<timestamp>/` | Nuclear-intensity tables, marker images, ROIs and QC |
 | `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Collected and combined spreadsheets; place the Excel layout here |
-| `fia_assay/FIA_Marker_Intensity_Report_<timestamp>/` | Report workbooks/CSV, overview PNG/PDF plots and completion metadata |
+| `fia_assay/FIA_Marker_Intensity_Report_<timestamp>/` | Report workbooks/CSV, overview plots (PDF by default; optional PNG or both) and completion metadata |
 | `fia_assay/Foci_Masks/` | Foci masks by channel and run |
 | `foci_analysis/Results_<timestamp>/` | Foci/colocalization results, including `all_results_with_coloc_universal.csv` |
 

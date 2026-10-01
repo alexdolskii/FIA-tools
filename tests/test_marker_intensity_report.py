@@ -249,10 +249,12 @@ def test_zero_variance_not_tested_and_mean_reconciliation():
         data_tools.aggregate(data)
 
 
-def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
+@pytest.mark.parametrize('plot_format', [None, 'pdf', 'png', 'both'])
+def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path, plot_format):
     path = collection(tmp_path, legacy=True)
     before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
-    ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit='nucleus')
+    options = {} if plot_format is None else {'plot_format': plot_format}
+    ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit='nucleus', **options)
     assert ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'SUCCESS' and status['Non_border_nuclei'] == 2
@@ -272,7 +274,25 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
         assert (output / (title + '.csv')).is_file()
     with ZipFile(output / report.MORPHOLOGY_WORKBOOK) as archive:
         assert not any(name.startswith('xl/media/') for name in archive.namelist())
-    assert len(list((output / 'Plots').glob('*.png'))) == 2
+    selected_format = plot_format or 'pdf'
+    suffixes = {'.pdf', '.png'} if selected_format == 'both' else {'.' + selected_format}
+    assert {p.suffix for p in (output / 'Plots').iterdir()} == suffixes
+    assert len(list((output / 'Plots').iterdir())) == 2 * len(suffixes)
+    assert status['Plot_format'] == selected_format
+    run_info = {r['Parameter']: r['Value'] for r in sheet_rows(output / report.WORKBOOK, 'Run_Info')}
+    assert run_info['Plot_format'] == selected_format
+    journal = (output.parent / '5_marker_intensity_report.log').read_text()
+    assert 'plot_format=' + selected_format in journal
+    saved = [line for line in journal.splitlines() if 'PLOT_SAVED |' in line]
+    assert len(saved) == 2 * len(suffixes)
+    assert {Path(line.split('PLOT_SAVED | ')[1]).suffix for line in saved} == suffixes
+    for plot in sheet_rows(output / report.WORKBOOK, 'Plot_Info'):
+        assert (output / plot['File']).is_file()
+        for column, suffix in [('PNG_file', '.png'), ('PDF_file', '.pdf')]:
+            if suffix in suffixes:
+                assert (output / plot[column]).is_file()
+            else:
+                assert plot[column] is None
     assert [r['Points'] for r in sheet_rows(output / report.WORKBOOK, 'Plot_Info')] == [1, 2]
     with ZipFile(output / report.WORKBOOK) as archive:
         assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 2
@@ -374,8 +394,8 @@ def test_changed_input_cannot_publish_success(tmp_path, monkeypatch):
     path = collection(tmp_path)
     original = report.write_workbook
 
-    def mutate(*args):
-        original(*args)
+    def mutate(*args, **kwargs):
+        original(*args, **kwargs)
         with (path / 'Nuclei_Images.csv').open('a') as handle:
             handle.write('\n')
 
@@ -472,13 +492,15 @@ def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
     script = Path(report.__file__).resolve()
     result = subprocess.run([sys.executable, str(script), '-i', str(manifest), '--all-experiments',
                              '--collections', 'latest', '--markers', MARKER, '--stats-unit', 'well',
-                             '--min-nuclei', '3'],
+                             '--min-nuclei', '3', '--plot-format', 'png'],
                             text=True, capture_output=True, timeout=45, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     assert 'SUCCESS:' in result.stdout
     status_path = next(path.parent.glob('FIA_Marker_Intensity_Report_*/report_status.json'))
     status = json.loads(status_path.read_text())
     assert status['Min_nuclei'] == 3 and status['Images_excluded'] == 1 and status['Non_border_nuclei'] == 0
+    assert status['Plot_format'] == 'png'
+    assert {p.suffix for p in (status_path.parent / 'Plots').iterdir()} == {'.png'}
     check = subprocess.run([sys.executable, '-c',
                             ('import sys, marker_intensity_report; '
                              'assert not {"imagej", "scyjava", "stardist", "tensorflow"} & set(sys.modules)')],
@@ -674,9 +696,9 @@ def test_missing_morphology_workbook_prevents_success(tmp_path, monkeypatch):
     path = collection(tmp_path)
     original = report.write_workbook
 
-    def skip_morphology(output, tables, plots, filename=report.WORKBOOK):
+    def skip_morphology(output, tables, plots, filename=report.WORKBOOK, **kwargs):
         if filename != report.MORPHOLOGY_WORKBOOK:
-            original(output, tables, plots, filename)
+            original(output, tables, plots, filename, **kwargs)
 
     monkeypatch.setattr(report, 'write_workbook', skip_morphology)
     ok, output = report.create_report(path, path.parent.parent, markers='all')
@@ -752,7 +774,7 @@ def test_significant_morphology_render_has_all_nuclei_and_comparisons(tmp_path):
         if row['Category'] == 'Morphology' and row['Metric'] != 'Circularity':
             row['P_Holm'] = 1.0
     original = deepcopy(data['statistics'])
-    render_plots(data, tmp_path / 'Plots')
+    render_plots(data, tmp_path / 'Plots', plot_format='both')
     assert [p['Plot'] for p in data['plots']] == ['Nuclei_count', MARKER + '_Integrated_density', 'Morphology_Circularity']
     plot = data['plots'][-1]
     assert plot['Observation'] == 'nucleus' and plot['Points'] == 107
@@ -766,3 +788,10 @@ def test_significant_morphology_render_has_all_nuclei_and_comparisons(tmp_path):
     with ZipFile(tmp_path / report.WORKBOOK) as archive:
         assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 3
     assert sheet_rows(tmp_path / report.WORKBOOK, 'Plot_Info')[-1]['Metric'] == 'Circularity'
+
+
+def test_cli_rejects_unknown_plot_format_before_accessing_input(tmp_path):
+    with pytest.raises(SystemExit) as error:
+        report.main(['-i', str(tmp_path / 'missing.json'), '--plot-format', 'svg'])
+    assert error.value.code == 2
+    assert not list(tmp_path.iterdir())

@@ -94,7 +94,7 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
     progress = TableProgress(stream=StringIO())
-    plots.render_plots(data, tmp_path / 'Plots', progress)
+    plots.render_plots(data, tmp_path / 'Plots', progress, plot_format='both')
     assert all(data[key] == value for key, value in before.items())
     assert data['plot_data'] == plots.plot_rows(before)
     assert len(data['plots']) == 2
@@ -172,7 +172,7 @@ def test_more_than_four_blocks_share_one_complete_overview(tmp_path, monkeypatch
         return original_save(fig, filename, **kwargs)
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
-    plots.render_plots(data, tmp_path / 'Plots')
+    plots.render_plots(data, tmp_path / 'Plots', plot_format='both')
     assert snapshots == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
     assert not list((tmp_path / 'Plots').glob('*__Page_*.png'))
     assert len(data['plots']) == 2
@@ -254,7 +254,7 @@ def test_eight_panels_retain_all_blocks_with_short_caption(tmp_path, monkeypatch
         return original_save(fig, filename, **kwargs)
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
-    plots.render_plots(data, tmp_path / 'Plots')
+    plots.render_plots(data, tmp_path / 'Plots', plot_format='both')
     assert captured == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
     assert len(data['plots']) == 2
     assert data['statistics'] == before['statistics']
