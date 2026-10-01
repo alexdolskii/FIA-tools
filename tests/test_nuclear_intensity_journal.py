@@ -28,7 +28,7 @@ def batch_setup(tmp_path, monkeypatch):
     engine.populations.return_value = (set(), set(), set())
     engine.measure.return_value = ([], {key: 0 for key in app.COUNTS})
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
-    answers = iter(['all', 'all', '2'])
+    answers = iter(['all'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     return manifest, run, engine, home
 
@@ -72,7 +72,7 @@ def test_failed_image_updates_all_copies_and_retains_diagnostics(batch_setup):
     assert [item['status'] for item in journal['runs']] == ['complete', 'incomplete']
     failed = Path(journal['runs'][1]['output'])
     assert json.loads((failed / 'intensity_run.json').read_text())['Status'] == 'incomplete'
-    assert 'simulated image read failure' in (failed / 'intensity.log').read_text()
+    assert 'simulated image read failure' in (run.parent / '3_nuclei_intensity.log').read_text()
     assert not list(home.rglob('batch.json'))
 
 
@@ -135,7 +135,7 @@ def test_journal_write_failure_keeps_fallback_links_and_signals_failure(batch_se
         assert info['Status'] == 'complete' and info['Batch_journal'] == str(fallback)
 
 
-def test_cancel_before_measurement_creates_no_journal(batch_setup, monkeypatch):
+def test_cancel_before_measurement_creates_text_log_but_no_result_journal(batch_setup, monkeypatch):
     manifest, run, _, home = batch_setup
     monkeypatch.setattr('builtins.input', lambda _: 'q')
     assert app.main(manifest, mode='tiff-stack') == 130

@@ -221,7 +221,7 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
     before = {p: p.read_bytes() for p in run.rglob('*') if p.is_file()}
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     for unused in range(2):
-        answers = iter(['all', 'all', '1'])
+        answers = iter(['all'])
         monkeypatch.setattr('builtins.input', lambda _, answers=answers: next(answers))
         assert app.main(manifest, mode='tiff-stack') == 0
         assert engine.progress is None
@@ -446,7 +446,7 @@ def test_native_marker_selection_reads_matching_original_channels(
     second = run.parent / 'Foci' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').write_bytes(b'not an intensity input')
-    answers = iter(['all', selection, '1'])
+    answers = iter([selection])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 0
@@ -480,7 +480,7 @@ def test_native_all_markers_and_all_mask_runs_remain_separate(tmp_path, engine, 
     second = run.parent / 'Foci' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').touch()
-    answers = iter(['all', 'all', '2'])
+    answers = iter(['all', '2'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 0
@@ -506,10 +506,10 @@ def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
             (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_2_Channel_1')
     manifest = tmp_path / 'both.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(root) for root in roots]}))
-    answers = iter(['all', 'all', '1'])
+    answers = iter(['all'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
-    assert app.main(manifest, mode='tiff-stack') == 0
+    assert app.main(manifest, mode='tiff-stack') == 1
     journal = json.loads(next((roots[0] / 'foci_assay').glob('Nuclear_Intensity_*/batch.json')).read_text())
     assert len(journal['runs']) == 2
     assert len(journal['skipped_markers']) == 2
@@ -522,7 +522,7 @@ def test_native_marker_missing_in_other_experiment_is_reported_not_substituted(
 def test_native_marker_channel_outside_source_is_rejected(tmp_path, engine, monkeypatch, capsys):
     manifest, _, run, _, _ = make_experiment(tmp_path)
     (run.parent / 'Foci' / 'Foci_1_Channel_2').rename(run.parent / 'Foci' / 'Foci_1_Channel_9')
-    answers = iter(['all', 'all'])
+    answers = iter([])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 1
@@ -532,7 +532,10 @@ def test_native_marker_channel_outside_source_is_rejected(tmp_path, engine, monk
 
 def test_marker_selection_cancel_precedes_imagej_and_outputs(tmp_path, monkeypatch):
     manifest, _, run, _, _ = make_experiment(tmp_path)
-    answers = iter(['all', 'q'])
+    second = run.parent / 'Foci' / 'Foci_2_Channel_1'
+    second.mkdir()
+    (second / 'prepared.tif').touch()
+    answers = iter(['q'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     initialization = MagicMock()
     monkeypatch.setattr(app, 'ImageJEngine', initialization)

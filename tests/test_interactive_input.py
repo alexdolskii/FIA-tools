@@ -199,22 +199,29 @@ def test_colocalization_cancellation_creates_no_results(tmp_path, monkeypatch, s
     assert not list(tmp_path.iterdir())
 
 
-def test_intensity_type_retry_and_cancellation_precede_imagej(monkeypatch):
-    monkeypatch.setattr(intensity, 'discover', lambda path: [
-        {'root': Path('sample'), 'raw': ['image.nd2'], 'runs': ['mask']}])
-    monkeypatch.setattr(intensity, 'select_markers', lambda experiments: [])
+def test_intensity_type_retry_and_cancellation_precede_imagej(monkeypatch, tmp_path):
+    from test_nuclear_intensity import make_experiment
+    manifest, _, _, _, _ = make_experiment(tmp_path)
     engine = Mock()
     monkeypatch.setattr(intensity, 'ImageJEngine', engine)
-    reader = answer_with(monkeypatch, ['1', 'abc', '0', '4', 'q'])
-    assert intensity.main('input.json') == 130
-    assert reader.call_count == 5
+    reader = answer_with(monkeypatch, ['abc', '0', '4', 'q'])
+    assert intensity.main(manifest) == 130
+    assert reader.call_count == 4
     engine.assert_not_called()
 
 
 def test_intensity_mask_run_choice_retries(monkeypatch):
-    records = [{'eligible': True}, {'eligible': True}]
-    answer_with(monkeypatch, ['abc', '', '4', '2'])
+    records = [{'eligible': True, 'dataset': Path('sample'), 'path': Path(f'run{i}'),
+                'marker': {'name': 'marker'}} for i in range(2)]
+    answer_with(monkeypatch, ['abc', '4', '2'])
     assert intensity.select_runs(records) == records
+
+
+def test_intensity_mask_run_enter_uses_advertised_latest_default(monkeypatch):
+    records = [{'eligible': True, 'dataset': Path('sample'), 'path': Path(f'run{i}'),
+                'marker': {'name': 'marker'}} for i in range(2)]
+    answer_with(monkeypatch, [''])
+    assert intensity.select_runs(records) == [records[-1]]
 
 
 def test_collection_nucleus_run_choice_retries(monkeypatch):

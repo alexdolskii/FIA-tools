@@ -53,7 +53,7 @@ def quantify_nuclear_intensity():
         description="Select Foci marker folders and measure original intensities in existing nucleus IDs.")
     parser.add_argument('-i', '--input', required=True)
     parser.add_argument('--input-type', choices=('nd2', 'tiff-stack', 'tiff-2d'),
-                        help="Input format; prompted when omitted")
+                        help="Input format; auto-detected for ND2, prompted for TIFF/mixed inputs when omitted")
     args = parser.parse_args()
     return _load_script("nuclear_intensity").main(
         args.input, mode=args.input_type)
