@@ -24,6 +24,20 @@ IMAGE_VALUE_COLUMNS = ['Category', 'Marker', 'Metric', 'Unit', 'Group', 'Well', 
                        'Mask_name', 'N_nuclei', 'N_values', 'Value']
 
 
+class PlateMapError(ValidationError):
+    """An actionable layout problem, distinct from an internal report failure."""
+
+    def __init__(self, code, message, location, action, details=''):
+        self.code = code
+        self.location = str(location)
+        self.action = action
+        self.details = details
+        text = f'{message}\nLocation: {self.location}\nAction: {action}'
+        if details:
+            text += f'\nDetails: {details}'
+        super().__init__(text)
+
+
 def workbook_rows(path, sheet, files):
     try:
         book = load_workbook(io.BytesIO(collect.snapshot(path, files)), read_only=True, data_only=False)
@@ -284,20 +298,53 @@ def read_template(path, files, sheet_name=None, statistics=False):
 
 
 def find_template(collection, sheet_name=None):
-    candidates = []
+    candidates, rejected = [], []
     for path in sorted(collection.iterdir()):
         if (path.name.startswith(('.', '~$')) or path.suffix.lower() != '.xlsx' or path.is_symlink()
+                or not path.is_file()
                 or path.name == collect.COMBINED_NAME or path.name == 'Nuclei_Morphology.xlsx'
                 or path.name.startswith('Nuclear_Intensity_')):
             continue
         try:
             read_template(path, {}, sheet_name)
             candidates.append(path)
-        except (OSError, ValueError, KeyError, BadZipFile):
-            continue
-    if len(candidates) != 1:
-        raise ValidationError(f'Expected one plate-map workbook, found {len(candidates)}. Supply --template explicitly.')
+        except (OSError, ValueError, KeyError, BadZipFile) as error:
+            rejected.append(f'{path.name}: {error}')
+    if not candidates:
+        if rejected:
+            raise PlateMapError(
+                'INVALID_PLATE_MAP', 'Excel file(s) were found, but none was recognized as a valid experiment layout.',
+                collection, 'Check the 96-well grid at A1:M9 and annotated wells; use --sheet if the layout '
+                'is on another worksheet. Then rerun the report.', '\n'.join(rejected))
+        raise PlateMapError(
+            'MISSING_PLATE_MAP', 'Excel experiment layout (.xlsx) is missing from the selected collection.',
+            collection, 'Add the 96-well experiment layout to this collection folder and rerun the same command, '
+            'or specify its full path with --template. Report calculations have not started.')
+    if len(candidates) > 1:
+        raise PlateMapError(
+            'AMBIGUOUS_PLATE_MAP', f'Expected one experiment layout, found {len(candidates)} valid workbooks.',
+            collection, 'Select the intended experiment layout using --template and rerun the report.',
+            '\n'.join(path.name for path in candidates))
     return candidates[0]
+
+
+def select_template(collection, template=None, sheet_name=None):
+    if template is None:
+        return find_template(Path(collection), sheet_name)
+    path = Path(template).expanduser().absolute()
+    if not path.exists():
+        raise PlateMapError('MISSING_PLATE_MAP', 'The Excel experiment layout specified by --template was not found.',
+                            path, 'Check the --template path and make the workbook available, then rerun the report.')
+    if path.name.startswith(('.', '~$')) or path.is_symlink() or not path.is_file():
+        raise PlateMapError('INVALID_PLATE_MAP', 'The --template path is not an accepted experiment layout file.',
+                            path, 'Select a regular, visible Excel experiment layout workbook with --template.')
+    try:
+        read_template(path, {}, sheet_name)
+    except (OSError, ValueError, KeyError, BadZipFile) as error:
+        raise PlateMapError('INVALID_PLATE_MAP', 'The specified Excel file is not a valid experiment layout.',
+                            path, 'Check the 96-well grid at A1:M9, annotated wells and --sheet, then rerun the report.',
+                            str(error)) from error
+    return path
 
 
 def annotate(data, template, markers, stats_unit, sheet_name=None):

@@ -438,11 +438,11 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         for note in selection_notes:
             logger.info('Selection: %s', note)
         selected = choose_markers(data, markers)
+        stage = 'plate-map validation'
         if progress:
             progress.phase('Reading plate map')
-        plate_map = Path(template).expanduser().absolute() if template else inputs.find_template(Path(collection), sheet)
-        if plate_map.name.startswith(('.', '~$')):
-            raise inputs.ValidationError('Hidden or temporary plate maps are not accepted')
+        plate_map = inputs.select_template(collection, template, sheet)
+        logger.info('PLATE_MAP_SELECTED | file=%s | requested_sheet=%s', plate_map, sheet or 'first sheet')
         # Keep headers even when every image has zero non-border nuclei.
         excluded = set(data['markers']) - set(selected)
         source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
@@ -523,12 +523,21 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         logger.warning('CANCELLED | stage=%s | output=%s', stage, output)
         raise
     except Exception as error:
-        logger.exception('Report failed during %s', stage)
-        write_status(output, 'FAILED', Stage=stage, Collection=str(collection), Error=str(error))
+        details = {}
+        if isinstance(error, inputs.PlateMapError):
+            logger.error('%s | %s', error.code, error)
+            details = {'Error_code': error.code, 'Plate_map_location': error.location,
+                       'Required_action': error.action, 'Plate_map_details': error.details}
+        else:
+            logger.exception('Report failed during %s', stage)
+        write_status(output, 'FAILED', Stage=stage, Collection=str(collection), Error=str(error), **details)
+        diagnostic = {'Status': 'FAILED', 'Stage': stage, 'Error': str(error), **details}
         collect.write_workbook(output / 'Report_Diagnostics.xlsx', {
-            'Diagnostics': (['Status', 'Stage', 'Error'], [{'Status': 'FAILED', 'Stage': stage, 'Error': str(error)}])})
+            'Diagnostics': (list(diagnostic), [diagnostic])})
         logger.info('DIAGNOSTICS_SAVED | %s', output / 'Report_Diagnostics.xlsx')
-        (progress.message if progress else print)(f'FAILED during {stage}: {error}. Diagnostics: {output}')
+        message = (f'FAILED: {error.code}. Diagnostics: {output}' if details else
+                   f'FAILED during {stage}: {error}. Diagnostics: {output}')
+        (progress.message if progress else print)(message)
         return False, output
 
 

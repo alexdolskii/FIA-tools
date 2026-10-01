@@ -374,6 +374,8 @@ The full command journal is `foci_assay/4_collect_marker_intensity.log` in each 
 
 After collection, place your 96-well plate-map workbook inside each selected `FIA_Marker_Intensity_Combined_Results_<timestamp>/` folder, or supply its path with `--template`. The filename is arbitrary. The program identifies a plate map by its grid, excluding analytical workbooks, hidden files and Excel lock files (`~$*`). If several plate maps are present, use `--template` explicitly.
 
+If the Excel experiment layout is absent, the terminal explicitly displays `MISSING_PLATE_MAP`, the selected collection folder (or missing explicit `--template` path), and instructions to add the workbook and rerun. `INVALID_PLATE_MAP` identifies unrecognized/unreadable layouts and records the filename and rejection reason; `AMBIGUOUS_PLATE_MAP` lists multiple valid layouts and requests an explicit choice with `--template`. These expected input problems are recorded without a traceback in `5_marker_intensity_report.log`, with matching error codes, locations and required actions in `report_status.json` and `Report_Diagnostics.xlsx`. The affected report remains `FAILED`, calculations do not start, and other selected collections continue.
+
 ```bash
 fia_marker_intensity_report -i input_paths.json --stats-unit nucleus
 ```
