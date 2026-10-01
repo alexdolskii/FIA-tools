@@ -4,6 +4,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import math
 import re
 import shutil
@@ -14,7 +15,8 @@ from pathlib import Path
 import spatial_calibration as spatial
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell
-from interactive_input import Cancelled, ask_integer, choose_indices
+from interactive_input import Cancelled, ask_choice, choose_indices
+from table_workflow import TableJournal, TableProgress
 
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Combined_Results_'
 COMBINED_NAME = 'FIA_Marker_Intensity_Combined.xlsx'
@@ -366,7 +368,7 @@ def info_row(category, item, status, source='', details='', digest=''):
     return dict(zip(INFO_COLUMNS, (category, item, status, str(source), str(details), digest)))
 
 
-def discover_sources(input_path):
+def discover_sources(input_path, audit=None, skipped=None):
     path = Path(input_path).expanduser().resolve()
     if path.name.startswith('.'):
         raise ValidationError('Hidden input manifests are not accepted')
@@ -381,18 +383,27 @@ def discover_sources(input_path):
             continue
         if root.name.startswith('.') or not root.is_dir():
             print(f'Skipping missing or hidden experiment: {root}')
+            if skipped is not None:
+                skipped.append(root)
             continue
         result.append(root)
+        if audit:
+            audit.register(root)
     return result
 
 
-def scan_source(root):
+def scan_source(root, audit=None, progress=None):
     context = {'root': root, 'morphology': [], 'intensity': [], 'markers': set(), 'checks': []}
     assay = root / 'foci_assay'
     if not assay.is_dir() or assay.is_symlink():
         print(f'No regular foci_assay directory: {root}')
         return context
-    for run in sorted(assay.iterdir(), reverse=True):
+    runs = sorted(assay.iterdir(), reverse=True)
+    runs = [run for run in runs if not run.name.startswith('.') and run.is_dir() and not run.is_symlink()
+            and (NUCLEI_PATTERN.fullmatch(run.name) or run.name.startswith('Nuclear_Intensity_'))]
+    if progress:
+        progress.phase('Checking source runs', len(runs))
+    for run in runs:
         if run.name.startswith('.') or not run.is_dir() or run.is_symlink():
             continue
         try:
@@ -402,15 +413,26 @@ def scan_source(root):
                 bundle = load_morphology(run)
                 bundle['root'] = root
                 context['morphology'].append(bundle)
-                print(f"Valid morphology: {run.name} | -p {bundle['particle_size']:g} "
-                      f"| images {len(bundle['images'])} | non-border nuclei {len(bundle['nuclei'])}")
+                message = (f"Valid morphology: {run.name} | -p {bundle['particle_size']:g} "
+                           f"| images {len(bundle['images'])} | non-border nuclei {len(bundle['nuclei'])}")
+                (progress.message if progress else print)(message)
+                if audit:
+                    audit.event(root, 'SOURCE_VALIDATED | %s | %s', run, message)
             elif run.name.startswith('Nuclear_Intensity_'):
                 candidate = intensity_candidate(run)
                 context['intensity'].append(candidate)
                 context['markers'].add(candidate['marker'])
+                if audit:
+                    audit.event(root, 'INTENSITY_CANDIDATE | %s | marker=%s | status=%s',
+                                run, candidate['marker'], candidate['metadata'].get('Status'))
         except (OSError, ValueError, csv.Error, KeyError) as error:
             context['checks'].append(info_row('Discovery', run.name, 'REJECTED', run, error))
-            print(f'Unavailable: {run}: {error}')
+            if audit:
+                audit.event(root, 'UNAVAILABLE | %s | %s', run, error, level=logging.WARNING)
+            else:
+                print(f'Unavailable: {run}: {error}')
+        if progress:
+            progress.advance(run.name)
     foci = assay / 'Foci'
     if foci.is_dir() and not foci.is_symlink():
         for folder in foci.iterdir():
@@ -423,9 +445,13 @@ def select_morphologies(contexts):
     bundles = [bundle for context in contexts for bundle in context['morphology']]
     if not bundles:
         raise ValidationError('No completed valid morphology spreadsheets were found')
-    print('\nChoose nucleus runs: 1 = latest valid per experiment; 2 = all valid; 3 = manual; q = cancel.')
+    if all(len(context['morphology']) <= 1 for context in contexts):
+        print('Nucleus runs selected automatically: one valid run per available experiment.')
+        return bundles
+    print('\nChoose nucleus runs: Enter/1 = latest valid per experiment; 2 = all valid; 3 = manual; q = cancel.')
     while True:
-        answer = ask_integer('Nucleus-run selection (1-3; q = cancel): ', 1, 3)
+        answer = ask_choice('Nucleus-run selection (1-3; Enter = 1; q = cancel): ',
+                            {'1': 1, '2': 2, '3': 3}, default='1')
         if answer == 1:
             return [max(context['morphology'], key=lambda b: b['run'].name)
                     for context in contexts if context['morphology']]
@@ -460,7 +486,7 @@ def contexts_by_root(contexts):
     return {context['root']: context for context in contexts}
 
 
-def latest_intensity(context, morphology, marker, checks):
+def latest_intensity(context, morphology, marker, checks, progress=None):
     candidates = sorted((c for c in context['intensity'] if c['marker'] == marker
                          and basename(c['metadata']['Nuclei_run']) == morphology['run'].name),
                         key=lambda c: c['timestamp'], reverse=True)
@@ -469,7 +495,7 @@ def latest_intensity(context, morphology, marker, checks):
             bundle = load_intensity(candidate)
         except (OSError, ValueError, csv.Error, KeyError) as error:
             checks.append(info_row('Intensity selection', marker, 'REJECTED', candidate['run'], error))
-            print(f"Skipping intensity result {candidate['run']}: {error}")
+            (progress.message if progress else print)(f"Skipping intensity result {candidate['run']}: {error}")
             continue
         # Never search for older matching data after a cross-analysis conflict.
         validate_compatibility(morphology, bundle)
@@ -478,7 +504,7 @@ def latest_intensity(context, morphology, marker, checks):
         return bundle
     checks.append(info_row('Intensity selection', marker, 'MISSING', details=
                            'No completed valid intensity table for the selected nucleus run'))
-    print(f"Missing marker intensity: {morphology['run']} / {marker}")
+    (progress.message if progress else print)(f"Missing marker intensity: {morphology['run']} / {marker}")
     return None
 
 
@@ -496,7 +522,7 @@ def typed_morphology(row):
             for key, value in row.items()}
 
 
-def combine(morphology, selected, markers, checks):
+def combine(morphology, selected, markers, checks, progress=None):
     """Join by mask/ID within one dataset and nucleus run, never by display image name."""
     source_map = {}
     for marker, bundle in selected.items():
@@ -520,6 +546,9 @@ def combine(morphology, selected, markers, checks):
                                    'Original filename unavailable or ambiguous; morphology name is retained separately'))
     output = {}
     for sheet in ('Nuclei', 'Images'):
+        source_rows = morphology['nuclei'] if sheet == 'Nuclei' else morphology['images']
+        if progress:
+            progress.phase(f'Combining {sheet.lower()}', len(source_rows))
         original_columns = morphology['tables'][sheet][0]
         columns = [('Nuclei_run_ID' if col == 'Run_ID' else col) for col in original_columns]
         columns += ['Morphology_Image_name', 'Source_file']
@@ -530,7 +559,7 @@ def combine(morphology, selected, markers, checks):
             metric_columns += ['Nuclei_measured_count', 'Failed_nuclei_count']
         for marker in markers:
             columns += [f'{marker}_{field}' for field in ('Availability', 'Intensity_run_ID', *metric_columns)]
-        for key, row in (morphology['nuclei'] if sheet == 'Nuclei' else morphology['images']).items():
+        for key, row in source_rows.items():
             mask = key[0] if sheet == 'Nuclei' else key
             identity = source_map.get(mask)
             record = typed_morphology(row)
@@ -546,6 +575,8 @@ def combine(morphology, selected, markers, checks):
                         record[f'{marker}_{field}'] = number(values[field], field, blank=True,
                             integer=field in ('Nuclei_measured_count', 'Failed_nuclei_count'))
             records.append(record)
+            if progress:
+                progress.advance(record['Image_name'] or row['Image_name'])
         output[sheet] = (columns, records)
     return output
 
@@ -578,6 +609,8 @@ def write_csv(path, columns, rows):
 
 
 def create_output(root):
+    if Path(root).is_symlink():
+        raise ValidationError(f'Linked output directory is not accepted: {root}')
     stamp = datetime.now().astimezone()
     while True:
         output = root / (OUTPUT_PREFIX + stamp.strftime('%Y%m%d_%H%M%S'))
@@ -626,8 +659,38 @@ def copy_name(path, marker=None):
     return f'{path.stem}_{marker}{path.suffix}'
 
 
-def collect_one(morphology, context, markers, manifest):
+def collect_one(morphology, context, markers, manifest, audit=None, progress=None):
+    own_audit = audit is None
+    audit = audit or TableJournal('4_collect_marker_intensity.log', manifest)
+    root, key = morphology['root'], morphology['run']
+    if own_audit:
+        audit.register(root)
+        audit.plan(root, key)
+    try:
+        with audit.stage(root, f'Collection | {key.name}', progress) as logger:
+            success, output = _collect_one(morphology, context, markers, manifest, logger, progress)
+        audit.result(root, key, 'SUCCESS' if success else 'FAILED', output)
+        audit.status = 'COMPLETE' if success else 'INCOMPLETE'
+        return success, output
+    except (Cancelled, KeyboardInterrupt, EOFError):
+        audit.result(root, key, 'CANCELLED')
+        audit.status = 'CANCELLED'
+        raise
+    except Exception:
+        audit.result(root, key, 'FAILED')
+        audit.status = 'FAILED'
+        raise
+    finally:
+        if own_audit:
+            audit.finish()
+
+
+def _collect_one(morphology, context, markers, manifest, logger, progress=None):
     root = morphology['root']
+    destination = root / 'foci_assay'
+    logger.info('PARAMETERS | nuclei_run=%s | particle_size_px2=%s | markers=%s | images=%s | non_border_nuclei=%s',
+                morphology['run'], morphology['particle_size'], markers,
+                len(morphology['images']), len(morphology['nuclei']))
     checks = list(context['checks'])
     checks += [info_row('Collection', 'Source folder', 'SELECTED', root),
                info_row('Collection', 'Input manifest', 'SELECTED', manifest),
@@ -640,12 +703,19 @@ def collect_one(morphology, context, markers, manifest):
                info_row('Policy', 'Source copies', 'INFO', details='Original spreadsheet bytes are preserved; paths refer to their original runs')]
     selected, snapshots = {}, dict(morphology['files'])
     try:
+        if progress:
+            progress.phase('Validating marker tables', len(markers))
         for marker in markers:
-            bundle = latest_intensity(context, morphology, marker, checks)
+            bundle = latest_intensity(context, morphology, marker, checks, progress)
             if bundle:
                 selected[marker] = bundle
                 snapshots.update(bundle['files'])
-        tables = combine(morphology, selected, markers, checks)
+            if progress:
+                progress.advance(marker)
+        for row in checks:
+            logger.log(logging.WARNING if row['Status'] in ('REJECTED', 'MISSING') else logging.INFO,
+                       'CHECK | %s', row)
+        tables = combine(morphology, selected, markers, checks, progress)
         status = 'SUCCESS_WITH_MISSING_INTENSITY' if len(selected) != len(markers) else 'SUCCESS'
         checks.append(info_row('Collection', 'Status', status, details=datetime.now(timezone.utc).isoformat()))
         checks.append(info_row('Collection', 'Rows', 'INFO', details=
@@ -655,63 +725,111 @@ def collect_one(morphology, context, markers, manifest):
         for path, data in snapshots.items():
             checks.append(info_row('Source snapshot', path.name, 'VALIDATED', path,
                                    f'{len(data)} bytes', hashlib.sha256(data).hexdigest()))
+            logger.info('SOURCE_SNAPSHOT | %s | bytes=%s | sha256=%s',
+                        path, len(data), hashlib.sha256(data).hexdigest())
         for path, target in copies:
             checks.append(info_row('Copied spreadsheet', target, 'COPIED', path,
                                    digest=hashlib.sha256(snapshots[path]).hexdigest()))
         tables['Collection_Info'] = (INFO_COLUMNS, checks)
-        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=root) as temporary:
+        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=destination) as temporary:
             staging = Path(temporary)
+            if progress:
+                progress.phase('Copying source spreadsheets', len(copies))
             for path, target in copies:
                 (staging / target).write_bytes(snapshots[path])
+                if progress:
+                    progress.advance(target)
+            if progress:
+                progress.phase('Saving CSV and Excel')
             for sheet in ('Nuclei', 'Images'):
                 write_csv(staging / f'FIA_Marker_Intensity_{sheet}.csv', *tables[sheet])
             write_workbook(staging / COMBINED_NAME, tables)
+            if progress:
+                progress.phase('Verifying unchanged inputs', len(snapshots))
             for path, data in snapshots.items():
                 if path.is_symlink() or path.read_bytes() != data:
                     raise ValidationError(f'Source changed during collection: {path}')
+                if progress:
+                    progress.advance(path.name)
             filenames = [target for _, target in copies] + [
                 'FIA_Marker_Intensity_Nuclei.csv', 'FIA_Marker_Intensity_Images.csv', COMBINED_NAME]
-            output = publish_staging(staging, root, COMBINED_NAME, filenames)
-        print(f'{status}: {output}')
+            if progress:
+                progress.phase('Publishing verified collection')
+            output = publish_staging(staging, destination, COMBINED_NAME, filenames)
+        logger.info('OUTPUT_SAVED | status=%s | folder=%s | files=%s', status, output, filenames)
+        (progress.message if progress else print)(f'{status}: {output}')
         return True, output
     except (OSError, ValueError, csv.Error, KeyError) as error:
+        logger.exception('COLLECTION_FAILED | %s', morphology['run'])
         checks = [row for row in checks if not (row['Category'] == 'Collection' and row['Item'] == 'Status')
                   and row['Category'] != 'Copied spreadsheet']
         status = 'IO_FAILED' if isinstance(error, OSError) else 'VALIDATION_FAILED'
         checks.append(info_row('Collection', 'Status', status, morphology['run'], error))
         # A failed collection contains a diagnostic spreadsheet only.
-        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=root) as temporary:
+        if progress:
+            progress.phase('Saving failure diagnostics')
+        with tempfile.TemporaryDirectory(prefix='.fia_marker_collection_', dir=destination) as temporary:
             staging = Path(temporary)
             write_workbook(staging / 'Collection_Report.xlsx', {'Collection_Info': (INFO_COLUMNS, checks)})
-            output = publish_staging(staging, root, 'Collection_Report.xlsx', ['Collection_Report.xlsx'])
-        print(f'{status}: {error}. Report: {output}')
+            output = publish_staging(staging, destination, 'Collection_Report.xlsx', ['Collection_Report.xlsx'])
+        logger.info('DIAGNOSTICS_SAVED | %s', output / 'Collection_Report.xlsx')
+        (progress.message if progress else print)(f'{status}: {error}. Report: {output}')
         return False, output
 
 
 def main(input_path):
+    audit = TableJournal('4_collect_marker_intensity.log', input_path)
+    result = _main(input_path, audit)
+    saved = audit.finish()
+    return result if saved or result else 1
+
+
+def _main(input_path, audit):
+    skipped = []
     try:
-        roots = discover_sources(input_path)
+        roots = discover_sources(input_path, audit, skipped)
         if not roots:
             raise ValidationError('No existing visible experiment folders')
+        for root in skipped:
+            audit.event(None, 'SKIPPED_EXPERIMENT | %s', root, level=logging.WARNING)
+        print(f'Experiments from JSON: {len(roots)} (all valid paths)')
         for index, root in enumerate(roots, 1):
             print(f'{index}. {root}')
-        roots = [roots[index] for index in choose_indices('Select experiments, all, or q: ', len(roots))]
-        contexts = [scan_source(root) for root in roots]
-        bundles = select_morphologies(contexts)
-        markers = select_markers(bundles, contexts)
-        print(f'\nCollecting {len(bundles)} separate nucleus-run collections; markers: {markers or "none"}.')
-        failures = 0
+        contexts = []
+        with TableProgress() as progress:
+            for index, root in enumerate(roots, 1):
+                progress.group(f'Scan {index}/{len(roots)} | {root.name}')
+                with audit.stage(root, 'Source discovery', progress):
+                    contexts.append(scan_source(root, audit, progress))
+        missing = [context['root'] for context in contexts if not context['morphology']]
+        for root in missing:
+            audit.incomplete(root, 'No completed valid morphology spreadsheets')
+        with audit.stage(None, 'Nucleus and marker selection'):
+            bundles = select_morphologies(contexts)
+            markers = select_markers(bundles, contexts)
         for bundle in bundles:
-            try:
-                success, _ = collect_one(bundle, contexts_by_root(contexts)[bundle['root']], markers, input_path)
-                failures += not success
-            except (OSError, ValueError) as error:
-                print(f"Cannot write collection for {bundle['root']}: {error}")
-                failures += 1
+            audit.plan(bundle['root'], bundle['run'])
+            audit.event(bundle['root'], 'MARKERS_SELECTED | %s | %s', bundle['run'], markers)
+        print(f'\nCollecting {len(bundles)} separate nucleus-run collections; markers: {markers or "none"}.')
+        failures = len(skipped) + len(missing)
+        with TableProgress() as progress:
+            for index, bundle in enumerate(bundles, 1):
+                progress.group(f'Collection {index}/{len(bundles)} | {bundle["root"].name}')
+                try:
+                    success, _ = collect_one(bundle, contexts_by_root(contexts)[bundle['root']], markers,
+                                             input_path, audit, progress)
+                    failures += not success
+                except (OSError, ValueError) as error:
+                    progress.message(f"Cannot write collection for {bundle['root']}: {error}")
+                    failures += 1
+        audit.status = 'INCOMPLETE' if failures else 'COMPLETE'
         return 1 if failures else 0
     except (Cancelled, KeyboardInterrupt, EOFError):
+        audit.status = 'CANCELLED'
+        audit.event(None, 'CANCELLED | collection canceled by user')
         print('Collection canceled. A completed collection is identified by its combined workbook.')
         return 130
-    except (OSError, ValueError, csv.Error) as error:
-        print(f'Marker-intensity collection could not complete: {error}')
+    except Exception as error:
+        audit.status = 'FAILED'
+        audit.event(None, 'RUN_ABORTED | %s', error, level=logging.ERROR, exc_info=True)
         return 1

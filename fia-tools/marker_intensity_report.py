@@ -16,6 +16,7 @@ import numpy as np
 import openpyxl
 import scipy
 from interactive_input import ask_choice
+from table_workflow import TableJournal, TableProgress
 from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, render_plots
 from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
@@ -30,6 +31,8 @@ MORPHOLOGY_SHEETS = ('Morphology_By_Condition', 'Morphology_Comparisons')
 
 
 def create_output(root):
+    if Path(root).is_symlink():
+        raise inputs.ValidationError(f'Linked output directory is not accepted: {root}')
     stamp = datetime.now().astimezone()
     while True:
         path = Path(root) / (OUTPUT_PREFIX + stamp.strftime('%Y%m%d_%H%M%S'))
@@ -47,25 +50,53 @@ def write_status(output, status, **details):
     temporary.replace(output / 'report_status.json')
 
 
-def discover_collections(root):
+def discover_collections(root, audit=None, progress=None):
     candidates = []
-    for path in sorted(Path(root).iterdir()):
+    root = Path(root)
+    paths = []
+    for parent in (root, root / 'foci_assay'):
+        if parent.is_dir() and not parent.is_symlink():
+            paths.extend(parent.iterdir())
+    paths = [path for path in paths if not path.is_symlink() and path.is_dir()
+             and inputs.COLLECTION_PATTERN.fullmatch(path.name)]
+    # Prefer the new location only when timestamps are identical; all keeps both.
+    paths.sort(key=lambda path: (path.name, path.parent == root / 'foci_assay'))
+    if progress:
+        progress.phase('Checking collection manifests', len(paths))
+    for path in paths:
         if path.is_symlink() or not path.is_dir() or not inputs.COLLECTION_PATTERN.fullmatch(path.name):
             continue
         try:
             info = inputs.collection_info(path, {})
             run = next((row['Item'] for row in info if row['Category'] == 'Morphology selection'), 'unknown run')
             candidates.append((path, run))
+            if audit:
+                audit.event(root, 'COLLECTION_CANDIDATE | %s | nuclei_run=%s', path, run)
         except (OSError, ValueError) as error:
-            print(f'Skipping incomplete collection {path.name}: {error}')
+            if audit:
+                audit.event(root, 'UNAVAILABLE | %s | %s', path, error, level=logging.WARNING)
+            else:
+                print(f'Skipping incomplete collection {path.name}: {error}')
+        if progress:
+            progress.advance(path.name)
     return candidates
 
 
-def choose_collections(roots, mode):
-    contexts = {root: discover_collections(root) for root in roots}
+def choose_collections(roots, mode, audit=None):
+    if audit:
+        contexts = {}
+        with TableProgress() as progress:
+            for index, root in enumerate(roots, 1):
+                progress.group(f'Scan {index}/{len(roots)} | {root.name}')
+                with audit.stage(root, 'Collection discovery', progress):
+                    contexts[root] = discover_collections(root, audit, progress)
+    else:
+        contexts = {root: discover_collections(root) for root in roots}
     missing = [str(root) for root, candidates in contexts.items() if not candidates]
     for root in missing:
         print(f'No completed collections: {root}')
+        if audit:
+            audit.incomplete(root, 'No completed collections')
     candidates = [item for values in contexts.values() for item in values]
     if not candidates:
         raise inputs.ValidationError('Run fia_collect_marker_intensity_results first: no completed collections found')
@@ -132,7 +163,7 @@ def preview_markers(collection):
     return {marker: availability[marker] for marker in catalog}
 
 
-def choose_batch_markers(collections, selection):
+def choose_batch_markers(collections, selection, audit=None, owners=None):
     """Resolve one exact-name selection before creating any reports, without caching nucleus tables."""
     catalogs = {}
     for collection in collections:
@@ -141,6 +172,9 @@ def choose_batch_markers(collections, selection):
         except (OSError, ValueError, csv.Error) as error:
             # Keep this collection scheduled so its normal validation writes failure diagnostics.
             print(f'Cannot preview markers for {collection}: {error}. Full report validation will follow.')
+            if audit:
+                audit.event(owners[collection], 'MARKER_PREVIEW_FAILED | %s | %s', collection, error,
+                            level=logging.WARNING)
     catalog = sorted({marker for markers in catalogs.values() for marker in markers})
     for index, marker in enumerate(catalog, 1):
         states = '; '.join(f'collection {number}: {catalogs[path].get(marker, "NOT PRESENT")}'
@@ -360,23 +394,52 @@ def write_workbook(output, tables, plots, filename=WORKBOOK):
 
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
-                  min_nuclei=0, selection_notes=()):
-    output = create_output(root)
-    logger = logging.getLogger(f'fia_marker_report.{output.name}')
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    handler = logging.FileHandler(output / 'report.log', encoding='utf-8')
-    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-    logger.addHandler(handler)
+                  min_nuclei=0, selection_notes=(), audit=None, progress=None):
+    """Write a report under the experiment's foci_assay, including legacy inputs."""
+    root = Path(root).resolve()
+    own_audit = audit is None
+    audit = audit or TableJournal('5_marker_intensity_report.log', manifest)
+    if own_audit:
+        audit.register(root)
+        audit.plan(root, collection)
+    try:
+        with audit.stage(root, f'Report | {Path(collection).name}', progress) as logger:
+            success, output = _create_report(collection, root, template, markers, stats_unit, sheet,
+                                             manifest, min_nuclei, selection_notes, logger, progress)
+        audit.result(root, collection, 'SUCCESS' if success else 'FAILED', output)
+        audit.status = 'COMPLETE' if success else 'INCOMPLETE'
+        return success, output
+    except (collect.Cancelled, KeyboardInterrupt, EOFError):
+        audit.result(root, collection, 'CANCELLED')
+        audit.status = 'CANCELLED'
+        raise
+    except Exception:
+        audit.result(root, collection, 'FAILED')
+        audit.status = 'FAILED'
+        raise
+    finally:
+        if own_audit:
+            audit.finish()
+
+
+def _create_report(collection, root, template, markers, stats_unit, sheet, manifest,
+                   min_nuclei, selection_notes, logger, progress=None):
+    output = create_output(root / 'foci_assay')
+    logger.info('OUTPUT_FOLDER | %s', output)
     stage = 'input validation'
     try:
+        if progress:
+            progress.phase('Reading and validating collection')
         write_status(output, 'RUNNING', Collection=str(collection))
-        logger.info('Starting report for %s; statistics=%s', collection, stats_unit or 'disabled')
-        data = inputs.load_collection(collection)
+        logger.info('PARAMETERS | collection=%s | statistics=%s | min_nuclei=%s | requested_markers=%s',
+                    collection, stats_unit or 'disabled', min_nuclei, markers)
+        data = inputs.load_collection(collection, progress=progress)
         data['notes'].extend(selection_notes)
         for note in selection_notes:
             logger.info('Selection: %s', note)
         selected = choose_markers(data, markers)
+        if progress:
+            progress.phase('Reading plate map')
         plate_map = Path(template).expanduser().absolute() if template else inputs.find_template(Path(collection), sheet)
         if plate_map.name.startswith(('.', '~$')):
             raise inputs.ValidationError('Hidden or temporary plate maps are not accepted')
@@ -385,36 +448,63 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
         source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
         data['nuclei_columns'] = [c for c in source_columns if not any(c.startswith(m + '_') for m in excluded)]
         inputs.annotate(data, plate_map, selected, stats_unit, sheet)
+        logger.info('INPUTS_VALIDATED | nuclei_run=%s | markers=%s | images=%s | non_border_nuclei=%s | '
+                    'plate_map=%s | sheet=%s', data['run_id'], selected, len(data['images']),
+                    len(data['nuclei']), plate_map, data['template_sheet'])
         manifest_path = Path(manifest).expanduser().absolute() if manifest else None
         if manifest_path:
             collect.snapshot(manifest_path, data['files'])
         stage = 'image exclusion'
+        if progress:
+            progress.phase('Filtering image records')
         inputs.filter_images(data, min_nuclei)
+        for row in data['excluded_images']:
+            logger.info('IMAGE_EXCLUDED | %s', row)
+        for row in data['images']:
+            logger.info('IMAGE_RETAINED | image=%s | non_border_nuclei=%s', row['Image_name'], row[inputs.COUNT])
         logger.info('Image filter: %s; original=%s, excluded=%s, retained=%s',
                     data['image_exclusion_rule'], data['images_before_filter'],
                     len(data['excluded_images']), len(data['images']))
         stage = 'aggregation and statistics'
-        inputs.aggregate(data)
+        inputs.aggregate(data, progress=progress)
+        if progress:
+            progress.phase('Calculating statistics')
         calculate_statistics(data)
+        logger.info('STATISTICS | planned=%s | tested=%s', len(data['statistics']),
+                    sum(row['Status'] == 'TESTED' for row in data['statistics']))
         stage = 'plots'
-        render_plots(data, output / 'Plots')
+        render_plots(data, output / 'Plots', progress=progress)
+        for plot in data['plots']:
+            logger.info('PLOT_SAVED | %s | %s', output / plot['File'], output / plot['PDF_file'])
         stage = 'spreadsheet export'
+        if progress:
+            progress.phase('Saving CSV and Excel')
         tables = report_tables(data, output, manifest_path)
         for title, table in tables.items():
             collect.write_csv(output / (title + '.csv'), *table)
         write_workbook(output, tables, data['plots'])
         morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
         write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
+        logger.info('TABLES_SAVED | folder=%s | workbooks=%s | csv_tables=%s',
+                    output, [WORKBOOK, MORPHOLOGY_WORKBOOK], list(tables))
         # Verify exact published tables and unchanged inputs before marking success.
         stage = 'final verification'
+        if progress:
+            progress.phase('Verifying saved tables')
         exported = {title: collect.csv_snapshot(output / (title + '.csv'), {}, columns)
                     for title, (columns, _) in tables.items()}
         collect.verify_workbook(output / WORKBOOK, {}, exported)
         collect.verify_workbook(output / MORPHOLOGY_WORKBOOK, {},
                                 {title: exported[title] for title in morphology})
+        if progress:
+            progress.phase('Verifying unchanged inputs', len(data['files']))
         for path, content in data['files'].items():
             if path.is_symlink() or path.read_bytes() != content:
                 raise inputs.ValidationError(f'Input changed during report generation: {path}')
+            if progress:
+                progress.advance(path.name)
+            logger.info('INPUT_VERIFIED | %s | bytes=%s | sha256=%s',
+                        path, len(content), hashlib.sha256(content).hexdigest())
         logger.info('Verified %s non-border nuclei, %s images, %s markers, %s planned comparisons',
                     len(data['nuclei']), len(data['images']), len(selected), len(data['statistics']))
         write_status(output, 'SUCCESS', Collection=str(collection), Nuclei_run_ID=data['run_id'],
@@ -425,21 +515,21 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
                      Min_nuclei=data['min_nuclei'],
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
-        print(f'SUCCESS: {output}')
+        logger.info('REPORT_VERIFIED | status=SUCCESS | %s', output / 'report_status.json')
+        (progress.message if progress else print)(f'SUCCESS: {output}')
         return True, output
     except (collect.Cancelled, KeyboardInterrupt, EOFError):
         write_status(output, 'CANCELED', Stage=stage, Collection=str(collection))
+        logger.warning('CANCELLED | stage=%s | output=%s', stage, output)
         raise
     except Exception as error:
         logger.exception('Report failed during %s', stage)
         write_status(output, 'FAILED', Stage=stage, Collection=str(collection), Error=str(error))
         collect.write_workbook(output / 'Report_Diagnostics.xlsx', {
             'Diagnostics': (['Status', 'Stage', 'Error'], [{'Status': 'FAILED', 'Stage': stage, 'Error': str(error)}])})
-        print(f'FAILED during {stage}: {error}. Diagnostics: {output}')
+        logger.info('DIAGNOSTICS_SAVED | %s', output / 'Report_Diagnostics.xlsx')
+        (progress.message if progress else print)(f'FAILED during {stage}: {error}. Diagnostics: {output}')
         return False, output
-    finally:
-        logger.removeHandler(handler)
-        handler.close()
 
 
 def main(argv=None):
@@ -457,33 +547,59 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.min_nuclei < 0:
         parser.error('--min-nuclei must be a nonnegative integer')
+    audit = TableJournal('5_marker_intensity_report.log', args.input)
+    result = _main(args, audit)
+    saved = audit.finish()
+    return result if saved or result else 1
+
+
+def _main(args, audit):
+    skipped = []
     try:
-        roots = collect.discover_sources(args.input)
+        roots = collect.discover_sources(args.input, audit, skipped)
         if not roots:
             raise inputs.ValidationError('No existing experiment folders')
+        for root in skipped:
+            audit.event(None, 'SKIPPED_EXPERIMENT | %s', root, level=logging.WARNING)
         print(f'Experiments from JSON: {len(roots)} (all valid paths)')
-        selected, missing = choose_collections(roots, args.collections)
-        marker_plans = choose_batch_markers(selected, args.markers)
+        audit.event(None, 'PARAMETERS | collections=%s | statistics=%s | min_nuclei=%s | template=%s | sheet=%s',
+                    args.collections, args.stats_unit or 'disabled', args.min_nuclei, args.template, args.sheet)
+        with audit.stage(None, 'Collection selection'):
+            selected, missing = choose_collections(roots, args.collections, audit)
+        owners = {path: next(root for root in roots if path.parent in (root, root / 'foci_assay'))
+                  for path in selected}
+        with audit.stage(None, 'Batch marker selection'):
+            marker_plans = choose_batch_markers(selected, args.markers, audit, owners)
+        for collection in selected:
+            audit.plan(owners[collection], collection)
+            audit.event(owners[collection], 'MARKERS_SELECTED | collection=%s | markers=%s | notes=%s',
+                        collection, *marker_plans[collection])
         print(f'Statistics: {args.stats_unit or "disabled (descriptive only)"}. Reports remain separate per collection.')
-        failures = len(missing)
-        for index, collection in enumerate(selected, 1):
-            markers, notes = marker_plans[collection]
-            print(f'[{index}/{len(selected)}] {collection.parent.name} | {collection.name} | '
-                  f'Markers: {", ".join(markers) or "none (morphology only)"}')
-            try:
-                success, _ = create_report(collection, collection.parent, args.template, markers,
-                                           args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
-                                           selection_notes=notes)
-                failures += not success
-            except OSError as error:
-                print(f'Cannot write report for {collection}: {error}')
-                failures += 1
+        failures = len(missing) + len(skipped)
+        with TableProgress() as progress:
+            for index, collection in enumerate(selected, 1):
+                markers, notes = marker_plans[collection]
+                root = owners[collection]
+                progress.group(f'Report {index}/{len(selected)} | {root.name}')
+                progress.message(f'{collection.name} | Markers: {", ".join(markers) or "none (morphology only)"}')
+                try:
+                    success, _ = create_report(collection, root, args.template, markers,
+                                               args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
+                                               selection_notes=notes, audit=audit, progress=progress)
+                    failures += not success
+                except OSError as error:
+                    progress.message(f'Cannot write report for {collection}: {error}')
+                    failures += 1
+        audit.status = 'INCOMPLETE' if failures else 'COMPLETE'
         return 1 if failures else 0
     except (collect.Cancelled, KeyboardInterrupt, EOFError):
+        audit.status = 'CANCELLED'
+        audit.event(None, 'CANCELLED | report canceled by user')
         print('Report canceled. Completed reports have report_status.json with Status SUCCESS.')
         return 130
-    except (OSError, ValueError) as error:
-        print(f'Marker-intensity report could not complete: {error}')
+    except Exception as error:
+        audit.status = 'FAILED'
+        audit.event(None, 'RUN_ABORTED | %s', error, level=logging.ERROR, exc_info=True)
         return 1
 
 

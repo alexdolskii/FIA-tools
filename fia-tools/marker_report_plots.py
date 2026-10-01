@@ -321,14 +321,17 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
         plt.close(fig)
 
 
-def render_plots(data, folder):
+def render_plots(data, folder, progress=None):
     folder.mkdir(exist_ok=True)
     data['plot_data'] = plot_rows(data)
     panels = plot_panels(data)
     data['plot_labels'] = [dict(zip(LABEL_COLUMNS, (p['id'], p['block'], p['context'], p['title'], group, p['labels'][group])))
                            for p in panels for group in p['groups']]
     plots = []
-    for spec in plot_specs(data):
+    specs = plot_specs(data)
+    if progress:
+        progress.phase('Plots', len(specs) * (1 + len(panels) if len(panels) > 1 else 1))
+    for spec in specs:
         name, field, _, _, observation = spec
         points = [row for row in data['plot_data'] if row['Plot'] == name]
         comparisons = [row for row in data['statistics'] if row['Metric'] == field]
@@ -355,5 +358,7 @@ def render_plots(data, folder):
                           'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)),
                           'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
                           'Font': plot_font(), 'PNG_DPI': PNG_DPI})
+            if progress:
+                progress.advance(filename)
     data['plots'] = plots
     return data

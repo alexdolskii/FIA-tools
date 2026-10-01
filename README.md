@@ -36,7 +36,7 @@ The following changes describe the installation, interface, and development infr
 - Stage 2 can reuse validated StarDist masks when changing the minimum nucleus area and exports pixel-based nuclear morphology for each final-mask run.
 - Native image width and height are preserved throughout processing and numbered QC exports; the former 1024 x 1024 resizing in stage 1 has been removed.
 - `quantify_nuclear_intensity` measures original marker-channel values in existing final nucleus IDs, with explicit experiment/marker/run selection and separate results for each combination.
-- `fia_collect_marker_intensity_results` collects nuclear morphology and marker-intensity spreadsheets into a separate folder beside the original images, with a combined per-nucleus table and per-image summaries.
+- `fia_collect_marker_intensity_results` collects nuclear morphology and marker-intensity spreadsheets into a separate folder inside `foci_assay`, with a combined per-nucleus table and per-image summaries.
 - `fia_marker_intensity_report` compares collected morphology and marker intensity using a 96-well plate map, with nucleus-level violin plots, panels by plate-map color block and optional nucleus- or well-based statistics.
 - The repository includes automated tests, GitHub Actions workflow definitions, and example intermediate and final results in `data/`.
 
@@ -341,15 +341,15 @@ fia_collect_marker_intensity_results -i input_paths.json
 
 This optional command collects **marker intensity**, not foci counts or colocalization results. It reads existing spreadsheets and run metadata; it does not initialize ImageJ or StarDist, read image pixels, resize images, or repeat measurements. It uses the same `paths_to_files` manifest.
 
-1. Select one experiment, several comma-separated numbers, or `all`.
-2. Choose the latest valid completed final-nuclei run per experiment, all valid runs, or a manual selection. Each selected experiment/nuclei-run pair gets a separate collection; different `-p` runs are never pooled.
+1. Use all existing visible experiment folders from the JSON, without repeating experiment selection. Missing input folders are reported and prevent an overall successful command exit.
+2. If each available experiment has one valid completed final-nuclei run, select it automatically. Otherwise choose **Enter/1** for the latest valid run per experiment, **2** for all valid runs, or **3** for manual selection. Each selected experiment/nuclei-run pair gets a separate collection; different `-p` runs are never pooled.
 3. Select one marker, several, or `all`. Choose `none` for morphology only. Markers use their full folder names, such as `Foci_1_Channel_2`; biological names are not inferred. Enter `q` at a selection prompt to cancel.
 
 For each selected marker, the collector selects the latest valid completed intensity run that explicitly references the selected nuclei run. Incomplete or malformed candidates are skipped with a recorded reason. If a selected completed intensity run conflicts with morphology in dataset, image set, nucleus IDs, areas or counts, collection fails for that nuclei run instead of silently choosing older measurements. Legacy intensity runs without marker-folder metadata are labeled `Channel_N` and are kept separate from named marker folders. Hidden files/folders, including macOS `._*`, are ignored.
 
-Each collection is saved directly in the folder containing the original images:
+Each collection is saved inside the experiment’s analysis folder:
 
-`FIA_Marker_Intensity_Combined_Results_<timestamp>/`
+`foci_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/`
 
 Previous collections and source results are preserved. The new folder contains **only spreadsheets**, with no masks, images, ROIs, JSON files, or logs:
 
@@ -368,6 +368,8 @@ Missing intensity is explicitly marked `MISSING`, with blank measurement cells r
 
 The collector checks agreement between each source workbook and its CSV copies, then checks that source tables/metadata have not changed during collection. Results are prepared in a temporary folder and only the expected spreadsheets are moved, with the combined workbook published last as the completion indicator. Hidden files, including macOS `._*` companions, are never selected for transfer; companions that disappear automatically during rollback do not interrupt cleanup. A validation conflict creates a new folder containing only `Collection_Report.xlsx`, and the command returns a nonzero status; other selected nuclei runs continue. File-operation failures are reported as `IO_FAILED`, separately from `VALIDATION_FAILED`. Review missing-data and diagnostic statuses before downstream analysis.
 
+The full command journal is `foci_assay/4_collect_marker_intensity.log` in each experiment. It opens during input discovery and records source validation, choices, parameters, image/nucleus counts, missing markers, saved outputs, elapsed time, warnings, errors and cancellation. Multiple selected nuclei runs append to one journal. On the next invocation, the previous journal moves once to `foci_assay/logs/4_collect_marker_intensity_<timestamp>.log`; timestamp collisions preserve both archives. Journals use UTC. An unavailable requested experiment or an experiment without valid morphology makes the command return nonzero; deliberately unselected runs remain unselected. Missing marker intensity retains the existing `SUCCESS_WITH_MISSING_INTENSITY` behavior.
+
 ### Report nuclear morphology and marker intensity
 
 After collection, place your 96-well plate-map workbook inside each selected `FIA_Marker_Intensity_Combined_Results_<timestamp>/` folder, or supply its path with `--template`. The filename is arbitrary. The program identifies a plate map by its grid, excluding analytical workbooks, hidden files and Excel lock files (`~$*`). If several plate maps are present, use `--template` explicitly.
@@ -384,7 +386,7 @@ fia_marker_intensity_report -i input_paths.json --stats-unit well
 
 Omit `--stats-unit` for plots and descriptive tables without hypothesis tests. The report reads spreadsheets only: it does not start ImageJ, read image pixels, repeat segmentation or change upstream results. Archived collector spreadsheets suffice even if the original image-drive paths are no longer accessible.
 
-All valid experiment paths in the JSON are analyzed automatically. The default is the **latest completed collection per experiment**, with its full path and nuclei run printed before processing. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Use `--collections all` for every completed collection, or `--collections ask` for interactive selection (the menu accepts `latest`, `all`, `manual`, or their numeric aliases).
+All valid experiment paths in the JSON are analyzed automatically. Collections are discovered both in `foci_assay` and, for compatibility, directly in the experiment folder. Existing collections are not moved or deleted. The default is the **latest completed collection per experiment** across both locations, with its full path and nuclei run printed before processing. At an identical timestamp, the collection in `foci_assay` takes precedence for `latest`; `all` retains both paths. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Use `--collections all` for every completed collection, or `--collections ask` for interactive selection (the menu accepts `latest`, `all`, `manual`, or their numeric aliases).
 
 Markers are selected **once for the entire batch, before any reports are generated**. A single marker is selected automatically; with multiple markers, choose one, several, all, or `none` for morphology only. The common catalog shows availability by collection. The choice is applied by exact folder name: a marker absent from a collection is skipped there with a note in the console, report log and Overview; if none of the selected markers is present, that collection receives a morphology-only report. A marker explicitly recorded as `MISSING` retains blank measurements and its planned tests. No other marker or channel is substituted. A legacy `Channel_N` result is excluded within a collection when a named `Foci_<index>_Channel_N` result exists. For example, `Foci_1_Channel_2` is used instead of `Channel_2`; these populations are never concatenated. Select at most one marker folder per original channel **within each collection**; an ambiguous interactive selection is requested again before processing. The folder name is the marker identifier; no biological name is inferred.
 
@@ -446,7 +448,7 @@ After statistics, the report automatically adds a violin plot for each morpholog
 
 #### Report outputs and validation
 
-Each report is saved beside the original images in a new `FIA_Marker_Intensity_Report_<timestamp>/` folder. Previous reports and collector folders are preserved.
+Each report is saved in a new `foci_assay/FIA_Marker_Intensity_Report_<timestamp>/` folder, including reports generated from legacy collections in the experiment root. Previous reports and collector folders are preserved.
 
 | Output | Contents |
 | --- | --- |
@@ -456,7 +458,11 @@ Each report is saved beside the original images in a new `FIA_Marker_Intensity_R
 | Corresponding `.csv` tables | Data, aggregation values, statistics and provenance |
 | `Plots/` | Count boxplots, integrated-density violins and significant morphology violins; one complete overview per metric plus `__Block_01.png`, etc. for separate panels; 300-dpi PNGs embedded in the main report, with matching vector PDFs |
 | `Inputs/` | Byte-preserved input spreadsheets, plate map and input manifest |
-| `report.log`, `report_status.json` | Progress, errors, selected settings and completion status |
+| `report_status.json` | Selected settings and completion status; the text journal is kept at experiment level |
+
+The full report command journal is `foci_assay/5_marker_intensity_report.log`. It includes discovery and batch selection before any report exists, source/template verification, selected settings (including `--stats-unit` and `--min-nuclei`), retained/excluded images, statistics/plot counts, saved files, elapsed time, warnings, errors and cancellation. All reports for one experiment append to this journal. A later invocation archives it once as `foci_assay/logs/5_marker_intensity_report_<timestamp>.log`. New reports no longer contain a separate `report.log`; existing logs and `report_status.json` completion rules are preserved. A journal write failure prevents a successful exit. A folder that finished successfully keeps `COMPLETE` if a later folder is canceled; unfinished folders record cancellation/failure, and intentional manual omissions record `NOT_SELECTED`. If the input JSON cannot be read before identifying experiments, the error is reported in the terminal.
+
+Both collection and reporting show one updating terminal line with the current collection/report, phase and elapsed time. Within countable phases, progress shows completed/total operations and a percentage: source runs, archived files, image/nucleus records, image/metric combinations, or plots. Filenames identify table records; these commands never reanalyze image pixels. A plot counts as finished only after its PNG and PDF are saved. Excel writing and final table verification show their phase and elapsed time without an invented percentage. These are phase percentages, not estimates of total runtime. Redirected output contains phase summaries without control codes or a separate line for every image. Warnings/errors remain visible; full details go to the journals.
 
 `Plot_Data` retains each observation once per metric, irrespective of the number of exported views. In `Plot_Info`, the existing `Points` field counts observations represented in that view; `Rendered_points` counts individual observation dots (zero for nucleus-level plots). `View` and `Panels` identify overviews and individual panels.
 
@@ -464,7 +470,7 @@ Each report is saved beside the original images in a new `FIA_Marker_Intensity_R
 
 `Morphology_Comparisons` contains the morphology rows from the existing `Statistics` table: treatment-versus-control means, differences, nominal 95% confidence intervals, raw and Holm-adjusted p-values, sample sizes and explicit reasons for unavailable tests. It preserves the original Holm family across count, all morphology metrics and selected markers; exporting this table does not recalculate or narrow the correction. These two morphology sheets are also included in the main report, with matching `Morphology_By_Condition.csv` and `Morphology_Comparisons.csv`. The additional workbook uses the same completion status as the main report. Significant morphology graphs are saved in the main report and `Plots/`; the separate morphology workbook retains its tables-only layout.
 
-Validation checks archived source SHA-256 hashes, workbook/CSV agreement, nucleus identities, areas, counts, run/marker identities and image summaries. Exported workbook/CSV agreement and unchanged inputs are verified before **`SUCCESS`** is written to `report_status.json`. Incomplete collector folders are skipped during discovery. If a selected completed collection is inconsistent, its report fails rather than silently falling back to older data. A failed report has `FAILED` status and `Report_Diagnostics.xlsx`; incomplete outputs must not be used. Other selected collections continue. The command returns nonzero if any selected report fails or a selected experiment has no completed collections.
+Validation checks archived source SHA-256 hashes, workbook/CSV agreement, nucleus identities, areas, counts, run/marker identities and image summaries. Exported workbook/CSV agreement and unchanged inputs are verified before **`SUCCESS`** is written to `report_status.json`. Incomplete collector folders are skipped during discovery. If a selected completed collection is inconsistent, its report fails rather than silently falling back to older data. A failed report has `FAILED` status and `Report_Diagnostics.xlsx`; incomplete outputs must not be used. Other selected collections continue. The command returns nonzero if any selected report fails, a requested experiment has no completed collections, or an input experiment folder is missing/hidden.
 
 ### Stage 3. Generate foci masks
 
@@ -532,18 +538,22 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `foci_assay/logs/2_log_<timestamp>.log` | Previous nuclei-generation journals preserved on rerun |
 | `foci_assay/3_nuclei_intensity.log` | Current nuclear-intensity command, including selection, validation and all marker/mask combinations |
 | `foci_assay/logs/3_nuclei_intensity_<timestamp>.log` | Previous nuclear-intensity journals preserved on rerun |
+| `foci_assay/4_collect_marker_intensity.log` | Current marker-collection command, including selection, checks and every selected nuclei run |
+| `foci_assay/logs/4_collect_marker_intensity_<timestamp>.log` | Archived marker-collection journals |
+| `foci_assay/5_marker_intensity_report.log` | Current report command, including discovery, filters, statistics, plots and saving |
+| `foci_assay/logs/5_marker_intensity_report_<timestamp>.log` | Archived report journals |
 | `foci_assay/Nuclei_StarDist_mask_processed_<timestamp>/` | Initial nuclei masks |
 | `foci_assay/Final_Nuclei_Mask_<timestamp>/` | Processed nuclei masks, morphology workbook/CSV tables and run metadata |
 | `foci_assay/Final_Nuclei_Mask_<timestamp>/Morphology_QC/` | Per-image nucleus ID label maps and numbered PNG previews |
 | `foci_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `foci_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
-| `FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
-| `FIA_Marker_Intensity_Report_<timestamp>/` | Separate marker-intensity/morphology report with statistics, panelled violin/count plots, input snapshots and completion status |
+| `foci_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
+| `foci_assay/FIA_Marker_Intensity_Report_<timestamp>/` | Separate marker-intensity/morphology report with statistics, panelled violin/count plots, input snapshots and completion status |
 | `foci_analysis/Results_<timestamp>/` | Final table, numbered nuclei images, and optional intersection masks |
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.
 
-Channel preparation, nuclei generation and nuclear intensity keep their current journals at `foci_assay/1_log.log`, `foci_assay/2_log.log` and `foci_assay/3_nuclei_intensity.log`, with earlier runs archived in `foci_assay/logs/`. All three record successful events, warnings, errors and final statuses. Other stage-specific logs include `3_val_log.log` in the input folder, and `foci_log.log` and `4_log.log` alongside their corresponding outputs; the final stage also logs progress. Older `2_val_log.log` and per-result nuclei journals are retained, but are no longer written by new nuclei-generation runs.
+Channel preparation, nuclei generation, nuclear intensity, collection and reporting keep their current journals in `foci_assay` at the fixed paths listed above, with earlier runs archived in `foci_assay/logs/`. All five record successful events, warnings, errors and final statuses. Other stage-specific logs include `3_val_log.log` in the input folder, and `foci_log.log` and `4_log.log` alongside their corresponding outputs; the final stage also logs progress. Older `2_val_log.log` and per-result nuclei journals are retained, but are no longer written by new nuclei-generation runs.
 
 Nuclei-mask, foci-mask, and final-analysis directories include timestamps. The prepared-channel folders and metadata file use fixed paths, and some log files are overwritten on rerun. The existing foci quantification stage selects the latest matching mask folders; nuclear intensity uses all manifest experiments and the marker/mask-selection policy described above. Preserve the outputs needed for a previous analysis before repeating preparation or switching between analyses in the same input folder.
 

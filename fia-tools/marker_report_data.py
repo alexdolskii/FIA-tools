@@ -102,19 +102,25 @@ def _read_intensity(path, marker, files, copied):
     return bundle
 
 
-def load_collection(path):
+def load_collection(path, progress=None):
     """Use archived tables only; original images and original drives are not required."""
     path = Path(path)
     files = {}
     info = collection_info(path, files)
     copied_rows = [r for r in info if r.get('Category') == 'Copied spreadsheet' and r.get('Status') == 'COPIED']
     copied = _unique(copied_rows, lambda row: row['Item'], 'copied spreadsheet')
+    if progress:
+        progress.phase('Verifying archived spreadsheets', len(copied))
     for name, row in copied.items():
         if Path(name).name != name or name.startswith('.') or Path(name).suffix not in ('.csv', '.xlsx'):
             raise ValidationError('Invalid archived spreadsheet name')
         content = collect.snapshot(path / name, files)
         if hashlib.sha256(content).hexdigest() != row.get('SHA256'):
             raise ValidationError(f'Archived spreadsheet changed since collection: {name}')
+        if progress:
+            progress.advance(name)
+    if progress:
+        progress.phase('Validating morphology and combined tables')
     morph_names = {'Nuclei_Morphology.csv', 'Nuclei_Images.csv', 'Nuclei_Run_Info.csv', 'Nuclei_Morphology.xlsx'}
     if not morph_names <= set(copied):
         raise ValidationError('Collection lacks the four morphology source records')
@@ -146,6 +152,8 @@ def load_collection(path):
         raise ValidationError('Inconsistent marker columns')
     markers = sorted(marker_lists[0])
     bundles, availability = {}, {}
+    if progress:
+        progress.phase('Validating marker tables', len(markers))
     for marker in markers:
         states = {row.get(marker + '_Availability') for sheet in combined.values() for row in sheet[1]}
         if len(states) != 1 or not states <= {'AVAILABLE', 'MISSING'}:
@@ -156,6 +164,8 @@ def load_collection(path):
                 if any(value for row in rows for col, value in row.items()
                        if col.startswith(marker + '_') and col != marker + '_Availability'):
                     raise ValidationError('Missing marker contains measurements')
+            if progress:
+                progress.advance(marker)
             continue
         bundle = _read_intensity(path, marker, files, copied)
         collect.validate_compatibility(morphology, bundle)
@@ -171,12 +181,20 @@ def load_collection(path):
                             marker + '_Intensity_run_ID': bundle['run'].name}
                 expected.update({marker + '_' + metric: collect.number(row[metric], metric, blank=True) for metric in metrics})
                 _check_values(expected, merged[key])
+        if progress:
+            progress.advance(marker)
     images, nuclei = [], []
+    if progress:
+        progress.phase('Checking image records', len(merged_images))
     for row in merged_images.values():
         record = collect.typed_morphology(row)
         record['Well'] = image_well(record)
         images.append(record)
+        if progress:
+            progress.advance(record['Image_name'])
     image_map = {row['Mask_name']: row for row in images}
+    if progress:
+        progress.phase('Checking nucleus records', len(merged_nuclei))
     for key, row in merged_nuclei.items():
         record = collect.typed_morphology(row)
         image = image_map[key[0]]
@@ -188,6 +206,8 @@ def load_collection(path):
                 field = marker + '_' + metric
                 record[field] = collect.number(row.get(field), field, blank=availability[marker] == 'MISSING')
         nuclei.append(record)
+        if progress:
+            progress.advance(record['Image_name'])
     return {'path': path, 'files': files, 'info': info, 'images': images, 'nuclei': nuclei,
             'markers': markers, 'availability': availability, 'bundles': bundles,
             'run_id': run_id, 'particle_size': morphology['particle_size'], 'notes': []}
@@ -395,16 +415,21 @@ def metric_value(row, field):
     return row.get(measurement_field(row, field)) if metric_eligible(row, field) else None
 
 
-def aggregate(data):
+def aggregate(data, progress=None):
     """Keep nuclei as plot observations; compute equal-image-weight well means."""
     by_mask = defaultdict(list)
     for nucleus in data['nuclei']:
         by_mask[nucleus['Mask_name']].append(nucleus)
     image_values, well_values, summary = [], [], []
-    for category, marker, field, unit in report_specs(data):
+    specs = report_specs(data)
+    if progress:
+        progress.phase('Aggregating image metrics', len(specs) * len(data['images']))
+    for category, marker, field, unit in specs:
         per_well = defaultdict(list)
         for image in data['images']:
             if not metric_eligible(image, field):
+                if progress:
+                    progress.advance(image['Image_name'])
                 continue
             values = ([image[COUNT]] if field == COUNT else
                       [metric_value(row, field) for row in by_mask[image['Mask_name']]
@@ -423,6 +448,8 @@ def aggregate(data):
                     recorded = collect.number(image.get(source_field + '_' + stat), source_field + '_' + stat, blank=True)
                     if recorded is None or not math.isclose(recorded, float(value), rel_tol=1e-9, abs_tol=1e-9):
                         raise ValidationError(f'Image summary disagrees with nuclei: {field}/{stat}')
+            if progress:
+                progress.advance(image['Image_name'])
         for annotation in data['design']:
             records = per_well[annotation['Well']]
             valid = [row['Value'] for row in records if row['Value'] is not None]

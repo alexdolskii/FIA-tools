@@ -103,7 +103,7 @@ def test_archive_validation_and_legacy_selection(tmp_path):
     assert not any(key.startswith('Channel_2_') for key in data['nuclei'][0])
     assert len(plot_rows(data)) == 3
     # Archived sources suffice even after the original raw image is removed.
-    (path.parent / 'field, WellA2.nd2').unlink()
+    (path.parent.parent / 'field, WellA2.nd2').unlink()
     assert len(data_tools.load_collection(path)['nuclei']) == 2
 
 
@@ -252,7 +252,7 @@ def test_zero_variance_not_tested_and_mean_reconciliation():
 def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path):
     path = collection(tmp_path, legacy=True)
     before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
-    ok, output = report.create_report(path, path.parent, markers='all', stats_unit='nucleus')
+    ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit='nucleus')
     assert ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'SUCCESS' and status['Non_border_nuclei'] == 2
@@ -292,7 +292,7 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     assert ok
     plate(path / 'arbitrary layout.xlsx')
     before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
-    ok, output = report.create_report(path, path.parent, markers='all', stats_unit=unit, min_nuclei=1)
+    ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit=unit, min_nuclei=1)
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Nuclei') == []
     summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
@@ -380,7 +380,7 @@ def test_changed_input_cannot_publish_success(tmp_path, monkeypatch):
             handle.write('\n')
 
     monkeypatch.setattr(report, 'write_workbook', mutate)
-    ok, output = report.create_report(path, path.parent, markers='all')
+    ok, output = report.create_report(path, path.parent.parent, markers='all')
     assert not ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'FAILED' and 'Input changed' in status['Error']
@@ -390,7 +390,7 @@ def test_changed_input_cannot_publish_success(tmp_path, monkeypatch):
 @pytest.mark.parametrize('options', [{}, {'min_nuclei': 0}])
 def test_default_and_zero_threshold_keep_empty_images(tmp_path, options):
     path = collection(tmp_path, empty=True)
-    ok, output = report.create_report(path, path.parent, markers='all', stats_unit='well', **options)
+    ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit='well', **options)
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Excluded_Images') == []
     images = sheet_rows(output / report.WORKBOOK, 'Images')
@@ -452,7 +452,7 @@ def test_formula_like_group_is_literal_in_workbook(tmp_path):
     book.active['C2'].value = '=Control'
     book.active['C2'].data_type = 's'
     book.save(template)
-    ok, output = report.create_report(path, path.parent, markers='none')
+    ok, output = report.create_report(path, path.parent.parent, markers='none')
     assert ok
     book = load_workbook(output / report.WORKBOOK, read_only=True, data_only=False)
     try:
@@ -468,7 +468,7 @@ def test_formula_like_group_is_literal_in_workbook(tmp_path):
 def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
     path = collection(tmp_path)
     manifest = tmp_path / 'input_paths.json'
-    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent)]}))
+    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent.parent)]}))
     script = Path(report.__file__).resolve()
     result = subprocess.run([sys.executable, str(script), '-i', str(manifest), '--all-experiments',
                              '--collections', 'latest', '--markers', MARKER, '--stats-unit', 'well',
@@ -491,7 +491,7 @@ def test_discovery_ignores_unfinished_and_hidden_collections(tmp_path):
     path = collection(tmp_path)
     (path.parent / 'FIA_Marker_Intensity_Combined_Results_20990101_010101').mkdir()
     (path.parent / ('._' + path.name)).mkdir()
-    selected, missing = report.choose_collections([path.parent], 'latest')
+    selected, missing = report.choose_collections([path.parent.parent], 'latest')
     assert selected == [path] and missing == []
 
 
@@ -502,7 +502,7 @@ def test_short_cli_uses_all_experiments_and_latest_collections_without_prompts(t
     shutil.copytree(first, older)
     (first.parent / 'FIA_Marker_Intensity_Combined_Results_20990101_000000').mkdir()
     manifest = tmp_path / 'input_paths.json'
-    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent.parent), str(second.parent.parent)]}))
     result = subprocess.run([sys.executable, str(Path(report.__file__).resolve()),
                              '-i', str(manifest), '--stats-unit', 'nucleus'],
                             input='', text=True, capture_output=True, timeout=90, check=False)
@@ -522,7 +522,7 @@ def test_batch_choice_happens_once_before_reports_and_records_absent_markers(tmp
     first = collection(tmp_path / 'first', missing=True)
     second = collection(tmp_path / 'second')
     manifest = tmp_path / 'input_paths.json'
-    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent.parent), str(second.parent.parent)]}))
     prompts, outputs = [], []
     original = report.create_report
 
@@ -549,7 +549,7 @@ def test_batch_choice_happens_once_before_reports_and_records_absent_markers(tmp
     for (_, path), expected in zip(outputs, ('MISSING', 'not present')):
         notes = sheet_rows(path / report.WORKBOOK, 'Overview')
         assert any(row['Item'] == 'Selection note' and expected in row['Description'] for row in notes)
-        assert expected in (path / 'report.log').read_text()
+        assert expected in (path.parent / '5_marker_intensity_report.log').read_text()
 
 
 def marker_preview_folder(path, markers):
@@ -601,7 +601,7 @@ def test_collection_menu_accepts_words_and_numbers(tmp_path, monkeypatch, answer
 def test_cancel_common_selection_creates_no_reports(tmp_path, monkeypatch):
     path = collection(tmp_path, missing=True)
     manifest = tmp_path / 'input_paths.json'
-    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent)]}))
+    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent.parent)]}))
     monkeypatch.setattr('builtins.input', lambda _: 'q')
     assert report.main(['-i', str(manifest)]) == 130
     assert not list(path.parent.glob('FIA_Marker_Intensity_Report_*'))
@@ -614,7 +614,7 @@ def test_unreadable_marker_preview_still_writes_failure_and_continues(tmp_path, 
     shutil.copytree(first, older)
     (first / 'FIA_Marker_Intensity_Images.csv').unlink()
     manifest = tmp_path / 'input_paths.json'
-    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent), str(second.parent)]}))
+    manifest.write_text(json.dumps({'paths_to_files': [str(first.parent.parent), str(second.parent.parent)]}))
     monkeypatch.setattr('builtins.input', lambda _: pytest.fail('Single marker must not prompt'))
     assert report.main(['-i', str(manifest)]) == 1
     for path, expected in ((first, 'FAILED'), (second, 'SUCCESS')):
@@ -679,7 +679,7 @@ def test_missing_morphology_workbook_prevents_success(tmp_path, monkeypatch):
             original(output, tables, plots, filename)
 
     monkeypatch.setattr(report, 'write_workbook', skip_morphology)
-    ok, output = report.create_report(path, path.parent, markers='all')
+    ok, output = report.create_report(path, path.parent.parent, markers='all')
     assert not ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'FAILED' and status['Stage'] == 'final verification'

@@ -111,7 +111,7 @@ def test_complete_collection_has_only_spreadsheets_and_exact_source_copies(tmp_p
     second = create_intensity(morph, 'Foci_2_Channel_3')
     before = {path: path.read_bytes() for path in morph[0].parent.rglob('*') if path.is_file()}
     ok, output = collect(morph, ['Foci_1_Channel_2', 'Foci_2_Channel_3'])
-    assert ok and output.parent == morph[2].parent and output.name.startswith(collector.OUTPUT_PREFIX)
+    assert ok and output.parent == morph[0].parent and output.name.startswith(collector.OUTPUT_PREFIX)
     assert len(list(output.iterdir())) == 15
     assert all(path.is_file() and path.suffix in ('.csv', '.xlsx') for path in output.iterdir())
     for filename in ('Nuclei_Morphology.xlsx', 'Nuclei_Morphology.csv', 'Nuclei_Images.csv', 'Nuclei_Run_Info.csv'):
@@ -277,10 +277,10 @@ def test_main_selects_all_nucleus_runs_into_separate_folders(tmp_path, monkeypat
     create_intensity(second, stamp='20260924_130000')
     manifest = tmp_path / 'input_paths.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(first[2].parent)]}))
-    answers = iter(['all', '2', 'all'])
+    answers = iter(['2', 'all'])
     monkeypatch.setattr('builtins.input', lambda _: next(answers))
     assert collector.main(manifest) == 0
-    outputs = list(first[2].parent.glob(collector.OUTPUT_PREFIX + '*'))
+    outputs = list(first[0].parent.glob(collector.OUTPUT_PREFIX + '*'))
     assert len(outputs) == 2
     assert {sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')[0]['Nuclei_run_ID'] for output in outputs} == {
         first[0].name, second[0].name}
@@ -378,7 +378,7 @@ def test_failed_transfer_cleans_disappearing_sidecars_and_reports_original_error
         tmp_path, monkeypatch, appledouble_filesystem):
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
-    previous = morph[2].parent / (collector.OUTPUT_PREFIX + '20000101_000000')
+    previous = morph[0].parent / (collector.OUTPUT_PREFIX + '20000101_000000')
     previous.mkdir()
     (previous / 'preserved.csv').write_bytes(b'previous result')
     paired_replace = Path.replace

@@ -2,6 +2,7 @@
 
 import importlib.util
 import io
+import json
 import logging
 import sys
 from pathlib import Path
@@ -225,19 +226,23 @@ def test_intensity_mask_run_enter_uses_advertised_latest_default(monkeypatch):
 
 
 def test_collection_nucleus_run_choice_retries(monkeypatch):
-    bundles = [{'run': Path('run')}]
-    answer_with(monkeypatch, ['abc', '', '4', '2'])
+    bundles = [{'run': Path('run1')}, {'run': Path('run2')}]
+    answer_with(monkeypatch, ['abc', '4', '2'])
     assert collect.select_morphologies([{'morphology': bundles}]) == bundles
 
 
 @pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
-def test_collection_cancels_without_scanning_or_writing(monkeypatch, stop):
-    monkeypatch.setattr(collect, 'discover_sources', lambda path: [Path('sample')])
-    scan = Mock()
-    monkeypatch.setattr(collect, 'scan_source', scan)
+def test_collection_cancels_before_writing_results(tmp_path, monkeypatch, stop):
+    from test_collect_marker_intensity_results import create_morphology
+    morph = create_morphology(tmp_path / 'sample')
+    manifest = tmp_path / 'input.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(morph[2].parent)]}))
+    # Multiple nucleus runs provide a real selection prompt after discovery.
+    create_morphology(morph[2].parent, stamp='20260924_120000')
     answer_with(monkeypatch, ['abc', stop])
-    assert collect.main('input.json') == 130
-    scan.assert_not_called()
+    assert collect.main(manifest) == 130
+    assert not list(morph[0].parent.glob(collect.OUTPUT_PREFIX + '*'))
+    assert 'CANCELLED' in (morph[0].parent / '4_collect_marker_intensity.log').read_text()
 
 
 def test_report_collection_choice_retries_with_explanation(monkeypatch):
@@ -248,14 +253,17 @@ def test_report_collection_choice_retries_with_explanation(monkeypatch):
 
 
 @pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
-def test_report_cancels_without_creating_outputs(monkeypatch, stop):
-    monkeypatch.setattr(collect, 'discover_sources', lambda path: [Path('sample')])
-    monkeypatch.setattr(report, 'discover_collections', lambda path: [(Path('collection'), 'run')])
+def test_report_cancels_without_creating_outputs(tmp_path, monkeypatch, stop):
+    from test_marker_intensity_report import collection
+    path = collection(tmp_path)
+    manifest = tmp_path / 'input.json'
+    manifest.write_text(json.dumps({'paths_to_files': [str(path.parent.parent)]}))
     create = Mock()
     monkeypatch.setattr(report, 'create_report', create)
     answer_with(monkeypatch, ['abc', stop])
-    assert report.main(['-i', 'input.json', '--collections', 'ask']) == 130
+    assert report.main(['-i', str(manifest), '--collections', 'ask']) == 130
     create.assert_not_called()
+    assert 'CANCELLED' in (path.parent / '5_marker_intensity_report.log').read_text()
 
 
 @pytest.mark.parametrize('command', [
