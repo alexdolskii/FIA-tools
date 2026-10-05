@@ -279,6 +279,13 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path, plot_form
     assert {p.suffix for p in (output / 'Plots').iterdir()} == suffixes
     assert len(list((output / 'Plots').iterdir())) == 2 * len(suffixes)
     assert status['Plot_format'] == selected_format
+    style = json.loads((output / 'plot_style.json').read_text())
+    assert status['Plot_style_version'] == style['Style_version'] == 1
+    assert status['Plot_style_file'] == 'plot_style.json'
+    assert len(style['images']) == status['Images_before_filter']
+    labels = sheet_rows(output / report.WORKBOOK, 'Plot_Labels')
+    assert {r['Group']: r['Condition_color'] for r in labels} == {'Control': '#B5B1D8', 'Treatment': '#004F46'}
+    assert {r['Group']: r['Condition_color'] for r in style['conditions']} == {r['Group']: r['Condition_color'] for r in labels}
     run_info = {r['Parameter']: r['Value'] for r in sheet_rows(output / report.WORKBOOK, 'Run_Info')}
     assert run_info['Plot_format'] == selected_format
     journal = (output.parent / '5_marker_intensity_report.log').read_text()
@@ -320,7 +327,7 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     assert all(r['Control: N'] == 0 and r['Control: Mean'] is None and r['Control: SD'] is None for r in summary)
     comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
     assert all(r['Status'] == 'NOT_TESTED' and r['P_Holm'] is None for r in comparisons)
-    for table in ('Nuclei', 'Images', 'Image_Values', 'Plot_Data'):
+    for table in ('Nuclei', 'Images', 'Image_Values'):
         assert sheet_rows(output / report.WORKBOOK, table) == []
         with (output / (table + '.csv')).open(encoding='utf-8-sig') as handle:
             assert 'Image_name' in next(csv.reader(handle))
@@ -344,7 +351,14 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
                for row in sheet_rows(output / report.WORKBOOK, 'Well_Values'))
     assert all(row['N'] == 0 and row['Mean'] is None
                for row in sheet_rows(output / report.WORKBOOK, 'Summary'))
-    assert all(row['Points'] == 0 for row in sheet_rows(output / report.WORKBOOK, 'Plot_Info'))
+    plot_info = sheet_rows(output / report.WORKBOOK, 'Plot_Info')
+    assert next(row for row in plot_info if row['Plot'] == 'Nuclei_count_all')['Points'] == 1
+    assert all(row['Points'] == 0 for row in plot_info if row['Plot'] != 'Nuclei_count_all')
+    diagnostic = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
+    assert len(diagnostic) == 1 and diagnostic[0]['Plot'] == 'Nuclei_count_all'
+    assert diagnostic[0]['Below_min_nuclei'] is True
+    assert diagnostic[0]['Used_for_analysis'] is False
+    assert diagnostic[0]['Point_edgecolor'] == '#D62728'
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Images_before_filter'] == status['Images_excluded'] == 1 and status['Images'] == 0
     assert all(p.read_bytes() == content for p, content in before.items())
@@ -374,7 +388,7 @@ def test_filter_precedes_all_aggregation_and_preserves_real_zero_intensity(unit)
     assert data['counts_by_group']['Control'] == {'Nuclei': 4, 'Images': 2, 'Wells': 1}
     assert data['counts_by_group']['Excluded condition'] == {'Nuclei': 0, 'Images': 0, 'Wells': 0}
     points = plot_rows(data)
-    assert all(row['Mask_name'] not in {'mask_0', 'mask_3', 'mask_6'} for row in points)
+    assert all(row['Mask_name'] not in {'mask_0', 'mask_3', 'mask_6'} for row in points if row['Plot'] != 'Nuclei_count_all')
     assert any(row['Metric'] == RAW and row['Value'] == 0 for row in points)
     count_summary = next(r for r in data['summary'] if r['Metric'] == data_tools.COUNT and r['Group'] == 'Control')
     assert count_summary['N'] == 2 and count_summary['Mean'] == 2
@@ -441,7 +455,8 @@ def test_threshold_boundary_removes_nuclei_from_all_markers_and_morphology(unit)
     calculate_statistics(data)
     assert [r[data_tools.COUNT] for r in data['images']] == [2, 3]
     assert len(data['nuclei']) == 5
-    assert all(row['Mask_name'] in {'mask_1', 'mask_3'} for row in data['nuclei'] + data['image_values'] + plot_rows(data))
+    assert all(row['Mask_name'] in {'mask_1', 'mask_3'} for row in data['nuclei'] + data['image_values'] +
+               [r for r in plot_rows(data) if r['Plot'] != 'Nuclei_count_all'])
     assert all(r['Min_nuclei'] == 2 and r[data_tools.COUNT] == 1 for r in data['excluded_images'])
     for metric in ('Area_px2', RAW, second + '_Marker_RawIntDen'):
         summary = next(r for r in data['summary'] if r['Metric'] == metric and r['Group'] == 'Control')
@@ -504,7 +519,8 @@ def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
     check = subprocess.run([sys.executable, '-c',
                             ('import sys, marker_intensity_report; '
                              'assert not {"imagej", "scyjava", "stardist", "tensorflow"} & set(sys.modules)')],
-                           env={**os.environ, 'PYTHONPATH': str(script.parent)}, text=True,
+                           env={**os.environ, 'PYTHONPATH': os.pathsep.join(
+                               filter(None, (str(script.parent), os.environ.get('PYTHONPATH'))))}, text=True,
                            capture_output=True, timeout=30, check=False)
     assert check.returncode == 0, check.stderr
 

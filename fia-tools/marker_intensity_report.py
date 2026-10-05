@@ -26,7 +26,7 @@ import openpyxl
 import scipy
 from interactive_input import ask_choice
 from table_workflow import TableJournal, TableProgress
-from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, render_plots
+from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, prepare_plot_style, render_plots
 from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image
@@ -269,18 +269,20 @@ def report_tables(data, output, manifest):
     notes = [
         ('Population', 'Non-border nuclei from images retained by the optional --min-nuclei filter. No intensity threshold or additional nucleus-level filtering.'),
         ('Image exclusion', data['image_exclusion_rule'] + ' Applied to all metrics before aggregation and tests. Excluded_Images lists files, counts, threshold and reasons; Image_Filter_Summary counts original, excluded and retained images per condition. Inputs remain unchanged.'),
-        ('Count plot', 'One point = non-border nuclei in one retained image. With no --min-nuclei threshold (or 0), zero-count images are included.'),
+        ('Count plot', 'One point = non-border nuclei in one image. Nuclei_count uses retained images. A positive --min-nuclei also creates Nuclei_count_all before filtering, with red edges below the threshold and no additional tests. Both count views share Y limits, condition colors, well shapes and point offsets. With no threshold (or 0), only Nuclei_count is needed, including zero-count images.'),
+        ('Condition colors', 'Wada colors selected by the user: Dusky Green, Grayish Lavender A, Orange, Deep Indigo, Dull Blue Violet, Ivory Buff, Violet, Verditter Blue. Apply to violin bodies and boxplots; contrast-selected medians. An explicitly marked control gets lavender without changing axis order. Without an unambiguous control, lavender is an ordinary second color. Nine or more conditions use green tints with up to 75% white; no quantitative meaning. All annotated conditions count before filtering.'),
+        ('Image points', 'Neutral grey #D0D0D0 with #111314 edges; red #D62728 below --min-nuclei on Nuclei_count_all. Shapes identify technical wells within each condition: 12 geometric shapes, then numbers. Sorted plate wells include missing images; image offsets are deterministic. No nucleus dots on violins. plot_style.json records the complete mapping; Plot_Data records displayed image styles; Plot_Labels records condition fills and medians.'),
         ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
         ('Morphology plots', 'Only Area (separate um2/px2 cohorts), Aspect_ratio, Circularity and Solidity are eligible. Add a violin with an inner boxplot when that metric has at least one tested control comparison with P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots. All morphology metrics remain in summary and comparison tables and the full Holm family.'),
         ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Complete overview previews are embedded in the workbook for every export format; no separate panel exports. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
         ('Plot typography and export', 'Arial with Liberation Sans/DejaVu Sans fallback. Titles 20 pt; panel headings 16 pt; conditions, axes and significance 14 pt; sample sizes and short captions 12 pt. Standalone format: ' + data['plot_format'] + '. PDF is vector; PNG and embedded Excel previews use 300 dpi. PDF-only previews are generated in memory without standalone PNG files. Plot_Info stores only exported file paths, full methods and short display captions. Run IDs appear in the footer.'),
         ('Plot significance', 'Brackets show Holm-adjusted significance only: ns for p >= 0.05; * for p < 0.05; ** for p < 0.01; *** for p < 0.001; **** for p < 0.0001. Not tested is distinct from ns. Exact raw and adjusted p-values remain in Statistics and morphology comparison tables.'),
-        ('Plot sample sizes', 'Labels give usable nuclei or images and contributing wells for each metric. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains every usable observation once per plotted metric across all panels.'),
+        ('Plot sample sizes', 'Count labels give images and wells; intensity/morphology labels give nuclei, contributing images and wells. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains each observation once per plot; Nuclei_count_all is explicitly before_filter and includes excluded images only for diagnosis.'),
         ('Violin display', 'Equal maximum widths; Scott bandwidth; density limited to observed values. Fewer than five nuclei: box/range without density. Constant or single value: horizontal line. Empty groups retain n=0. Range lines retain extremes without outlier dots.'),
         ('Statistics unit', unit),
         ('Count test exception', 'Requested nucleus mode uses images for count tests; well mode uses wells.'),
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
-        ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no metric. Retained zero-nucleus images contribute zero to counts and no value to morphology/intensity means. Wells or conditions with no usable observations keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
+        ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no analytical metric or test; they appear only on diagnostic Nuclei_count_all. Retained zero-nucleus images contribute zero to counts and no value to morphology/intensity means. Wells or conditions with no usable observations keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
         ('Tests', 'Two-sided Welch comparisons of each treatment to the bold control in its plate-map color block.'),
         ('Multiplicity', 'Holm family includes count, available physical/pixel morphology cohorts (each nucleus enters only one unit cohort per size metric) and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
         ('Confidence intervals', '95% Welch intervals for treatment minus control; nominal, not multiplicity-adjusted.'),
@@ -308,7 +310,7 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 4, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 5, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
@@ -321,6 +323,8 @@ def report_tables(data, output, manifest):
         'Morphology_summary_tests': 'Existing Welch/Holm results from Statistics, including its full planned family across count, morphology and selected markers. No tests when Requested_statistics_unit is disabled.',
         'Morphology_plot_rule': 'Only Area_um2, Area_px2, Aspect_ratio, Circularity and Solidity; each requires at least one TESTED control comparison with P_Holm < 0.05 in the selected statistics unit. Physical/pixel area cohorts stay separate. No morphology plots when statistics are disabled or no eligible comparisons qualify. All morphology tests remain in the full Holm family.',
         'Plot_format': data['plot_format'],
+        'Plot_style_version': data['plot_style']['Style_version'], 'Plot_style_file': 'plot_style.json',
+        'Diagnostic_count_plot': data['min_nuclei'] > 0,
         'Plot_export_policy': 'One complete overview per plotted metric in the selected format (pdf, png or both), with all panels. Excel always embeds raster previews; PDF-only previews stay in memory. No separate panel files.',
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
         'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
@@ -457,6 +461,13 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
         data['nuclei_columns'] = [c for c in source_columns if not any(c.startswith(m + '_') for m in excluded)]
         inputs.annotate(data, plate_map, selected, stats_unit, sheet)
+        data['plot_style'] = prepare_plot_style(data, min_nuclei)
+        for warning in data['plot_style']['warnings']:
+            data['notes'].append(warning)
+            logger.warning('PLOT_STYLE | %s', warning)
+        logger.info('PLOT_STYLE | version=%s | panels=%s | conditions=%s | wells=%s',
+                    data['plot_style']['Style_version'], len(data['plot_style']['panels']),
+                    len(data['plot_style']['conditions']), len(data['plot_style']['wells']))
         logger.info('INPUTS_VALIDATED | nuclei_run=%s | markers=%s | images=%s | non_border_nuclei=%s | '
                     'plate_map=%s | sheet=%s', data['run_id'], selected, len(data['images']),
                     len(data['nuclei']), plate_map, data['template_sheet'])
@@ -483,6 +494,11 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                     sum(row['Status'] == 'TESTED' for row in data['statistics']))
         stage = 'plots'
         render_plots(data, output / 'Plots', progress=progress, plot_format=plot_format)
+        style_file = output / 'plot_style.json'
+        style_temp = temporary_path(style_file, output / '.plot_style.json.tmp')
+        style_temp.write_text(json.dumps(data['plot_style'], indent=2, ensure_ascii=False) + '\n', encoding='utf-8')
+        style_temp.replace(style_file)
+        logger.info('PLOT_STYLE_SAVED | %s', style_file)
         for plot in data['plots']:
             for key in ('PNG_file', 'PDF_file'):
                 if plot[key]:
@@ -525,6 +541,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                      Images_before_filter=data['images_before_filter'],
                      Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
                      Min_nuclei=data['min_nuclei'], Plot_format=plot_format,
+                     Plot_style_version=data['plot_style']['Style_version'], Plot_style_file=style_file.name,
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
         logger.info('REPORT_VERIFIED | status=SUCCESS | %s', output / 'report_status.json')

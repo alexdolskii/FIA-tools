@@ -7,15 +7,16 @@ import matplotlib
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import numpy as np
+import plot_palette as palette
 import spatial_calibration as spatial
 from marker_report_data import COUNT, metric_value, report_specs
 from matplotlib.font_manager import FontProperties, fontManager
 from matplotlib.textpath import TextPath
 
 PLOT_COLUMNS = ['Plot', 'Metric', 'Observation', 'Group', 'Well', 'Image_name', 'Mask_name',
-                'Nucleus_ID', 'Value']
-LABEL_COLUMNS = ['Panel', 'Block', 'Figure_context', 'Panel_title', 'Group', 'Display_label']
+                'Nucleus_ID', 'Value', *palette.POINT_COLUMNS]
+LABEL_COLUMNS = ['Panel', 'Block', 'Figure_context', 'Panel_title', 'Group', 'Display_label',
+                 *palette.CONDITION_COLUMNS]
 FONT_SIZES = {'title': 20, 'panel': 16, 'axis': 14, 'sample': 12, 'note': 12}
 PNG_DPI = 300
 # Display selection only: report_specs and the complete Holm families remain unchanged.
@@ -66,6 +67,9 @@ def panel_letter(index):
 def plot_specs(data):
     """Plot primary endpoints and selected morphology with a significant adjusted test."""
     specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
+    if data.get('min_nuclei', 0) > 0:
+        specs.insert(0, ('Nuclei_count_all', COUNT, 'Non-border nuclei per image — before filtering',
+                         'Nuclei per image', 'image'))
     specs += [(marker + '_Integrated_density', marker + '_Marker_RawIntDen',
                'Nuclear integrated density', 'Integrated density (sum of pixel values)', 'nucleus')
               for marker in data['markers']]
@@ -85,8 +89,12 @@ def plot_specs(data):
 
 def plot_rows(data):
     rows = []
+    style = data.get('plot_style') or prepare_plot_style(data)
+    image_styles = {palette.image_identity(row): row for row in style['images']}
     for name, field, _, _, observation in plot_specs(data):
         population = data['images'] if observation == 'image' else data['nuclei']
+        if name == 'Nuclei_count_all':
+            population = data.get('calibration_images_before_filter', data['images'])
         for row in population:
             value = metric_value(row, field)
             if value is None:
@@ -94,7 +102,11 @@ def plot_rows(data):
             rows.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Group': row['Group'],
                          'Well': row['Well'], 'Image_name': row['Image_name'], 'Mask_name': row['Mask_name'],
                          'Nucleus_ID': row.get('Nucleus_ID') if observation == 'nucleus' else None,
-                         'Value': value})
+                         'Value': value,
+                         **({key: image_styles[palette.image_identity(row)][key] for key in palette.POINT_COLUMNS}
+                            if observation == 'image' else
+                            {key: (True if key == 'Used_for_analysis' else
+                                   False if key == 'Below_min_nuclei' else None) for key in palette.POINT_COLUMNS})})
     return rows
 
 
@@ -149,41 +161,68 @@ def plot_panels(data):
     # Keep any cross-panel comparison visible if an externally prepared design is incomplete.
     membership = {group: p['id'] for p in panels for group in p['groups']}
     if any(membership.get(row['Control']) != membership.get(row['Treatment'])
-           for row in data['statistics']):
+           for row in data.get('statistics', [])):
         prefix, labels = short_labels(data['groups'])
         return [{'id': 'Block_01', 'block': '', 'groups': data['groups'], 'title': 'All conditions',
                  'labels': labels, 'context': prefix}]
     return panels
 
 
-def draw_distribution(ax, values, position, observation, random):
-    """Draw all nucleus values as a density; individual dots are reserved for image counts."""
+def prepare_plot_style(data, min_nuclei=None):
+    """Called before filtering by the report; also usable by standalone plot callers."""
+    style = palette.build_style(plot_panels(data), data['design'], data.get('blocks', {}),
+                                data.get('calibration_images_before_filter', data['images']),
+                                data.get('min_nuclei', 0) if min_nuclei is None else min_nuclei)
+    style['Particle_size_px2'] = data.get('particle_size')
+    return style
+
+
+def draw_distribution(ax, values, position, observation, style=None):
+    """Retain the original quartiles and densities, using the condition's fill."""
     if not values:
         return
+    style = style or palette.condition_styles(['condition'])[0]
+    fill, median = style['Condition_color'], style['Median_color']
     variable = max(values) > min(values)
     if observation == 'nucleus' and len(values) >= 5 and variable:
         violin = ax.violinplot([values], positions=[position], widths=0.8, points=200,
                               bw_method='scott', showextrema=False)
         for body in violin['bodies']:
-            body.set_facecolor('#86b6c9')
-            body.set_edgecolor('#34677f')
-            body.set_alpha(0.75)
-    if len(values) >= 2 and variable:
+            body.set_facecolor(fill)
+            body.set_edgecolor(palette.INK)
+            body.set_alpha(1)
+            body.set_zorder(1)
+    if len(values) >= 2 and (variable or observation == 'image'):
         ax.boxplot([values], positions=[position], widths=0.16 if observation == 'nucleus' else 0.5,
                    showfliers=False, patch_artist=True,
-                   boxprops={'facecolor': '#f5f9fb', 'edgecolor': '#344f60', 'zorder': 3},
-                   medianprops={'color': '#182f3d', 'linewidth': 1.6, 'zorder': 4}, manage_ticks=False)
+                   boxprops={'facecolor': fill, 'edgecolor': median if observation == 'nucleus' else palette.INK, 'zorder': 3},
+                   whiskerprops={'color': palette.INK}, capprops={'color': palette.INK},
+                   medianprops={'color': median, 'linewidth': 1.6, 'zorder': 4}, manage_ticks=False)
         if observation == 'nucleus':
             # The full observed range remains visible without drawing outlier dots.
-            ax.vlines(position, min(values), max(values), color='#34677f', alpha=0.5, linewidth=0.7)
+            ax.vlines(position, min(values), max(values), color=palette.INK, linewidth=0.7, zorder=2)
     elif observation == 'nucleus':
-        ax.hlines(values[0], position - 0.15, position + 0.15, color='#182f3d', linewidth=2)
-    if observation == 'image':
-        ax.scatter(position + random.uniform(-0.17, 0.17, len(values)), values,
-                   s=28, alpha=0.48, c='#225f83', linewidths=0, zorder=4)
+        ax.hlines(values[0], position - 0.15, position + 0.15, color=palette.INK, linewidth=5)
+        ax.hlines(values[0], position - 0.15, position + 0.15, color=fill, linewidth=3)
+
+
+def draw_image_points(ax, records):
+    for marker in dict.fromkeys(row['Marker'] for row in records):
+        selected = [row for row in records if row['Marker'] == marker]
+        ax.scatter([row['X_position'] for row in selected], [row['Value'] for row in selected],
+                   marker=marker, s=70 if marker.startswith('$') else 36,
+                   facecolors=[row['Point_facecolor'] for row in selected],
+                   edgecolors=[row['Point_edgecolor'] for row in selected], linewidths=0.9, zorder=5)
 
 
 def plot_note(data, name, observation, comparisons):
+    if name == 'Nuclei_count_all':
+        return ('Diagnostic count overview before image-count filtering; all validated images, including zero counts. '
+                'One grey point = one image; shape = technical well within the condition. '
+                f'Red edge: non-border nuclei < {data["min_nuclei"]}; equality is retained. '
+                'No statistical comparisons on this overview. The analytical tables, tests and other plots use retained images only. '
+                'Conditions, well shapes, image offsets and Y limits match Nuclei_count. '
+                'Box: median and IQR; whiskers: 1.5 IQR. A low count is not proof of poor image quality.')
     description = ('One point = one image; all image points shown.' if observation == 'image' else
                    'Violin: all usable nuclei, no individual dots; equal maximum widths; Scott smoothing. '
                    'Density stays within the observed range. Fewer than 5 nuclei: box/range; constant or single value: line.')
@@ -193,7 +232,8 @@ def plot_note(data, name, observation, comparisons):
     image_filter = data.get('image_exclusion_rule', 'Image count filtering disabled.')
     note = (description + ' Border nuclei excluded. ' + image_filter + ' '
             'Linear Y; shared limits across panels of this metric. '
-            'Box: median and IQR; whiskers: 1.5 IQR. Labels: usable observations and contributing wells. ' + inference)
+            'Box: median and IQR; whiskers: 1.5 IQR. Fill = condition; grey image points use well shapes. '
+            'Labels: usable observations, contributing images and wells. ' + inference)
     if data['stats_unit'] == 'well':
         note += ' Well values: mean of image means (count: mean nuclei per image).'
     elif data['stats_unit'] == 'nucleus':
@@ -207,15 +247,20 @@ def plot_note(data, name, observation, comparisons):
 
 def render_figure(data, spec, panels, points, comparisons, limits, high, span, note, path, plot_format='pdf'):
     """Keep the existing overview and panels, applying the same style to PNG and vector PDF."""
-    with plt.rc_context({'font.family': plot_font(), 'font.size': FONT_SIZES['axis'], 'pdf.fonttype': 42}):
+    with plt.rc_context({'font.family': plot_font(), 'font.size': FONT_SIZES['axis'], 'pdf.fonttype': 42,
+                         'figure.facecolor': palette.BACKGROUND, 'axes.facecolor': palette.BACKGROUND,
+                         'text.color': palette.INK, 'axes.labelcolor': palette.INK}):
         return _render_figure(data, spec, panels, points, comparisons, limits, high, span, path, plot_format)
 
 
-def short_plot_note(data, observation, field=None):
+def short_plot_note(data, observation, field=None, name=None):
     population = 'Non-border nuclei.' if observation == 'nucleus' else 'One point = one image; non-border nuclei counted.'
     threshold = data.get('min_nuclei', 0)
-    filtering = f' Images: ≥{threshold} non-border nuclei.' if threshold else ' No image-count filter.'
-    if data['stats_unit'] is None:
+    filtering = f' Image filter (--min-nuclei): ≥{threshold} non-border nuclei/image.' if threshold else ' No image-count filter.'
+    if name == 'Nuclei_count_all':
+        filtering = f' Before filtering; red edge: <{threshold} non-border nuclei/image (--min-nuclei).'
+        inference = ' Diagnostic only; no tests.'
+    elif data['stats_unit'] is None:
         inference = ' Descriptive only.'
     else:
         unit = 'well' if data['stats_unit'] == 'well' else observation
@@ -225,7 +270,12 @@ def short_plot_note(data, observation, field=None):
         label = 'Calibrated' if field in spatial.PHYSICAL_FIELDS.values() else 'Uncalibrated'
         images = sum(row['Metric'] == field and row['Value'] is not None for row in data.get('image_values', []))
         cohort = f' {label} images only; {images} contributing images in this metric.'
-    return population + filtering + ' Box: median and IQR.' + inference + cohort
+    encoding = ' Fill = condition.'
+    if observation == 'image':
+        encoding += ' Grey point = image; shape = well within condition.'
+    area = data.get('particle_size')
+    area_note = f' Minimum nucleus area (-p): {area:g} px².' if area is not None else ''
+    return population + filtering + ' Box: median and IQR.' + inference + cohort + encoding + area_note
 
 
 def _render_figure(data, spec, panels, points, comparisons, limits, high, span, path, plot_format):
@@ -234,7 +284,7 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
     rows = math.ceil(len(panels) / columns)
     panel_width = max(7.2, 1.85 * max(len(p['groups']) for p in panels))
     width = columns * panel_width
-    caption = wrap_label(short_plot_note(data, observation, field), (width - 0.6) * 72, FONT_SIZES['note'])
+    caption = wrap_label(short_plot_note(data, observation, field, name), (width - 0.6) * 72, FONT_SIZES['note'])
     subtitle = ' · '.join(part for part in (panels[0]['context'],
                          name.removesuffix('_Integrated_density') if name.endswith('_Integrated_density') else '') if part)
     heading = wrap_label(title, (width - 0.6) * 72, FONT_SIZES['title'], 'bold')
@@ -251,7 +301,7 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
                      for r in comparisons) for p in panels)
     title_height = 0.36 * (heading.count('\n') + 1) + (0.28 * (subtitle.count('\n') + 1) if subtitle else 0)
     caption_height = 0.21 * (caption.count('\n') + 1) + 0.25
-    plot_height = rows * (3.7 + 0.26 * label_lines + 0.3 * levels + 0.45)
+    plot_height = rows * (3.7 + 0.26 * label_lines + 0.3 * levels + 0.70)
     fig = plt.figure(figsize=(width, title_height + plot_height + caption_height + 0.5),
                      layout='constrained')
     try:
@@ -268,19 +318,23 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
         for index, panel in enumerate(panels):
             ax = fig.add_subplot(grid[index // columns, index % columns])
             ax.set_label(panel['id'])
-            random = np.random.default_rng(20260923)
+            styles = {row['Group']: row for row in data['plot_style']['conditions'] if row['Panel'] == panel['id']}
             labels = []
             panel_lines = max(label.count('\n') + 1 for label in wrapped[panel['id']].values())
             for position, group in enumerate(panel['groups'], 1):
                 records = [row for row in points if row['Group'] == group]
                 values = [row['Value'] for row in records]
-                draw_distribution(ax, values, position, observation, random)
+                draw_distribution(ax, values, position, observation, styles[group])
+                if observation == 'image':
+                    draw_image_points(ax, records)
                 unit = 'nuclei' if observation == 'nucleus' else 'images'
                 wells = len({row['Well'] for row in records})
                 labels.append(wrapped[panel['id']][group])
-                sample = f'n={len(values):,} {unit} · {wells} wells'
+                images = len({row['Mask_name'] for row in records})
+                sample = (f'n={len(values):,} nuclei\n{images} images · {wells} wells' if observation == 'nucleus' else
+                          f'n={len(values):,} images · {wells} wells')
                 sample_font = FontProperties(family=plot_font(), size=FONT_SIZES['sample'])
-                if TextPath((0, 0), sample, prop=sample_font).get_extents().width > label_widths[panel['id']]:
+                if observation == 'image' and TextPath((0, 0), sample, prop=sample_font).get_extents().width > label_widths[panel['id']]:
                     sample = f'n={len(values):,} {unit}\n{wells} wells'
                 text = ax.annotate(sample, (position, 0), xycoords=ax.get_xaxis_transform(),
                                    xytext=(0, -(12 + panel_lines * FONT_SIZES['axis'] * 1.2)),
@@ -337,9 +391,12 @@ def render_plots(data, folder, progress=None, plot_format='pdf'):
     folder.mkdir(exist_ok=True)
     data['plot_format'] = plot_format
     data['plot_previews'] = {}
+    data['plot_style'] = data.get('plot_style') or prepare_plot_style(data)
     data['plot_data'] = plot_rows(data)
-    panels = plot_panels(data)
-    data['plot_labels'] = [dict(zip(LABEL_COLUMNS, (p['id'], p['block'], p['context'], p['title'], group, p['labels'][group])))
+    panels = data['plot_style']['panels']
+    styles = {(row['Panel'], row['Group']): row for row in data['plot_style']['conditions']}
+    data['plot_labels'] = [dict(zip(LABEL_COLUMNS[:6], (p['id'], p['block'], p['context'], p['title'], group, p['labels'][group])))
+                           | {key: styles[p['id'], group][key] for key in palette.CONDITION_COLUMNS}
                            for p in panels for group in p['groups']]
     plots = []
     specs = plot_specs(data)
@@ -348,13 +405,15 @@ def render_plots(data, folder, progress=None, plot_format='pdf'):
     for spec in specs:
         name, field, _, _, observation = spec
         points = [row for row in data['plot_data'] if row['Plot'] == name]
-        comparisons = [row for row in data['statistics'] if row['Metric'] == field]
-        values = [row['Value'] for row in points]
+        metric_comparisons = [row for row in data['statistics'] if row['Metric'] == field]
+        comparisons = [] if name == 'Nuclei_count_all' else metric_comparisons
+        # Count overviews share limits, including extremes excluded from analysis.
+        values = [row['Value'] for row in data['plot_data'] if row['Metric'] == field]
         low, high = (min(values), max(values)) if values else (0, 1)
         # Annotation spacing must also cover a zero-based axis when observations are nearly constant.
         span = max(high - low, high - min(0, low), abs(high) * 0.15) or 1
         levels = max(sum(r['Control'] in p['groups'] and r['Treatment'] in p['groups']
-                         for r in comparisons) for p in panels)
+                         for r in metric_comparisons) for p in panels)
         limits = min(0, low - span * 0.05), high + span * (0.2 + levels * 0.11)
         note = plot_note(data, name, observation, comparisons)
         path = folder / (name + ('.pdf' if plot_format == 'pdf' else '.png'))
@@ -365,11 +424,13 @@ def render_plots(data, folder, progress=None, plot_format='pdf'):
         count = sum(row['Group'] in groups for row in points)
         plots.append({'Plot': name, 'Metric': field, 'Observation': observation, 'Points': count,
                       'View': 'overview', 'Panels': ', '.join(p['id'] for p in panels),
+                      'Population': 'before_filter' if name == 'Nuclei_count_all' else 'retained',
+                      'Y_min': limits[0], 'Y_max': limits[1],
                       'Rendered_points': count if observation == 'image' else 0,
                       'File': str(path.relative_to(folder.parent)),
                       'PNG_file': str(path.with_suffix('.png').relative_to(folder.parent)) if plot_format != 'pdf' else '',
                       'PDF_file': str(path.with_suffix('.pdf').relative_to(folder.parent)) if plot_format != 'png' else '',
-                      'Caption': note, 'Display_caption': short_plot_note(data, observation, field),
+                      'Caption': note, 'Display_caption': short_plot_note(data, observation, field, name),
                       'Font': plot_font(), 'PNG_DPI': PNG_DPI if plot_format != 'pdf' else None})
         if progress:
             progress.advance(name)

@@ -84,8 +84,8 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
                 assert not left.get_window_extent(renderer).overlaps(right.get_window_extent(renderer))
             for text in significance:
                 assert not text.get_window_extent(renderer).overlaps(ax.title.get_window_extent(renderer))
-            dots = sum(isinstance(c, PathCollection) for c in ax.collections)
-            assert dots == (4 if filename.name.startswith('Nuclei_count') else 0)
+            dots = sum(len(c.get_offsets()) for c in ax.collections if isinstance(c, PathCollection))
+            assert dots == (8 if filename.name.startswith('Nuclei_count') else 0)
             for label in labels + samples:
                 assert not label.get_window_extent(renderer).overlaps(fig.axes[-1].get_window_extent(renderer))
         snapshots.append((filename.name, [ax.get_ylim() for ax in axes],
@@ -129,7 +129,7 @@ def test_four_panels_keep_statistics_observations_and_readable_labels(tmp_path, 
 def test_nucleus_density_has_no_dots_and_keeps_extremes(values):
     fig, ax = plt.subplots()
     try:
-        plots.draw_distribution(ax, values, 1, 'nucleus', np.random.default_rng(0))
+        plots.draw_distribution(ax, values, 1, 'nucleus')
         assert not any(isinstance(c, PathCollection) for c in ax.collections)
         bodies = [c for c in ax.collections if isinstance(c, PolyCollection)]
         assert bool(bodies) == (len(values) >= 5 and max(values) > min(values))
@@ -255,13 +255,17 @@ def test_eight_panels_retain_all_blocks_with_short_caption(tmp_path, monkeypatch
 
     monkeypatch.setattr(Figure, 'savefig', inspect)
     plots.render_plots(data, tmp_path / 'Plots', plot_format='both')
-    assert captured == ['Nuclei_count.png', MARKER + '_Integrated_density.png']
-    assert len(data['plots']) == 2
+    assert captured == ['Nuclei_count_all.png', 'Nuclei_count.png', MARKER + '_Integrated_density.png']
+    assert len(data['plots']) == 3
     assert data['statistics'] == before['statistics']
     assert data['plot_data'] == plots.plot_rows(before)
-    assert len(list((tmp_path / 'Plots').glob('*.pdf'))) == 2
+    assert len(list((tmp_path / 'Plots').glob('*.pdf'))) == 3
     assert not list((tmp_path / 'Plots').glob('*__Block_*'))
     for plot in data['plots']:
+        if plot['Plot'] == 'Nuclei_count_all':
+            assert '<20' in plot['Display_caption'] and 'Diagnostic only' in plot['Display_caption']
+            assert 'Welch' not in plot['Display_caption']
+            continue
         assert '≥20' in plot['Display_caption'] and 'Welch + Holm' in plot['Display_caption']
         assert 'within-well dependence' in plot['Caption']
         assert len(plot['Display_caption']) < len(plot['Caption'])

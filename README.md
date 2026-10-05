@@ -113,6 +113,8 @@ fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nucle
 
 The default report selects the latest completed collection per experiment. Use `--collections all` to report every completed collection, or `--collections ask` to choose. Use `--markers all` to select all available markers without the marker prompt, or `--markers none` for morphology only.
 
+Condition colors fill both violin bodies and boxplots; image points are grey, with shapes identifying technical wells within each condition. A positive `--min-nuclei` also adds `Nuclei_count_all`: red point edges identify images below the threshold before filtering. The ordinary count plot and all tests use retained images. Colors, shapes and image positions stay fixed; `plot_style.json` records their mapping. See the [plot styling rules](docs/REFERENCE.md#condition-colors-and-image-markers).
+
 Plots are saved as **PDF only by default**. Add `--plot-format png` for PNG only or `--plot-format both` for both formats. Excel includes all plots in every mode; PDF-only runs create no standalone PNG previews.
 
 Omit `--stats-unit` for descriptive tables and plots without tests. Choose `--stats-unit well` for tests on equal-image-weight well means. Nucleus/image tests do not account for dependence within a well, and neither mode establishes independent biological replication. Tests use Welch comparisons with Holm correction; details are in the [statistics reference](docs/REFERENCE.md#plots-and-statistical-units).
