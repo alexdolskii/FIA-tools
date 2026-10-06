@@ -302,10 +302,21 @@ fia_marker_intensity_report -i input_paths.json \
 
 ### Plate-map convention
 
+The blank [FIA_96_well_plate_template.xlsx](../templates/FIA_96_well_plate_template.xlsx) contains the grid, an optional condition-order table, drop-down lists, duplicate/incomplete-entry highlighting and an `Instructions` sheet. Fill it for the experiment before running the report. To use a grid-only layout with this template, leave the order table empty, type names in the wells and accept the Excel list warning.
+
 - The first worksheet, or the worksheet named by `--sheet`, contains columns **1–12 in B1:M1**, rows **A–H in A2:A9**, and condition names in **B2:M9**.
 - Each imaged well must have a literal condition name. `A2` and `A02` normalize to `A02`; the report checks agreement with `Well...` and, where present, `Point...` filename tokens.
 - For statistics, a **direct solid cell fill** defines a comparison block. Exactly one condition per color must be **bold**, defining the control; every other condition of that color is compared with it. Wells of the same condition must have consistent fill and bold status. Conditional formatting, formulas and merged cells cannot define the comparison grid.
 - Unimaged annotated wells remain in the design with blank measurements. Groups without usable observations are retained, with a reason when a test cannot be performed. Biological replicates are not inferred.
+
+Optional plot order:
+
+- Put **Order** and **Group** (or **Groups**) in row 1, in separate columns to the right of M. The supplied template uses O and P. Header case and surrounding spaces are ignored; column positions and row order do not matter.
+- If the table is populated, include every condition from the grid exactly once, including conditions with no images. Condition names must match the grid exactly. Use unique positive integer ranks, as Excel numbers or digit-only text such as `"1"`. Gaps such as 10, 20, 30 are allowed. Blank rows are skipped. Formulas, merged table cells, duplicate headers/ranks/names, incomplete pairs, unknown names and missing conditions are rejected with an actionable message and cell references where applicable.
+- If both headers are absent, or both columns contain no entries, preserve first appearance in the grid (A through H, left to right). A single unmatched header is an error.
+- Apply order before palette assignment and filtering. Within each color block, conditions follow their ranks; panels follow the lowest-ranked condition in each block. Control need not come first. Empty conditions retain their position. The same order is used in PDF, PNG, Excel previews and condition summaries.
+- The right-hand table specifies display order only. Its fill and bold formatting do not define blocks or controls. Measurements, image filtering, statistical units and planned Holm comparison families are unchanged.
+- `Group_Order.csv` and the matching report sheet record the resolved ranks, source (`order_table` or `plate_grid`) and source cells. `Plate_Map`, `Run_Info`, `report_status.json`, `plot_style.json` and `5_marker_intensity_report.log` also record order metadata. Reports use schema version 6.
 
 ### Plots and statistical units
 

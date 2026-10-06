@@ -150,7 +150,9 @@ def plot_panels(data):
         blocks.setdefault('', []).extend(remaining)
     context, _ = short_labels(data['groups'])
     panels = []
-    for index, (color, members) in enumerate(blocks.items(), 1):
+    positions = {group: index for index, group in enumerate(data['groups'])}
+    ordered_blocks = sorted(blocks.items(), key=lambda item: min(positions[g] for g in item[1]))
+    for index, (color, members) in enumerate(ordered_blocks, 1):
         groups = [group for group in data['groups'] if group in members]
         prefix, labels = short_labels(groups)
         heading = prefix
@@ -174,6 +176,9 @@ def prepare_plot_style(data, min_nuclei=None):
                                 data.get('calibration_images_before_filter', data['images']),
                                 data.get('min_nuclei', 0) if min_nuclei is None else min_nuclei)
     style['Particle_size_px2'] = data.get('particle_size')
+    style['Condition_order_source'] = data.get('group_order_source', 'plate_grid')
+    style['Condition_order'] = data['groups']
+    style['Group_order'] = data.get('group_order', [])
     return style
 
 

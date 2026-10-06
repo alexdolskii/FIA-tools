@@ -81,6 +81,8 @@ Create `input_paths.json` with the folders containing **original images**, not r
 
 **Before generating a report**, put one 96-well Excel layout (`.xlsx`, any filename) inside each selected `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` folder, or supply `--template`. That folder is created by the collector. The plate grid has column numbers **1–12 in B1:M1**, row letters **A–H in A2:A9**, and condition names in **B2:M9**. For statistics, direct solid fill colors define comparison blocks and exactly one condition per color is **bold** to mark the control. The report requires the layout even when statistics are disabled. An explicit `--template` applies to every selected collection; otherwise each collection supplies its own layout.
 
+Start with the blank [FIA 96-well template](templates/FIA_96_well_plate_template.xlsx), which includes condition drop-downs, input checks and an `Instructions` sheet. The optional **Order / Group** table sets the order of conditions on every plot and in condition summaries. List every condition exactly once with a unique positive integer rank; `Groups` is also accepted as a header. An absent or entirely empty table keeps plate-grid order. Colors and bold control roles are read from the grid. See [ordering rules](docs/REFERENCE.md#plate-map-convention).
+
 ## Run the analysis
 
 Wait for each command to finish and review its status before continuing. The first two commands are shared by both routes. Thresholds below are defaults or labeled examples; choose and record values appropriate to the experiment.

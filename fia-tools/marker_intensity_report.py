@@ -283,6 +283,7 @@ def report_tables(data, output, manifest):
         ('Count test exception', 'Requested nucleus mode uses images for count tests; well mode uses wells.'),
         ('Well aggregation', 'Mean per image across usable nuclei, then mean of usable image means per well. Equal image weight.'),
         ('Missing data', 'Missing marker measurements are blank, not zero. Excluded images contribute to no analytical metric or test; they appear only on diagnostic Nuclei_count_all. Retained zero-nucleus images contribute zero to counts and no value to morphology/intensity means. Wells or conditions with no usable observations keep blank measurements and n=0. Measured zero intensity in a retained nucleus remains valid.'),
+        ('Condition order', 'A complete optional Order/Group table sets condition order before filtering and palette assignment. Without a populated table, use first appearance in the plate grid. Within each color block, follow that order; panels follow the earliest condition in each block. Group_Order records ranks, source and Excel cells. Order never defines the control or changes comparison families.'),
         ('Tests', 'Two-sided Welch comparisons of each treatment to the bold control in its plate-map color block.'),
         ('Multiplicity', 'Holm family includes count, available physical/pixel morphology cohorts (each nucleus enters only one unit cohort per size metric) and six metrics per selected marker, across all treatments in a color block, including unavailable planned tests.'),
         ('Confidence intervals', '95% Welch intervals for treatment minus control; nominal, not multiplicity-adjusted.'),
@@ -310,10 +311,12 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 5, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 6, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
+        'Condition_order_source': data['group_order_source'],
+        'Condition_order': json.dumps(data['groups'], ensure_ascii=False),
         'Requested_statistics_unit': unit, 'Non_border_nuclei': len(data['nuclei']),
         'Morphology_summary_observation_unit': 'well' if data['stats_unit'] == 'well' else 'nucleus',
         'Morphology_summary_population': 'Non-border nuclei from images retained by the optional --min-nuclei filter.',
@@ -347,6 +350,7 @@ def report_tables(data, output, manifest):
         'Image_Values': as_table(data['image_values'], inputs.IMAGE_VALUE_COLUMNS),
         'Well_Values': as_table(data['well_values']),
         'Plate_Map': as_table(data['design']),
+        'Group_Order': as_table(data['group_order']),
         'Plot_Data': as_table(data['plot_data'], PLOT_COLUMNS),
         'Plot_Labels': as_table(data['plot_labels'], LABEL_COLUMNS),
         'Plot_Info': as_table(data['plots']),
@@ -461,6 +465,8 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
         data['nuclei_columns'] = [c for c in source_columns if not any(c.startswith(m + '_') for m in excluded)]
         inputs.annotate(data, plate_map, selected, stats_unit, sheet)
+        logger.info('CONDITION_ORDER | source=%s | groups=%s', data['group_order_source'],
+                    json.dumps(data['group_order'], ensure_ascii=False))
         data['plot_style'] = prepare_plot_style(data, min_nuclei)
         for warning in data['plot_style']['warnings']:
             data['notes'].append(warning)
@@ -542,6 +548,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                      Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
                      Min_nuclei=data['min_nuclei'], Plot_format=plot_format,
                      Plot_style_version=data['plot_style']['Style_version'], Plot_style_file=style_file.name,
+                     Condition_order_source=data['group_order_source'], Condition_order=data['groups'],
                      Planned_comparisons=len(data['statistics']),
                      Tested_comparisons=sum(r['Status'] == 'TESTED' for r in data['statistics']))
         logger.info('REPORT_VERIFIED | status=SUCCESS | %s', output / 'report_status.json')

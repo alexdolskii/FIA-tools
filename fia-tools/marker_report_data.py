@@ -264,6 +264,67 @@ def _color(cell):
     return f'{color.type}:{color.value}:tint={color.tint}'
 
 
+def _template_group_order(sheet, design):
+    """Validate optional Order/Group columns without changing well assignments or roles."""
+    groups = list(dict.fromkeys(row['Group'] for row in design))
+    columns = {'order': [], 'group': []}
+    for cell in sheet[1][13:]:
+        header = str(cell.value or '').strip().casefold()
+        if header in ('order', 'group', 'groups'):
+            columns['order' if header == 'order' else 'group'].append(cell)
+    explicit = {}
+    if any(columns.values()):
+        if any(len(cells) != 1 for cells in columns.values()):
+            found = ', '.join(cell.coordinate for cells in columns.values() for cell in cells)
+            raise ValidationError(
+                f'{sheet.title}: expected one Order and one Group (or Groups) header '
+                f'in row 1 to the right of the plate grid; found headers at {found}')
+        order_col, group_col = (columns[key][0].column for key in ('order', 'group'))
+        if any(area.min_col <= col <= area.max_col
+               for area in sheet.merged_cells.ranges for col in (order_col, group_col)):
+            raise ValidationError('Do not merge cells in the Order/Group columns')
+        numbers = {}
+        for row in range(2, sheet.max_row + 1):
+            number, name = sheet.cell(row, order_col), sheet.cell(row, group_col)
+            blank = [cell.value is None or (isinstance(cell.value, str) and not cell.value.strip())
+                     for cell in (number, name)]
+            if all(blank):
+                continue
+            location = f'{number.coordinate}/{name.coordinate}'
+            if any(blank):
+                raise ValidationError(f'{location}: fill both Order and Group, or leave both blank')
+            if name.data_type in ('f', 'e') or not isinstance(name.value, str):
+                raise ValidationError(f'{name.coordinate}: Group must be literal text matching the plate grid')
+            value = number.value
+            if isinstance(value, str) and re.fullmatch(r'[0-9]+', value.strip()):
+                value = int(value.strip())
+            if (number.data_type in ('f', 'e') or isinstance(value, bool)
+                    or not isinstance(value, (int, float)) or not math.isfinite(value)
+                    or value <= 0 or int(value) != value):
+                raise ValidationError(f'{number.coordinate}: Order must be a positive whole number')
+            value = int(value)
+            if name.value not in groups:
+                raise ValidationError(f'{name.coordinate}: unknown Group {name.value!r}; '
+                                      'use the exact condition name from the plate grid')
+            if name.value in explicit:
+                raise ValidationError(f'{name.coordinate}: repeated Group {name.value!r}; '
+                                      f'already listed at {explicit[name.value]["Order_group_cell"]}')
+            if value in numbers:
+                raise ValidationError(f'{number.coordinate}: repeated Order {value}; '
+                                      f'already used at {numbers[value]}')
+            numbers[value] = number.coordinate
+            explicit[name.value] = {'Group_order': value, 'Order_source': 'order_table',
+                                    'Order_cell': number.coordinate, 'Order_group_cell': name.coordinate}
+        missing = [group for group in groups if group not in explicit]
+        if explicit and missing:
+            raise ValidationError('Order/Group table is incomplete; add conditions: ' + ', '.join(map(repr, missing)))
+    for row in design:
+        row.update(explicit.get(row['Group'], {
+            'Group_order': groups.index(row['Group']) + 1, 'Order_source': 'plate_grid',
+            'Order_cell': '', 'Order_group_cell': '',
+        }))
+
+
 def read_template(path, files, sheet_name=None, statistics=False):
     book = load_workbook(io.BytesIO(collect.snapshot(path, files)), read_only=False, data_only=False)
     try:
@@ -292,6 +353,7 @@ def read_template(path, files, sheet_name=None, statistics=False):
                                'Color': _color(cell) if statistics or direct_fill else ''})
         if not design:
             raise ValidationError('No annotated wells')
+        _template_group_order(sheet, design)
         return sheet.title, design
     finally:
         book.close()
@@ -314,7 +376,7 @@ def find_template(collection, sheet_name=None):
         if rejected:
             raise PlateMapError(
                 'INVALID_PLATE_MAP', 'Excel file(s) were found, but none was recognized as a valid experiment layout.',
-                collection, 'Check the 96-well grid at A1:M9 and annotated wells; use --sheet if the layout '
+                collection, 'Check the 96-well grid at A1:M9, annotated wells and optional Order/Group table; use --sheet if the layout '
                 'is on another worksheet. Then rerun the report.', '\n'.join(rejected))
         raise PlateMapError(
             'MISSING_PLATE_MAP', 'Excel experiment layout (.xlsx) is missing from the selected collection.',
@@ -342,7 +404,7 @@ def select_template(collection, template=None, sheet_name=None):
         read_template(path, {}, sheet_name)
     except (OSError, ValueError, KeyError, BadZipFile) as error:
         raise PlateMapError('INVALID_PLATE_MAP', 'The specified Excel file is not a valid experiment layout.',
-                            path, 'Check the 96-well grid at A1:M9, annotated wells and --sheet, then rerun the report.',
+                            path, 'Check the 96-well grid at A1:M9, optional Order/Group table and --sheet, then rerun the report.',
                             str(error)) from error
     return path
 
@@ -360,7 +422,12 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
         if row['Well'] not in mapping:
             raise ValidationError(f'Unannotated imaged well: {row["Well"]}')
         row['Group'] = mapping[row['Well']]
-    groups = list(dict.fromkeys(row['Group'] for row in design))
+    annotations = {row['Group']: row for row in design}
+    groups = sorted(annotations, key=lambda group: annotations[group]['Group_order'])
+    group_order = [{'Group': group, 'Order': annotations[group]['Group_order'],
+                    'Source': annotations[group]['Order_source'],
+                    'Order_cell': annotations[group]['Order_cell'],
+                    'Group_cell': annotations[group]['Order_group_cell']} for group in groups]
     blocks, roles = {}, {}
     if stats_unit is not None:
         for row in design:
@@ -368,7 +435,9 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
             if row['Group'] in roles and roles[row['Group']] != identity:
                 raise ValidationError(f'Inconsistent fill or control role: {row["Group"]}')
             roles[row['Group']] = identity
-            blocks.setdefault(row['Color'], {})[row['Group']] = row['Is_control']
+        for group in groups:
+            color, control = roles[group]
+            blocks.setdefault(color, {})[group] = control
         for color, members in blocks.items():
             if sum(members.values()) != 1 or len(members) < 2:
                 raise ValidationError(f'{color}: each comparison block needs one control condition and a treatment')
@@ -380,7 +449,8 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
                 if any(field.startswith(marker + '_') for marker in excluded):
                     del row[field]
     data.update(markers=markers, template=Path(template), template_sheet=sheet,
-                design=design, groups=groups, blocks=blocks, stats_unit=stats_unit)
+                design=design, groups=groups, blocks=blocks, stats_unit=stats_unit,
+                group_order=group_order, group_order_source=group_order[0]['Source'])
     return data
 
 
