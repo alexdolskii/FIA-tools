@@ -5,9 +5,6 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('quantify_nuclear_intensity'))
 
 
-from assay_layout import ASSAY_DIR, MARKERS_DIR
-from run_resources import temporary_path
-
 import csv
 import json
 import logging
@@ -16,14 +13,19 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import image_exclusions as exclusions
 import numpy as np
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR, MARKERS_DIR
+from intensity_run_log import IntensityJournal
+from interactive_input import Cancelled, ask_choice, ask_integer
+from interactive_input import choose_indices as choose
+from interactive_input import parse_selection as parse_selection
 from nuclear_intensity_imagej import METRICS, ImageJEngine
 from openpyxl import Workbook
 from openpyxl.cell import WriteOnlyCell
+from run_resources import temporary_path
 from terminal_progress import CompactProgress
-from intensity_run_log import IntensityJournal
-from interactive_input import Cancelled, ask_choice, ask_integer, choose_indices as choose, parse_selection
 
 RUN_PATTERN = re.compile(r'^Final_Nuclei_Mask_(\d{8}_\d{6})$')
 MARKER_PATTERN = re.compile(r'^Foci_([1-9][0-9]*)_Channel_([1-9][0-9]*)$')
@@ -142,6 +144,8 @@ def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
     record = {'dataset': experiment['root'], 'path': run, 'pairs': [],
               'metadata': {}, 'errors': [], 'mask_count': 0, 'marker': marker}
     try:
+        excluded = exclusions.load_exclusions(run)
+        record['processing_exclusions'] = excluded
         masks = visible_files(run, {'.tif', '.tiff'})
         record['mask_count'] = len(masks)
         if progress:
@@ -176,6 +180,10 @@ def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
             if raw.suffix.lower() in extensions:
                 sources.setdefault(raw.stem, []).append(raw)
         for mask in masks:
+            if exclusions.image_key(mask.name) in excluded:
+                if progress and progress.logger:
+                    progress.logger.warning('IMAGE_EXCLUDED | file=%s | prior processing failure', mask)
+                continue
             if progress:
                 progress.begin_image(mask.name)
                 progress.phase("Validating source and masks")
@@ -426,6 +434,8 @@ def save_tables(output, nuclei, images, info):
         ('Run_Info', 'Nuclear_Intensity_Run_Info.csv', ['Parameter', 'Value'],
          [{'Parameter': key, 'Value': json.dumps(value, default=str) if isinstance(value, (dict, list))
            else value} for key, value in info.items()]),
+        ('Processing_Exclusions', exclusions.TABLE, exclusions.COLUMNS,
+         list(exclusions.load_exclusions(output).values())),
     )
     for sheet_name, filename, columns, rows in tables:
         temporary = temporary_path(output / filename, output / (filename + '.tmp'))
@@ -484,6 +494,11 @@ def analyze_run(record, output, mode, engine, batch_path, progress=None, audit=N
 
 
 def _analyze_run(record, output, mode, engine, batch_path, progress, logger):
+    excluded = exclusions.load_exclusions(record['path'])
+    excluded.update(record.get('processing_exclusions', {}))
+    record['pairs'] = [pair for pair in record['pairs'] if exclusions.image_key(pair['source']) not in excluded]
+    exclusions.write_snapshot(output, excluded)
+    logger.info('PROCESSING_EXCLUSIONS | count=%s | table=%s', len(excluded), exclusions.TABLE)
     channel = record['marker']['channel']
     marker_identity = {'Marker_folder': record['marker']['name'],
                        'Marker_folder_path': str(record['marker']['folder']),
@@ -510,6 +525,7 @@ def _analyze_run(record, output, mode, engine, batch_path, progress, logger):
         'Error_policy': 'A failed image exports no nucleus rows; counts unknown before ID-map validation are blank',
         'Nucleus_ID': 'Original Morphology_QC ID; never renumbered; local to image and mask run',
         'Source_fingerprints': [pair['fingerprints'] for pair in record['pairs']],
+        'Processing_exclusions': list(excluded),
     }
     write_json(output / 'intensity_run.json', info)
     logger.info('PARAMETERS | %s', {key: value for key, value in info.items() if key != 'Source_fingerprints'})

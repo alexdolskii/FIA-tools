@@ -4,8 +4,6 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('quantify_foci'))
 
-from assay_layout import ASSAY_DIR
-
 import itertools
 import logging
 import os
@@ -15,9 +13,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import image_exclusions as exclusions
 import numpy as np
 import pandas as pd
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR
 from interactive_input import Cancelled, ask_yes_no, cancelable
 from PIL import Image, ImageDraw
 from skimage import io, measure
@@ -519,10 +519,11 @@ def gather_paths_and_channels(base_folder: str):
     fia_assay_folder = os.path.join(base_folder,
                                      ASSAY_DIR)
     nuclei_mask_folder = get_nuclei_mask_folder(fia_assay_folder)
+    excluded = exclusions.load_exclusions(nuclei_mask_folder)
 
     nuclei_files = []
     for f in os.listdir(nuclei_mask_folder):
-        if not f.startswith('.') and f.endswith(".tif"):
+        if not f.startswith('.') and f.endswith(".tif") and exclusions.image_key(f) not in excluded:
             nuclei_files.append(os.path.join(nuclei_mask_folder, f))
 
     latest_foci = get_latest_foci_folders(fia_assay_folder)
@@ -533,6 +534,8 @@ def gather_paths_and_channels(base_folder: str):
                       os.listdir(foci_folder_path)
                       if not fn.startswith('.') and fn.endswith(".tif")]
         for tif_file in foci_files:
+            if exclusions.image_key(tif_file) in excluded:
+                continue
             foci_key = extract_image_key(tif_file)
             if foci_key not in channels_dict:
                 channels_dict[foci_key] = {}
@@ -660,6 +663,11 @@ def main_summarize_res(input_json_path: str, njobs=4):
         if not nuclei_files:
             logging.warning(f"No nuclei files in {base_folder}")
             continue
+
+        excluded = exclusions.load_exclusions(Path(nuclei_files[0]).parent)
+        excluded.update(exclusions.load_exclusions(fia_assay_folder))
+        exclusions.write_snapshot(results_folder, excluded)
+        logging.info('PROCESSING_EXCLUSIONS | count=%s | table=%s', len(excluded), exclusions.TABLE)
 
         df_results = parallel_processing(
             nuclei_files=nuclei_files,

@@ -105,20 +105,21 @@ def collect(morph, markers):
     return collector.collect_one(bundle, context, markers, 'input_paths.json')
 
 
-def test_complete_collection_has_only_spreadsheets_and_exact_source_copies(tmp_path):
+def test_complete_collection_has_spreadsheets_exclusions_and_exact_source_copies(tmp_path):
     morph = create_morphology(tmp_path / 'experiment, A')
     first = create_intensity(morph)
     second = create_intensity(morph, 'Foci_2_Channel_3')
     before = {path: path.read_bytes() for path in morph[0].parent.rglob('*') if path.is_file()}
     ok, output = collect(morph, ['Foci_1_Channel_2', 'Foci_2_Channel_3'])
     assert ok and output.parent == morph[0].parent and output.name.startswith(collector.OUTPUT_PREFIX)
-    assert len(list(output.iterdir())) == 15
-    assert all(path.is_file() and path.suffix in ('.csv', '.xlsx') for path in output.iterdir())
+    assert len(list(output.iterdir())) == 17
+    assert all(path.is_file() and (path.suffix in ('.csv', '.xlsx') or path.name == 'excluded_images.json')
+               for path in output.iterdir())
     for filename in ('Nuclei_Morphology.xlsx', 'Nuclei_Morphology.csv', 'Nuclei_Images.csv', 'Nuclei_Run_Info.csv'):
         assert (output / filename).read_bytes() == before[morph[0] / filename]
     for marker, source in [('Foci_1_Channel_2', first), ('Foci_2_Channel_3', second)]:
         for path in source.iterdir():
-            if path.suffix in ('.csv', '.xlsx'):
+            if path.suffix in ('.csv', '.xlsx') and path.name != 'Processing_Exclusions.csv':
                 assert (output / collector.copy_name(path, marker)).read_bytes() == before[path]
     nuclei = sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')
     images = sheet_rows(output / collector.COMBINED_NAME, 'Images')
@@ -364,9 +365,9 @@ def test_collection_ignores_sidecars_created_during_export(tmp_path, appledouble
     ok, output = collect(morph, ['Foci_1_Channel_2'])
     assert ok
     events = appledouble_filesystem
-    assert all(not name.startswith('.') for name in events['moves'])
+    assert all(not name.startswith('.') or name == '.excluded_images.json.tmp' for name in events['moves'])
     assert events['moves'][-1] == collector.COMBINED_NAME
-    assert len(events['moves']) == 11
+    assert len(events['moves']) == 14
     assert not (output / 'unrelated.csv').exists()
     assert not (output / '.DS_Store').exists()
     assert (output / 'Nuclei_Images.csv').read_bytes() == (morph[0] / 'Nuclei_Images.csv').read_bytes()

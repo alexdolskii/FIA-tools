@@ -4,12 +4,13 @@ import csv
 import math
 import re
 from pathlib import Path
-from run_resources import temporary_path
 
+import image_exclusions as exclusions
 import numpy as np
 import spatial_calibration as spatial
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
+from run_resources import temporary_path
 from scyjava import jimport
 
 METRICS = [
@@ -350,10 +351,14 @@ class NucleiMorphologyExport:
                   ("Images", IMAGE_COLUMNS, self.images),
                   ("Run_Info", ["Parameter", "Value"],
                    [dict(zip(("Parameter", "Value"), pair)) for pair in self.run_info()])]
+        excluded = exclusions.load_exclusions(self.output)
+        tables.append(('Processing_Exclusions', exclusions.COLUMNS, list(excluded.values())))
         workbook = Workbook()
         workbook.remove(workbook.active)
         for name, columns, records in tables:
             csv_name = "Nuclei_Morphology.csv" if name == "Nuclei" else f"Nuclei_{name}.csv"
+            if name == 'Processing_Exclusions':
+                csv_name = exclusions.TABLE
             csv_path = self.output / csv_name
             temporary = temporary_path(csv_path, csv_path.with_name("." + csv_name + ".tmp"))
             with temporary.open("w", newline="", encoding="utf-8-sig") as handle:

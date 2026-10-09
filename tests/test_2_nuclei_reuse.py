@@ -267,9 +267,9 @@ class TestStarDistReuse(unittest.TestCase):
         with patch.object(mod, "validate_folders", return_value=[str(self.source)]), \
              patch.object(mod, "StarDist2D"), \
              patch.object(mod, "process_nuclei") as process:
-            with self.assertRaisesRegex(ValueError, "Incomplete StarDist"):
-                mod.main("unused.json", 2000)
+            mod.main("unused.json", 2000)
         process.assert_not_called()
+        self.assertTrue((self.source.parent / 'excluded_images.json').is_file())
 
     def test_same_second_runs_never_overwrite(self):
         with patch.object(mod, "datetime") as clock:

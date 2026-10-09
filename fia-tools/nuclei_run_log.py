@@ -100,18 +100,20 @@ class NucleiLogSession:
                 stages = record['stages']
                 states = set(stages.values())
                 # Preserve a folder already finished before a later folder failed.
-                completed = (stages.get('imagej') == 'COMPLETE'
-                             and states <= {'COMPLETE'})
+                completed = (stages.get('imagej') in ('COMPLETE', 'COMPLETE_WITH_EXCLUSIONS')
+                             and states <= {'COMPLETE', 'COMPLETE_WITH_EXCLUSIONS'})
                 if 'FAILED' in states:
                     status = 'FAILED'
                 elif 'CANCELLED' in states:
                     status = 'CANCELLED'
                 elif completed:
-                    status = 'COMPLETE'
+                    status = 'COMPLETE_WITH_EXCLUSIONS' if 'COMPLETE_WITH_EXCLUSIONS' in states else 'COMPLETE'
                 elif exc_type and issubclass(exc_type, CANCELLATION_EXCEPTIONS):
                     status = 'CANCELLED'
                 elif exc_type or states & {'INCOMPLETE', 'NO_INPUT'}:
                     status = 'INCOMPLETE'
+                elif 'NO_ELIGIBLE_IMAGES' in states:
+                    status = 'NO_ELIGIBLE_IMAGES'
                 elif self.require_imagej:
                     status = 'INCOMPLETE'
                 else:
@@ -232,7 +234,7 @@ class _TerminalWarnings(logging.Handler):
 
     def emit(self, record):
         # Full tracebacks belong in the journal; retain actionable errors here.
-        if not getattr(record, 'label_contrast_notice', False):
+        if not getattr(record, 'label_contrast_notice', False) and not getattr(record, 'file_only', False):
             self.progress.message(f'{record.levelname}: {record.getMessage()}')
 
 

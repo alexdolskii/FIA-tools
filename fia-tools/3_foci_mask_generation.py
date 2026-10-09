@@ -4,15 +4,16 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('generate_foci_mask'))
 
-from assay_layout import ASSAY_DIR, MARKERS_DIR
 import logging
 import os
 from datetime import datetime
 from pathlib import Path
 
 import fiji_config
+import image_exclusions as exclusions
 import imagej
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR, MARKERS_DIR
 from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
 from scyjava import jimport
 from validate_folders import validate_input_file
@@ -214,6 +215,11 @@ def filter_foci(folder: dict,
         if not f.startswith('.')
         and f.lower().endswith((".tif", ".tiff"))
     ]
+    excluded = exclusions.load_exclusions(fia_assay_folder)
+    omitted = [name for name in foci_files if exclusions.image_key(name) in excluded]
+    foci_files = [name for name in foci_files if exclusions.image_key(name) not in excluded]
+    if omitted:
+        print(f'  - Processing exclusions: {len(omitted)} image(s). See logs/2_excluded_images.log')
     if not foci_files:
         print(f"  - No TIF/TIFF files found in "
               f"{subfolder_path}. Nothing to do.\n")
@@ -236,6 +242,7 @@ def filter_foci(folder: dict,
     foci_mask_folder = os.path.join(foci_masks_base,
                                     result_subfolder_name)
     os.makedirs(foci_mask_folder, exist_ok=True)
+    exclusions.write_snapshot(foci_mask_folder, excluded)
 
     # Setup logging to file in the result subfolder
     file_handler = logging.FileHandler(os.path.join(foci_mask_folder,

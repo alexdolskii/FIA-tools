@@ -46,7 +46,7 @@ def test_empty_and_failed_images_have_distinct_counts(exporter):
         assert csv_rows[1][column] == ""
     book = load_workbook(exporter.output / "Nuclei_Morphology.xlsx")
     try:
-        assert book.sheetnames == ["Nuclei", "Images", "Run_Info"]
+        assert book.sheetnames == ["Nuclei", "Images", "Run_Info", "Processing_Exclusions"]
         assert book["Nuclei"].max_row == 1
         rows = read_sheet(book, "Images")
         assert rows[0]["Nuclei_count_total"] == 0

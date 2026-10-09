@@ -9,6 +9,7 @@ from pathlib import Path
 from zipfile import BadZipFile
 
 import collect_marker_intensity_results as collect
+import image_exclusions as exclusions
 import numpy as np
 import spatial_calibration as spatial
 from openpyxl import load_workbook
@@ -121,6 +122,13 @@ def load_collection(path, progress=None):
     path = Path(path)
     files = {}
     info = collection_info(path, files)
+    stored_exclusions = exclusions.read_manifest(path / exclusions.MANIFEST, files)
+    recorded_exclusions = [row for row in info if row.get('Category') == 'Processing exclusions'
+                           and row.get('Item') == 'Manifest']
+    if recorded_exclusions:
+        content = files.get(path / exclusions.MANIFEST, b'')
+        if len(recorded_exclusions) != 1 or hashlib.sha256(content).hexdigest() != recorded_exclusions[0].get('SHA256'):
+            raise ValidationError('Processing exclusion snapshot is missing or changed since collection')
     copied_rows = [r for r in info if r.get('Category') == 'Copied spreadsheet' and r.get('Status') == 'COPIED']
     copied = _unique(copied_rows, lambda row: row['Item'], 'copied spreadsheet')
     if progress:
@@ -145,6 +153,7 @@ def load_collection(path, progress=None):
     morphology = {'run': Path(run_id), 'metadata': {'particle_size_pixels_squared': meta.get('Particle_size_px2')},
                   'tables': tables}
     collect.validate_rows(morphology, 'morphology')
+    exclusions.filter_bundle(morphology, stored_exclusions)
     combined = {
         'Nuclei': collect.csv_snapshot(path / 'FIA_Marker_Intensity_Nuclei.csv', files,
                                       ['Mask_name', 'Nucleus_ID', 'Nuclei_run_ID', 'Image_name', 'Source_file']),
@@ -182,6 +191,7 @@ def load_collection(path, progress=None):
                 progress.advance(marker)
             continue
         bundle = _read_intensity(path, marker, files, copied)
+        exclusions.filter_bundle(bundle, stored_exclusions)
         collect.validate_compatibility(morphology, bundle)
         bundles[marker] = bundle
         for sheet, merged, source in (('Nuclei', merged_nuclei, bundle['nuclei']),
@@ -222,7 +232,12 @@ def load_collection(path, progress=None):
         nuclei.append(record)
         if progress:
             progress.advance(record['Image_name'])
+    active_exclusions = exclusions.load_exclusions(path, files)
+    images = [row for row in images if exclusions.image_key(row['Mask_name']) not in active_exclusions]
+    nuclei = [row for row in nuclei if exclusions.image_key(row['Mask_name']) not in active_exclusions]
     return {'path': path, 'files': files, 'info': info, 'images': images, 'nuclei': nuclei,
+            'image_columns': combined['Images'][0] + ['Group'],
+            'processing_exclusions': active_exclusions,
             'markers': markers, 'availability': availability, 'bundles': bundles,
             'run_id': run_id, 'particle_size': morphology['particle_size'], 'notes': []}
 
@@ -418,6 +433,12 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
         raise ValidationError('Multiple marker folders refer to the same channel; select one result per channel')
     sheet, design = read_template(template, data['files'], sheet_name, statistics=stats_unit is not None)
     mapping = {row['Well']: row['Group'] for row in design}
+    processing_rows = []
+    for row in data.get('processing_exclusions', {}).values():
+        matches = WELL_PATTERN.findall(row['Image_key'])
+        well = f'{matches[0][0].upper()}{int(matches[0][1]):02d}' if len(matches) == 1 else ''
+        processing_rows.append({**row, 'Well': well, 'Group': mapping.get(well, '')})
+    data['processing_exclusion_rows'] = processing_rows
     for row in data['nuclei'] + data['images']:
         if row['Well'] not in mapping:
             raise ValidationError(f'Unannotated imaged well: {row["Well"]}')
@@ -464,7 +485,8 @@ def filter_images(data, min_nuclei=0):
         if min_nuclei else 'Image count filtering disabled; zero-count images retained.')
     images = data['images']
     data['calibration_images_before_filter'] = images
-    data['image_columns'] = list(dict.fromkeys(key for row in images for key in row))
+    data['image_columns'] = list(dict.fromkeys(key for row in images for key in row)) or data.get(
+        'image_columns', ['Image_name', 'Mask_name', 'Well', 'Group', *collect.COUNTS])
     data['images_before_filter'] = len(images)
     excluded = {row['Mask_name'] for row in images if row[COUNT] < min_nuclei}
     data['excluded_images'] = [
@@ -479,6 +501,7 @@ def filter_images(data, min_nuclei=0):
         retained = [row for row in original if row['Mask_name'] not in excluded]
         data['image_filter_summary'].append({
             'Group': group, 'Images_total': len(original),
+            'Processing_excluded': sum(row.get('Group') == group for row in data.get('processing_exclusion_rows', [])),
             'Images_excluded': len(original) - len(retained), 'Images_used': len(retained),
             'Wells_with_images': len({row['Well'] for row in original}),
             'Wells_used': len({row['Well'] for row in retained}),

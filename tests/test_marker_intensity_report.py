@@ -343,9 +343,9 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     counts = sheet_rows(output / report.WORKBOOK, 'Image_Filter_Summary')
     assert counts == [
         {'Group': 'Control', 'Images_total': 1, 'Images_excluded': 1, 'Images_used': 0,
-         'Wells_with_images': 1, 'Wells_used': 0},
+         'Wells_with_images': 1, 'Wells_used': 0, 'Processing_excluded': 0},
         {'Group': 'Treatment', 'Images_total': 0, 'Images_excluded': 0, 'Images_used': 0,
-         'Wells_with_images': 0, 'Wells_used': 0},
+         'Wells_with_images': 0, 'Wells_used': 0, 'Processing_excluded': 0},
     ]
     assert all(row['Value'] is None and row['N_images_used'] == 0
                for row in sheet_rows(output / report.WORKBOOK, 'Well_Values'))

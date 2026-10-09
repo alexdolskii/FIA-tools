@@ -5,10 +5,6 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('fia_marker_intensity_report'))
 
 
-from assay_layout import ASSAY_DIR
-from run_resources import temporary_path
-
-from cli_arguments import parse_arguments
 import csv
 import hashlib
 import json
@@ -19,19 +15,28 @@ from io import BytesIO
 from pathlib import Path
 
 import collect_marker_intensity_results as collect
+import image_exclusions as exclusions
 import marker_report_data as inputs
 import matplotlib
 import numpy as np
 import openpyxl
 import scipy
+from assay_layout import ASSAY_DIR
+from cli_arguments import parse_arguments
 from interactive_input import ask_choice
-from table_workflow import TableJournal, TableProgress
-from marker_report_plots import LABEL_COLUMNS, PLOT_COLUMNS, prepare_plot_style, render_plots
+from marker_report_plots import (
+    LABEL_COLUMNS,
+    PLOT_COLUMNS,
+    prepare_plot_style,
+    render_plots,
+)
 from marker_report_statistics import STAT_COLUMNS, calculate_statistics, observations
 from openpyxl.cell import WriteOnlyCell
 from openpyxl.drawing.image import Image
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from run_resources import temporary_path
+from table_workflow import TableJournal, TableProgress
 
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Report_'
 WORKBOOK = 'FIA_Marker_Intensity_Report.xlsx'
@@ -269,6 +274,7 @@ def report_tables(data, output, manifest):
     notes = [
         ('Population', 'Non-border nuclei from images retained by the optional --min-nuclei filter. No intensity threshold or additional nucleus-level filtering.'),
         ('Image exclusion', data['image_exclusion_rule'] + ' Applied to all metrics before aggregation and tests. Excluded_Images lists files, counts, threshold and reasons; Image_Filter_Summary counts original, excluded and retained images per condition. Inputs remain unchanged.'),
+        ('Processing exclusions', 'Processing_Exclusions records failed input images from the portable snapshot and current experiment registry. These images are removed before all metrics, diagnostic count plots and tests; never interpreted as zero nuclei. Images_total counts successfully processed images before the min-nuclei filter; Processing_excluded is separate.'),
         ('Count plot', 'One point = non-border nuclei in one image. Nuclei_count uses retained images. A positive --min-nuclei also creates Nuclei_count_all before filtering, with red edges below the threshold and no additional tests. Both count views share Y limits, condition colors, well shapes and point offsets. With no threshold (or 0), only Nuclei_count is needed, including zero-count images.'),
         ('Condition colors', 'Wada colors selected by the user: Dusky Green, Grayish Lavender A, Orange, Deep Indigo, Dull Blue Violet, Ivory Buff, Violet, Verditter Blue. Apply to violin bodies and boxplots; contrast-selected medians. An explicitly marked control gets lavender without changing axis order. Without an unambiguous control, lavender is an ordinary second color. Nine or more conditions use green tints with up to 75% white; no quantitative meaning. All annotated conditions count before filtering.'),
         ('Image points', 'Neutral grey #D0D0D0 with #111314 edges; red #D62728 below --min-nuclei on Nuclei_count_all. Shapes identify technical wells within each condition: 12 geometric shapes, then numbers. Sorted plate wells include missing images; image offsets are deterministic. No nucleus dots on violins. plot_style.json records the complete mapping; Plot_Data records displayed image styles; Plot_Labels records condition fills and medians.'),
@@ -311,7 +317,7 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 6, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 7, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
@@ -331,6 +337,7 @@ def report_tables(data, output, manifest):
         'Plot_export_policy': 'One complete overview per plotted metric in the selected format (pdf, png or both), with all panels. Excel always embeds raster previews; PDF-only previews stay in memory. No separate panel files.',
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
         'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
+        'Processing_excluded': len(data.get('processing_exclusions', {})),
         'Min_nuclei': data['min_nuclei'],
         'Spatial_units_policy': 'Calibrated images: um2/um only; uncalibrated images: separate px2/px results; RawIntDen unchanged',
         'Python': sys.version.split()[0],
@@ -345,6 +352,7 @@ def report_tables(data, output, manifest):
         'Nuclei': as_table(data['nuclei'], data['nuclei_columns'] + ['Group']),
         'Images': as_table(data['images'], data['image_columns']),
         'Excluded_Images': as_table(data['excluded_images'], inputs.EXCLUDED_IMAGE_COLUMNS),
+        'Processing_Exclusions': as_table(data.get('processing_exclusion_rows', []), exclusions.COLUMNS + ['Well', 'Group']),
         'Image_Filter_Summary': as_table(data['image_filter_summary']),
         'Calibration_Summary': as_table(data['calibration_summary']),
         'Image_Values': as_table(data['image_values'], inputs.IMAGE_VALUE_COLUMNS),
@@ -468,6 +476,12 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         logger.info('CONDITION_ORDER | source=%s | groups=%s', data['group_order_source'],
                     json.dumps(data['group_order'], ensure_ascii=False))
         data['plot_style'] = prepare_plot_style(data, min_nuclei)
+        exclusions.write_snapshot(output, data.get('processing_exclusions', {}))
+        for row in data.get('processing_exclusions', {}).values():
+            logger.warning('PROCESSING_EXCLUSION | %s', row)
+        if data.get('processing_exclusions'):
+            (progress.message if progress else print)(
+                f"Processing exclusions: {len(data['processing_exclusions'])}; see Processing_Exclusions.csv")
         for warning in data['plot_style']['warnings']:
             data['notes'].append(warning)
             logger.warning('PLOT_STYLE | %s', warning)
@@ -546,6 +560,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                      Non_border_nuclei=len(data['nuclei']), Images=len(data['images']),
                      Images_before_filter=data['images_before_filter'],
                      Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
+                     Processing_excluded=len(data.get('processing_exclusions', {})),
                      Min_nuclei=data['min_nuclei'], Plot_format=plot_format,
                      Plot_style_version=data['plot_style']['Style_version'], Plot_style_file=style_file.name,
                      Condition_order_source=data['group_order_source'], Condition_order=data['groups'],

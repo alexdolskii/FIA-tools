@@ -96,6 +96,8 @@ generate_nuclei_mask -i input_paths.json
 
 The first command asks for input type and nuclei/marker channels. The second uses a minimum nucleus area of **2500 px²** by default. For example, `generate_nuclei_mask -i input_paths.json -p 200` uses 200 px² instead. Repeating the second command can reuse validated StarDist masks and create a new final-mask run.
 
+Images with unsafe normalization or failed StarDist inference are skipped and recorded in `fia_assay/logs/2_excluded_images.log`. A persistent `fia_assay/excluded_images.json` registry prevents their use in subsequent nuclei, intensity, foci, collection and report runs, including when older results are selected. Results carry a `Processing_Exclusions.csv` audit table. Failed images are never counted as zero-nucleus images; ordinary valid zero-nucleus images retain their existing meaning. See [processing exclusions](docs/REFERENCE.md#processing-exclusions).
+
 Prepared channels are 8-bit images for segmentation. **Nuclear marker intensity is measured from originals**, using MAX projection for Z-stacks; it is not measured from the prepared standard-deviation marker projections. See [projection, pixel-type and measurement rules](docs/REFERENCE.md#nuclear-marker-intensity).
 
 ### Route A: nuclear marker intensity and reports

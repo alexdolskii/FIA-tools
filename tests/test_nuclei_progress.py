@@ -238,7 +238,7 @@ def test_imagej_summary_distinguishes_masks_and_morphology_and_keeps_commands(
 def test_main_reports_incomplete_imagej_result(tmp_path, monkeypatch, capsys):
     source = str(make_source(tmp_path, 'main'))
     monkeypatch.setattr(mod, 'validate_folders', lambda path: [source])
-    monkeypatch.setattr(mod, 'select_stardist_sources', lambda paths: {source: 'reused'})
+    monkeypatch.setattr(mod, 'select_stardist_sources', lambda paths: {source: source})
     monkeypatch.setattr(mod, 'process_nuclei', lambda paths, size: False)
     mod.main('input.json', 2000)
     assert 'Step 2: Nuclei processing INCOMPLETE' in capsys.readouterr().out

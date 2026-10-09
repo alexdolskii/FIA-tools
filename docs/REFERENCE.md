@@ -108,9 +108,23 @@ Each input folder has one current journal, `fia_assay/2_log.log`, covering valid
 
 At the start of a new command invocation, the previous journal is moved to `fia_assay/logs/2_log_<timestamp>.log`, alongside the first program's archived journals. Rotation happens once per input folder; all later stages append to the same current file. Timestamps use UTC, and existing archive filenames are protected against collisions. File handlers are closed after each stage, including on failure or cancellation.
 
-The final `RUN_FINISHED` entry reports `COMPLETE`, `INCOMPLETE`, `FAILED` or `CANCELLED`. Cancellation during processing or at a reuse prompt is recorded without a traceback. If a later folder fails, an already completed folder retains `COMPLETE`; folders whose remaining stages were not run report `INCOMPLETE` (or `CANCELLED` when the batch was canceled). Invalid input JSON before any input folder is identified remains a terminal-only error.
+The final `RUN_FINISHED` entry reports `COMPLETE`, `COMPLETE_WITH_EXCLUSIONS`, `NO_ELIGIBLE_IMAGES`, `INCOMPLETE`, `FAILED` or `CANCELLED`. Cancellation during processing or at a reuse prompt is recorded without a traceback. If a later folder fails, an already completed folder retains its completed status; folders whose remaining stages were not run report `INCOMPLETE` (or `CANCELLED` when the batch was canceled). Invalid input JSON before any input folder is identified remains a terminal-only error.
 
 New runs no longer create `2_val_log.log` beside the input data, `2_log.log` inside a StarDist result folder, or `nuclei_log.log` inside a final-mask folder. Existing journals in those locations remain untouched as historical records, and reused StarDist folders remain unchanged. Run metadata JSON files continue to be saved with their corresponding masks.
+
+#### Processing exclusions
+
+StarDist inference runs in a separate persistent Python worker with the same model, normalization and prediction thresholds. Native failures such as `ClipperLib::clipperException` terminate that worker only. FIA records the current image as excluded and restarts the worker for the next eligible image. A model initialization failure stops the run instead of blacklisting healthy inputs. Saving/logging failures also stop the run. No dependency update or image bit-depth change is involved.
+
+Before inference, FIA verifies 2D uint8 input and finite normalized values. A nonconstant image whose default normalization percentiles (3 and 99.8) coincide is excluded before division can amplify rare pixels. A truly constant image remains eligible; a valid image with no detected nuclei is not a processing failure. Ordinary images use exactly the existing normalization and StarDist thresholds.
+
+Each experiment owns `fia_assay/excluded_images.json`. The append-only journal `fia_assay/logs/2_excluded_images.log` records the full image identity, source path and SHA-256, UTC time, stage, reason and error detail. This journal is cumulative across runs; the usual `2_log.log` still rotates normally. Exclusions match the full acquisition/field basename, not the well or Seq number, and apply only within that experiment. Repeating a command or replacing a source file does not silently reinstate an excluded image. Original input files and historical result folders are not deleted or modified.
+
+New StarDist runs record `complete_with_exclusions` when every input is accounted for by a saved mask or explicit exclusion. Only saved eligible masks proceed to ImageJ. Completed final-mask runs retain the existing `complete` metadata contract for their accepted images and record exclusions separately. The command journal reports `COMPLETE_WITH_EXCLUSIONS`; a folder with no eligible images reports `NO_ELIGIBLE_IMAGES` and does not create artificial final masks. Unexpected missing masks still invalidate reuse.
+
+Intensity and foci processing consult the registry before reading excluded images. Collection and reporting also filter measurements from older runs against current exclusions. Each result carries a portable `excluded_images.json` snapshot and `Processing_Exclusions.csv`; morphology, intensity, collection and report workbooks include a `Processing_Exclusions` sheet. The collection hashes its exclusion snapshot. Archived source spreadsheets retain their original bytes; their excluded measurements never enter the combined analytical tables. A report copied away from its experiment uses its collection's snapshot, without requiring the original image drive. A disconnected old archive cannot discover exclusions made after that archive was created.
+
+Processing exclusions are applied before count plots, intensity/morphology summaries, statistics and `--min-nuclei`. They are not zero-count observations and do not appear on diagnostic count plots. `Image_Filter_Summary` has a separate `Processing_excluded` column; `Images_total` describes successfully processed images before the minimum-nuclei filter. The report retains template conditions with no usable images as `n=0`. Invalid exclusion manifests stop analysis rather than silently reintroducing images.
 
 #### Repeat the area filter using existing StarDist masks
 
@@ -249,7 +263,7 @@ Each collection is saved inside the experiment’s analysis folder:
 
 `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/`
 
-Previous collections and source results are preserved. The new folder contains **only spreadsheets**, with no masks, images, ROIs, JSON files, or logs:
+Previous collections and source results are preserved. The new folder contains spreadsheets and an `excluded_images.json` audit snapshot, with no masks, images, ROIs or logs. `Processing_Exclusions.csv` and the matching workbook sheet record processing failures separately from measurements:
 
 | Files | Contents |
 | --- | --- |
@@ -264,7 +278,7 @@ The combined **Images** sheet preserves per-image morphology counts and summarie
 
 Missing intensity is explicitly marked `MISSING`, with blank measurement cells rather than zeros; the collection status is `SUCCESS_WITH_MISSING_INTENSITY`. **Collection_Info** records selected and rejected runs, settings, source paths, source SHA-256 checksums and collection status. Copied spreadsheets are byte-for-byte unchanged; their paths still refer to the original analysis folders. Long `Run_Info` text may already be truncated at Excel's 32,767-character cell limit; the copied CSV retains its full value.
 
-The collector checks agreement between each source workbook and its CSV copies, then checks that source tables/metadata have not changed during collection. Results are prepared in a temporary folder and only the expected spreadsheets are moved, with the combined workbook published last as the completion indicator. Hidden files, including macOS `._*` companions, are never selected for transfer; companions that disappear automatically during rollback do not interrupt cleanup. A validation conflict creates a new folder containing only `Collection_Report.xlsx`, and the command returns a nonzero status; other selected nuclei runs continue. File-operation failures are reported as `IO_FAILED`, separately from `VALIDATION_FAILED`. Review missing-data and diagnostic statuses before downstream analysis.
+The collector checks agreement between each source workbook and its CSV copies, then checks that source tables/metadata have not changed during collection. Results are prepared in a temporary folder and only the expected spreadsheets and exclusion snapshot are moved, with the combined workbook published last as the completion indicator. Hidden files, including macOS `._*` companions, are never selected for transfer; companions that disappear automatically during rollback do not interrupt cleanup. A validation conflict creates a new folder containing only `Collection_Report.xlsx`, and the command returns a nonzero status; other selected nuclei runs continue. File-operation failures are reported as `IO_FAILED`, separately from `VALIDATION_FAILED`. Review missing-data and diagnostic statuses before downstream analysis.
 
 The full command journal is `fia_assay/4_collect_marker_intensity.log` in each experiment. It opens during input discovery and records source validation, choices, parameters, image/nucleus counts, missing markers, saved outputs, elapsed time, warnings, errors and cancellation. Multiple selected nuclei runs append to one journal. On the next invocation, the previous journal moves once to `fia_assay/logs/4_collect_marker_intensity_<timestamp>.log`; timestamp collisions preserve both archives. Journals use UTC. An unavailable requested experiment or an experiment without valid morphology makes the command return nonzero; deliberately unselected runs remain unselected. Missing marker intensity retains the existing `SUCCESS_WITH_MISSING_INTENSITY` behavior.
 
@@ -284,7 +298,7 @@ For well-based statistics:
 fia_marker_intensity_report -i input_paths.json --stats-unit well
 ```
 
-Omit `--stats-unit` for plots and descriptive tables without hypothesis tests. The report reads spreadsheets only: it does not start ImageJ, read image pixels, repeat segmentation or change upstream results. Archived collector spreadsheets suffice even if the original image-drive paths are no longer accessible.
+Omit `--stats-unit` for plots and descriptive tables without hypothesis tests. The report reads spreadsheets and exclusion metadata: it does not start ImageJ, read image pixels, repeat segmentation or change upstream results. Archived collector spreadsheets and their exclusion snapshot suffice even if the original image-drive paths are no longer accessible.
 
 All valid experiment paths in the JSON are analyzed automatically. Collections are discovered only inside `fia_assay`. The default is the **latest completed collection per experiment**, with its full path and nuclei run printed before processing. A separate report is created for **each selected collection**, preserving different nuclei runs and particle-size settings. Use `--collections all` for every completed collection, or `--collections ask` for interactive selection (the menu accepts `latest`, `all`, `manual`, or their numeric aliases).
 
@@ -316,7 +330,7 @@ Optional plot order:
 - If both headers are absent, or both columns contain no entries, preserve first appearance in the grid (A through H, left to right). A single unmatched header is an error.
 - Apply order before palette assignment and filtering. Within each color block, conditions follow their ranks; panels follow the lowest-ranked condition in each block. Control need not come first. Empty conditions retain their position. The same order is used in PDF, PNG, Excel previews and condition summaries.
 - The right-hand table specifies display order only. Its fill and bold formatting do not define blocks or controls. Measurements, image filtering, statistical units and planned Holm comparison families are unchanged.
-- `Group_Order.csv` and the matching report sheet record the resolved ranks, source (`order_table` or `plate_grid`) and source cells. `Plate_Map`, `Run_Info`, `report_status.json`, `plot_style.json` and `5_marker_intensity_report.log` also record order metadata. Reports use schema version 6.
+- `Group_Order.csv` and the matching report sheet record the resolved ranks, source (`order_table` or `plate_grid`) and source cells. `Plate_Map`, `Run_Info`, `report_status.json`, `plot_style.json` and `5_marker_intensity_report.log` also record order metadata. Reports use schema version 7, including separate processing exclusions.
 
 ### Plots and statistical units
 
@@ -499,6 +513,8 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `fia_assay/logs/1_log_<timestamp>.log` | Previous channel-preparation journals preserved on rerun |
 | `fia_assay/2_log.log` | Current nuclei-generation run, from validation and mask selection through StarDist/ImageJ and morphology |
 | `fia_assay/logs/2_log_<timestamp>.log` | Previous nuclei-generation journals preserved on rerun |
+| `fia_assay/logs/2_excluded_images.log` | Cumulative audit of images excluded after a StarDist input or inference failure, including source path, hash, reason and time |
+| `fia_assay/excluded_images.json` | Persistent experiment-wide exclusion registry read by downstream analyses and repeated runs |
 | `fia_assay/3_nuclei_intensity.log` | Current nuclear-intensity command, including selection, validation and all marker/mask combinations |
 | `fia_assay/logs/3_nuclei_intensity_<timestamp>.log` | Previous nuclear-intensity journals preserved on rerun |
 | `fia_assay/4_collect_marker_intensity.log` | Current marker-collection command, including selection, checks and every selected nuclei run |

@@ -5,9 +5,6 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('fia_collect_marker_intensity_results'))
 
 
-from assay_layout import ASSAY_DIR, MARKERS_DIR
-from run_resources import temporary_directory
-
 import csv
 import hashlib
 import io
@@ -19,10 +16,13 @@ import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import image_exclusions as exclusions
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR, MARKERS_DIR
+from interactive_input import Cancelled, ask_choice, choose_indices
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell
-from interactive_input import Cancelled, ask_choice, choose_indices
+from run_resources import temporary_directory
 from table_workflow import TableJournal, TableProgress
 
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Combined_Results_'
@@ -295,6 +295,9 @@ def load_morphology(run):
     expected = {Path(name).stem + '_processed.tif' for name in processed}
     if len(expected) != len(processed) or expected != set(bundle['images']):
         raise ValidationError('Morphology images differ from the completed nuclei manifest')
+    exclusions.filter_bundle(bundle, exclusions.load_exclusions(run, files))
+    if not bundle['images']:
+        raise ValidationError('No eligible images remain after processing exclusions')
     return bundle
 
 
@@ -343,7 +346,7 @@ def load_intensity(candidate):
         raise ValidationError('Intensity Run_Info/dataset namespace differs from metadata')
     if meta.get('Schema_version') in (2, 3) and info.get('Marker_folder') != bundle['marker']:
         raise ValidationError('Intensity Run_Info marker differs from metadata')
-    return bundle
+    return exclusions.filter_bundle(bundle, exclusions.load_exclusions(run, bundle['files']))
 
 
 def validate_compatibility(morphology, intensity):
@@ -351,6 +354,9 @@ def validate_compatibility(morphology, intensity):
             or basename(intensity['metadata']['Nuclei_run']) != morphology['run'].name
             or intensity['particle_size'] != morphology['particle_size']):
         raise ValidationError('Intensity refers to another dataset, nucleus run or particle size')
+    excluded = {**intensity.get('processing_exclusions', {}), **morphology.get('processing_exclusions', {})}
+    exclusions.filter_bundle(morphology, excluded)
+    exclusions.filter_bundle(intensity, excluded)
     if set(morphology['images']) != set(intensity['images']):
         raise ValidationError('Image sets differ between morphology and intensity')
     if set(morphology['nuclei']) != set(intensity['nuclei']):
@@ -640,7 +646,7 @@ def publish_staging(staging, root, final_name, filenames):
     names = list(filenames)
     if (final_name not in names or len(set(names)) != len(names)
             or any(name.startswith('.') or Path(name).name != name
-                   or Path(name).suffix not in ('.csv', '.xlsx') for name in names)):
+                   or (Path(name).suffix not in ('.csv', '.xlsx') and name != exclusions.MANIFEST) for name in names)):
         raise ValidationError('Invalid publication file list')
     paths = sorted((staging / name for name in names), key=lambda path: path.name == final_name)
     output = create_output(root)
@@ -703,7 +709,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
                info_row('Collection', 'Input manifest', 'SELECTED', manifest),
                info_row('Morphology selection', morphology['run'].name, 'SELECTED', morphology['run'],
                         f"Particle_size_px2={morphology['particle_size']:g}"),
-               info_row('Policy', 'Population', 'INFO', details='Non-border nuclei only; no new filtering or statistics'),
+               info_row('Policy', 'Population', 'INFO', details='Non-border nuclei from eligible images; processing exclusions applied, no additional biological filtering or statistics'),
                info_row('Policy', 'Join', 'INFO', details='Dataset, nucleus run, mask basename, Nucleus_ID; Area_px2 verified'),
                info_row('Policy', 'Missing data', 'INFO', details='Missing marker measurements remain blank, never zero'),
                info_row('Policy', 'Long metadata', 'INFO', details='Run_Info text may be truncated by Excel at 32767 characters; original CSV retains the full value'),
@@ -722,7 +728,14 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
         for row in checks:
             logger.log(logging.WARNING if row['Status'] in ('REJECTED', 'MISSING') else logging.INFO,
                        'CHECK | %s', row)
+        if not morphology['images']:
+            raise ValidationError('No eligible images remain after processing exclusions')
+        for bundle in selected.values():
+            validate_compatibility(morphology, bundle)
         tables = combine(morphology, selected, markers, checks, progress)
+        excluded = morphology.get('processing_exclusions', {})
+        logger.info('PROCESSING_EXCLUSIONS | count=%s | table=%s', len(excluded), exclusions.TABLE)
+        tables['Processing_Exclusions'] = (exclusions.COLUMNS, list(excluded.values()))
         status = 'SUCCESS_WITH_MISSING_INTENSITY' if len(selected) != len(markers) else 'SUCCESS'
         checks.append(info_row('Collection', 'Status', status, details=datetime.now(timezone.utc).isoformat()))
         checks.append(info_row('Collection', 'Rows', 'INFO', details=
@@ -740,6 +753,10 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
         tables['Collection_Info'] = (INFO_COLUMNS, checks)
         with temporary_directory(destination) as temporary:
             staging = Path(temporary)
+            exclusions.write_snapshot(staging, excluded)
+            checks.append(info_row('Processing exclusions', 'Manifest', 'SNAPSHOT',
+                                   details=f'{len(excluded)} excluded images',
+                                   digest=hashlib.sha256((staging / exclusions.MANIFEST).read_bytes()).hexdigest()))
             if progress:
                 progress.phase('Copying source spreadsheets', len(copies))
             for path, target in copies:
@@ -759,6 +776,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
                 if progress:
                     progress.advance(path.name)
             filenames = [target for _, target in copies] + [
+                exclusions.MANIFEST, exclusions.TABLE,
                 'FIA_Marker_Intensity_Nuclei.csv', 'FIA_Marker_Intensity_Images.csv', COMBINED_NAME]
             if progress:
                 progress.phase('Publishing verified collection')

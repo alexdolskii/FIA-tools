@@ -29,10 +29,15 @@ def manifest(tmp_path, roots):
 def table_only_report(monkeypatch):
     # The existing plotting suite renders real PNG/PDF files; these tests isolate
     # CLI/journal failures while retaining real input validation and Excel export.
-    def render(data, spec, selected, points, comparisons, limits, high, span, note, path):
+    def render(data, spec, selected, points, comparisons, limits, high, span, note, path, plot_format='pdf'):
         from PIL import Image
-        Image.new('RGB', (10, 10), 'white').save(path)
-        path.with_suffix('.pdf').write_bytes(b'PDF rendering tested in the plot suite')
+        preview = io.BytesIO()
+        Image.new('RGB', (10, 10), 'white').save(preview, format='PNG')
+        if plot_format != 'pdf':
+            path.with_suffix('.png').write_bytes(preview.getvalue())
+        if plot_format != 'png':
+            path.with_suffix('.pdf').write_bytes(b'PDF rendering tested in the plot suite')
+        return preview.getvalue()
     monkeypatch.setattr(plots, 'render_figure', render)
 
 
@@ -222,14 +227,14 @@ def test_plot_progress_advances_only_after_both_exports(tmp_path, monkeypatch):
     data = annotated()
     data['statistics'] = []
     progress = TableProgress(stream=io.StringIO())
-    def render(data, spec, selected, points, comparisons, limits, high, span, note, path):
+    def render(data, spec, selected, points, comparisons, limits, high, span, note, path, plot_format='pdf'):
         if progress.done == 1:
             raise OSError('PDF could not be saved')
         path.write_bytes(b'PNG fixture')
         path.with_suffix('.pdf').write_bytes(b'PDF fixture')
     monkeypatch.setattr(plots, 'render_figure', render)
     with pytest.raises(OSError, match='PDF'):
-        plots.render_plots(data, tmp_path / 'Plots', progress)
+        plots.render_plots(data, tmp_path / 'Plots', progress, plot_format='both')
     assert progress.done == 1 and progress.phase_total == 2
 
 

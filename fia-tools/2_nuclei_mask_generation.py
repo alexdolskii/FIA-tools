@@ -4,9 +4,6 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('generate_nuclei_mask'))
 
-from assay_layout import ASSAY_DIR
-from run_resources import temporary_path
-
 import hashlib
 import json
 import os
@@ -15,16 +12,20 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import fiji_config
+import image_exclusions as exclusions
 import imagej
 import numpy as np
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR
 from csbdeep.utils import normalize
 from interactive_input import ask_choice, ask_yes_no, cancelable
 from nuclei_morphology import NucleiMorphologyExport
 from nuclei_run_log import NucleiLogSession, NucleiRunLog, nuclei_log_session
+from run_resources import temporary_path
 from scyjava import jimport
 from skimage.io import imread, imsave
-from stardist.models import StarDist2D
+from stardist_worker import ImageInferenceError, checked_normalize
+from stardist_worker import IsolatedStarDist as StarDist2D
 from validate_folders import validate_input_file
 
 STARDIST_SETTINGS = {
@@ -95,12 +96,14 @@ def inspect_stardist_folder(folder, nuclei_folder, sources, progress=None):
                  if not p.name.startswith('.') and p.is_file()
                  and p.suffix.lower() in (".tif", ".tiff")}
         candidate["count"] = len(masks)
+        excluded = exclusions.load_exclusions(folder)
         expected = {f"{Path(name).stem}_StarDist_processed.tif": name
-                    for name in sources}
+                    for name in sources if exclusions.image_key(name) not in excluded}
         if not expected:
             raise ValueError("No visible .tif source images found")
-        missing = expected.keys() - masks
-        extra = masks - expected.keys()
+        active_masks = {name for name in masks if exclusions.image_key(name) not in excluded}
+        missing = expected.keys() - active_masks
+        extra = active_masks - expected.keys()
         if missing or extra:
             raise ValueError(f"Mask set mismatch: {len(missing)} missing, "
                              f"{len(extra)} unexpected")
@@ -111,7 +114,7 @@ def inspect_stardist_folder(folder, nuclei_folder, sources, progress=None):
             if not isinstance(metadata, dict):
                 raise ValueError("Invalid StarDist run metadata")
             if (metadata.get("schema_version") != 1
-                    or metadata.get("status") != "complete"):
+                or metadata.get("status") not in ("complete", "complete_with_exclusions")):
                 raise ValueError("StarDist run is incomplete or unrecognized")
             if metadata.get("settings") != STARDIST_SETTINGS:
                 raise ValueError("StarDist settings do not match this program")
@@ -310,91 +313,107 @@ def validate_folders(input_json_path: str) -> list:
 
 @nuclei_log_session
 def find_nuclei(nuclei_folders: list) -> list:
-    """Generate StarDist masks with compact progress and a journal per folder."""
+    """Generate masks, isolating inference crashes and recording durable exclusions."""
     model = None
     processed_folders = []
-    for folder_index, nuclei_folder in enumerate(nuclei_folders, 1):
-        image_files = nuclei_source_files(nuclei_folder)
-        with NucleiRunLog(Path(nuclei_folder).parent / '2_log.log',
-                          f'Folder {folder_index}/{len(nuclei_folders)} | StarDist',
-                          len(image_files), stage='stardist') as run:
-            output_folder = create_output_folder(
-                os.path.dirname(nuclei_folder), "Nuclei_StarDist_mask_processed_")
-            processed_folders.append(output_folder)
-            progress, logger = run.progress, run.logger
-            progress.message(f'Input: {nuclei_folder}')
-            progress.message(f'Output: {output_folder}')
-            logger.info('INPUT | folder=%s | output=%s', nuclei_folder, output_folder)
-            logger.info('PARAMETERS | %s', json.dumps(STARDIST_SETTINGS, sort_keys=True))
-            if model is None:
-                progress.phase('Loading StarDist model')
-                progress.message('Loading StarDist model...')
-                model = StarDist2D.from_pretrained(STARDIST_SETTINGS["model"])
-                logger.info('MODEL_READY | model=%s', STARDIST_SETTINGS['model'])
-                progress.message('StarDist model ready.')
-            else:
-                logger.info('MODEL_READY | reusing loaded model=%s', STARDIST_SETTINGS['model'])
-            run_metadata = {
-                "schema_version": 1,
-                "status": "running",
-                "source_folder": str(Path(nuclei_folder).resolve()),
-                "settings": dict(STARDIST_SETTINGS),
-                "sources": source_fingerprints(nuclei_folder, progress),
-                "masks": {},
-            }
-            write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-            run.saved(Path(output_folder) / STARDIST_METADATA)
-            if not image_files:
-                logger.error("No .tif images found in folder '%s'. Skipping folder.", nuclei_folder)
-                run_metadata["status"] = "incomplete"
+    try:
+        for folder_index, nuclei_folder in enumerate(nuclei_folders, 1):
+            image_files = nuclei_source_files(nuclei_folder)
+            assay = Path(nuclei_folder).parent
+            excluded = exclusions.load_exclusions(nuclei_folder)
+            with NucleiRunLog(assay / '2_log.log',
+                              f'Folder {folder_index}/{len(nuclei_folders)} | StarDist',
+                              len(image_files), stage='stardist') as run:
+                output_folder = create_output_folder(assay, "Nuclei_StarDist_mask_processed_")
+                processed_folders.append(output_folder)
+                progress, logger = run.progress, run.logger
+                progress.message(f'Input: {nuclei_folder}')
+                progress.message(f'Output: {output_folder}')
+                logger.info('INPUT | folder=%s | output=%s', nuclei_folder, output_folder)
+                logger.info('PARAMETERS | %s', json.dumps(STARDIST_SETTINGS, sort_keys=True))
+                run_metadata = {
+                    "schema_version": 1, "status": "running",
+                    "source_folder": str(Path(nuclei_folder).resolve()),
+                    "settings": dict(STARDIST_SETTINGS),
+                    "sources": source_fingerprints(nuclei_folder, progress),
+                    "masks": {}, "excluded_files": [],
+                }
                 write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-                run.finish('NO_INPUT')
-                continue
-
-            for image_file in image_files:
-                image_path = os.path.join(nuclei_folder, image_file)
-                progress.begin_image(image_path)
-                image = imread(image_path)
-                logger.info('INPUT_IMAGE | file=%s | shape=%s | dtype=%s | bits=%s',
-                            image_file, image.shape, image.dtype, image.dtype.itemsize * 8)
-                # Keep the existing input requirement and inference unchanged.
-                if image.dtype != np.uint8:
-                    logger.error("Image '%s' is not 8-bit grayscale. Skipping file.", image_file)
-                    progress.finish_image(skipped=True)
-                    continue
-                progress.phase('Normalizing')
-                image = normalize(image)
-                progress.phase('Predicting nuclei')
-                labels, details = model.predict_instances(
-                    image,
-                    nms_thresh=STARDIST_SETTINGS["nms_thresh"],
-                    prob_thresh=STARDIST_SETTINGS["prob_thresh"])
-                progress.phase('Saving mask and calibration')
-                base_name, ext = os.path.splitext(image_file)
-                new_file_name = f"{base_name}_StarDist_processed{ext}"
-                output_path = os.path.join(output_folder, new_file_name)
-                imsave(output_path, labels.astype(np.uint16))
-                logger.info('OUTPUT_IMAGE | file=%s | shape=%s | dtype=uint16 | bits=16',
-                            new_file_name, labels.shape)
-                run.saved(output_path)
-                calibration = spatial.projection_calibration(
-                    image_path, labels.shape, allow_bioformats=False)
-                logger.info('CALIBRATION | file=%s | %s', image_file, calibration)
-                if calibration is not None:
-                    spatial.save_snapshot(output_path, calibration, labels.shape)
-                    run.saved(Path(output_folder) / spatial.MANIFEST)
-                run_metadata["masks"][new_file_name] = file_digest(output_path)
-                progress.finish_image()
-
-            complete = (
-                len(run_metadata["masks"]) == len(image_files)
-                and run_metadata["sources"] == source_fingerprints(nuclei_folder, progress))
-            run_metadata["status"] = "complete" if complete else "incomplete"
-            if not complete:
-                logger.error('StarDist results are incomplete: missing masks or changed source files.')
-            write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
-            run.saved(Path(output_folder) / STARDIST_METADATA)
-            run.finish('COMPLETE' if complete else 'INCOMPLETE', masks=len(run_metadata['masks']))
+                exclusions.write_snapshot(output_folder, excluded)
+                run.saved(Path(output_folder) / STARDIST_METADATA)
+                for image_file in image_files:
+                    image_path = os.path.join(nuclei_folder, image_file)
+                    progress.begin_image(image_path)
+                    if exclusions.image_key(image_file) in excluded:
+                        logger.info('IMAGE_EXCLUDED | file=%s | previous=%s', image_path,
+                                       excluded[exclusions.image_key(image_file)])
+                        run_metadata['excluded_files'].append(image_file)
+                        progress.finish_image(skipped=True)
+                        continue
+                    reason = 'INVALID_STARDIST_INPUT'
+                    try:
+                        image = imread(image_path)
+                        logger.info('INPUT_IMAGE | file=%s | shape=%s | dtype=%s | bits=%s',
+                                    image_file, image.shape, image.dtype, image.dtype.itemsize * 8)
+                        progress.phase('Normalizing')
+                        image = checked_normalize(image, normalize)
+                    except (ValueError, OSError, ImageInferenceError) as error:
+                        failure = error
+                    else:
+                        # Initialization failures stop the run, rather than excluding healthy images.
+                        if model is None:
+                            progress.phase('Loading StarDist model')
+                            progress.message('Loading StarDist model...')
+                            model = StarDist2D.from_pretrained(STARDIST_SETTINGS['model'])
+                            logger.info('MODEL_READY | model=%s', STARDIST_SETTINGS['model'])
+                            progress.message('StarDist model ready.')
+                        reason = 'STARDIST_INFERENCE_FAILED'
+                        try:
+                            progress.phase('Predicting nuclei')
+                            labels, _ = model.predict_instances(
+                                image, nms_thresh=STARDIST_SETTINGS['nms_thresh'],
+                                prob_thresh=STARDIST_SETTINGS['prob_thresh'])
+                            failure = None
+                        except ImageInferenceError as error:
+                            failure = error
+                    if failure is not None:
+                        excluded = exclusions.exclude_image(assay, image_path, reason, failure)
+                        exclusions.write_snapshot(output_folder, excluded)
+                        run_metadata['excluded_files'].append(image_file)
+                        write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
+                        logger.error('IMAGE_EXCLUDED | file=%s | reason=%s | detail=%s', image_path, reason, failure,
+                                     extra={'file_only': True})
+                        progress.message(f'Excluded: {image_file} | {reason}. See logs/2_excluded_images.log')
+                        progress.finish_image(skipped=True)
+                        continue
+                    progress.phase('Saving mask and calibration')
+                    base_name, ext = os.path.splitext(image_file)
+                    new_file_name = f"{base_name}_StarDist_processed{ext}"
+                    output_path = os.path.join(output_folder, new_file_name)
+                    imsave(output_path, labels.astype(np.uint16))
+                    logger.info('OUTPUT_IMAGE | file=%s | shape=%s | dtype=uint16 | bits=16',
+                                new_file_name, labels.shape)
+                    run.saved(output_path)
+                    calibration = spatial.projection_calibration(image_path, labels.shape, allow_bioformats=False)
+                    logger.info('CALIBRATION | file=%s | %s', image_file, calibration)
+                    if calibration is not None:
+                        spatial.save_snapshot(output_path, calibration, labels.shape)
+                        run.saved(Path(output_folder) / spatial.MANIFEST)
+                    run_metadata['masks'][new_file_name] = file_digest(output_path)
+                    write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
+                    progress.finish_image()
+                complete = (bool(image_files) and
+                            len(run_metadata['masks']) + len(run_metadata['excluded_files']) == len(image_files)
+                            and run_metadata['sources'] == source_fingerprints(nuclei_folder, progress))
+                status = ('complete_with_exclusions' if run_metadata['excluded_files'] else 'complete') if complete else 'incomplete'
+                run_metadata['status'] = status
+                exclusions.write_snapshot(output_folder, excluded)
+                write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
+                run.saved(Path(output_folder) / STARDIST_METADATA)
+                run.finish(status.upper(), masks=len(run_metadata['masks']), excluded=len(run_metadata['excluded_files']))
+    finally:
+        if model is not None:
+            model.close()
     return processed_folders
 
 
@@ -404,7 +423,9 @@ def process_nuclei(valid_folders: list, particle_size: int) -> bool:
     ij = None
     all_complete = bool(valid_folders)
     for folder_index, input_folder in enumerate(valid_folders, 1):
-        entries = os.listdir(input_folder)
+        excluded = exclusions.load_exclusions(input_folder)
+        entries = [name for name in os.listdir(input_folder)
+                   if exclusions.image_key(name) not in excluded]
         image_files = [name for name in entries
                        if not name.startswith('.') and name.lower().endswith(('.tif', '.tiff'))]
         with NucleiRunLog(Path(input_folder).parent / '2_log.log',
@@ -419,6 +440,11 @@ def process_nuclei(valid_folders: list, particle_size: int) -> bool:
             logger.info('PARAMETERS | particle_size_pixels_squared=%s | threshold=1..255 | '
                         'conversion=8-bit | watershed=True | Fiji=%s',
                         particle_size, fiji_config.FIJI_ENDPOINT)
+            exclusions.write_snapshot(processed_folder, excluded)
+            logger.info('PROCESSING_EXCLUSIONS | count=%s | manifest=%s', len(excluded), exclusions.MANIFEST)
+            if not image_files:
+                run.finish('NO_ELIGIBLE_IMAGES', excluded=len(excluded))
+                continue
             if ij is None:
                 progress.phase('Initializing ImageJ')
                 ij = initialize_imagej(progress=progress)
@@ -435,13 +461,14 @@ def process_nuclei(valid_folders: list, particle_size: int) -> bool:
                 "morphology_status": "running",
                 "processed_files": [],
                 "skipped_files": [],
+                "excluded_images": list(excluded),
             }
             write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
             run.saved(Path(processed_folder) / 'nuclei_run.json')
             ignored = 0
             for filename in entries:
                 if filename.startswith('.') or filename in (
-                        STARDIST_METADATA, spatial.MANIFEST, '2_log.log'):
+                        STARDIST_METADATA, spatial.MANIFEST, exclusions.MANIFEST, exclusions.TABLE, '2_log.log'):
                     logger.info('IGNORED | file=%s | hidden or auxiliary file', filename)
                     ignored += 1
                     continue
@@ -524,7 +551,7 @@ def process_nuclei(valid_folders: list, particle_size: int) -> bool:
             complete = (run_metadata['status'] == 'complete'
                         and run_metadata['morphology_status'] == 'complete')
             all_complete = all_complete and complete
-            run.finish('COMPLETE' if complete else 'INCOMPLETE',
+            run.finish(('COMPLETE_WITH_EXCLUSIONS' if excluded else 'COMPLETE') if complete else 'INCOMPLETE',
                        masks=run_metadata['status'], morphology=run_metadata['morphology_status'],
                        saved_masks=len(run_metadata['processed_files']), ignored=ignored,
                        minimum_area_px2=particle_size)
@@ -556,11 +583,22 @@ def main(input_json_path: str,
                                   'StarDist readiness', quiet=True, stage='stardist_check') as run:
                     metadata = json.loads((Path(output_folder) / STARDIST_METADATA)
                                           .read_text(encoding="utf-8"))
-                    if metadata["status"] != "complete":
+                    if metadata["status"] not in ("complete", "complete_with_exclusions"):
                         raise ValueError(f"Incomplete StarDist results: {output_folder}. "
                                          "ImageJ processing was not started.")
                     selected[nuclei_folder] = output_folder
-        processed_folders = [selected[folder] for folder in nuclei_folders]
+        processed_folders = []
+        for folder in nuclei_folders:
+            excluded = exclusions.load_exclusions(selected[folder])
+            if any(exclusions.image_key(name) not in excluded for name in nuclei_source_files(selected[folder])):
+                processed_folders.append(selected[folder])
+            else:
+                with NucleiRunLog(Path(folder).parent / '2_log.log', 'ImageJ readiness',
+                                  quiet=True, stage='imagej') as run:
+                    run.finish('NO_ELIGIBLE_IMAGES', excluded=len(excluded))
+        if not processed_folders:
+            print('No eligible images remain. See logs/2_excluded_images.log; no final masks were generated.')
+            return
         print("Step 1 completed: Nuclei masks ready.")
 
         # Step 2: Process nuclei using ImageJ
