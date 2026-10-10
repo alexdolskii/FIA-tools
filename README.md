@@ -209,6 +209,18 @@ The five preparation/nuclei/intensity/collection/report journals are `1_log.log`
 - **Problems:** check [troubleshooting](docs/REFERENCE.md#troubleshooting), then open a [GitHub issue](https://github.com/alexdolskii/FIA-tools/issues) with the command, Git commit, operating system and relevant log entries.
 - **License:** [MIT](LICENSE). Fiji and StarDist licensing is linked in the [tool acknowledgments](docs/REFERENCE.md#underlying-tools).
 
-FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools) and was developed in the [Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman) as part of [Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts](https://pubmed.ncbi.nlm.nih.gov/41884584/). For scientific use, cite the applicable protocol and study and record the code revision used.
+FIA-tools is developed in the
+[Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman)
+at Fox Chase Cancer Center for quantitative analysis of nuclear morphology,
+marker intensity and foci. Its scientific context includes the laboratory’s
+earlier work on [SMIA-CUKIE](https://github.com/cukie/SMIA), developed by
+Gil Cukierman and described by
+[Franco-Barraza et al. (2017), eLife](https://doi.org/10.7554/eLife.20600).
+SMIA-CUKIE measures marker intensity and positive area within combinations of
+image masks. FIA-tools continues this broader research direction through
+independently implemented analyses of individual nuclei and foci, with automated
+processing and reporting.
+
+FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools) and was developed as part of [Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts](https://pubmed.ncbi.nlm.nih.gov/41884584/). For scientific use, cite the applicable protocol and study and record the code revision used.
 
 Contributors: [Aleksandr Dolskii](mailto:aleksandr.dolskii@fccc.edu) and [Ekaterina Shitik](mailto:shitik.ekaterina@gmail.com).
