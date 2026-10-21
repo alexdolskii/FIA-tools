@@ -1,10 +1,10 @@
 # FIA-tools
 
-FIA-tools processes multichannel confocal images to measure nuclear morphology, nuclear marker intensity, and nuclear foci with optional colocalization. It uses Fiji/ImageJ and StarDist, with shared nuclei segmentation and a separate route for nuclei-only analysis.
+FIA-tools processes multichannel confocal images to measure nuclear morphology, nuclear marker intensity, and nuclear foci with optional colocalization. It uses Fiji/ImageJ and StarDist. An additional **nuclei-only analysis** workflow measures nucleus counts and morphology using the nuclei channel alone, including experiments where other marker channels are absent or are not needed for the analysis.
 
 **This README describes `tech_dev`, the development version for an updated protocol.** The published [protocol version 1](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1) accompanies the [`main` branch](https://github.com/alexdolskii/FIA-tools/tree/main). The updated protocol is in preparation. Record the exact Git commit, environment and analysis parameters; a branch name can change over time.
 
-[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Run](#run-the-analysis) · [Parameters](#command-line-parameters) · [Results and help](#results-documentation-and-help)
+[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Run](#run-the-analysis) · [Nuclei-only workflow](#nuclei-only-analysis) · [Parameters](#command-line-parameters) · [Results and help](#results-documentation-and-help)
 
 ## Changes from the original version
 
@@ -95,6 +95,8 @@ Wait for each command to finish and review its status before continuing. Choose 
 
 ### Nuclei-only analysis
 
+This additional FIA-tools workflow is intended for experiments with a usable nuclei-staining channel when the goal is nucleus counts and morphology. The input can be a multichannel ND2 or TIFF image: select the nuclei channel and ignore the remaining channels. It uses the existing nuclei segmentation and measurements, followed by the dedicated `fia_nuclei_report` command. Nuclear staining is still required; this is not a method for detecting unstained nuclei.
+
 ```bash
 select_channels -i input_paths.json --nuclei-only
 generate_nuclei_mask -i input_paths.json -p 200
@@ -108,6 +110,8 @@ Place the Excel layout directly in each **`fia_assay`** before the report. The l
 The report always includes **Area, Aspect ratio, Circularity and Solidity**, even without significant comparisons, plus `Nuclei_count`. All **12 morphology metrics** remain in the tables and, when enabled, the planned statistical family. A positive `--min-nuclei` adds the diagnostic `Nuclei_count_all` with red edges below the threshold: normally five plots without filtering and six with it. Mixed calibrated/uncalibrated data use separate physical/pixel Area plots. Failed processing images remain excluded and are never represented as zero nuclei.
 
 Plots default to PDF; use `--plot-format png` or `both` to change this. Excel always embeds the plots. Omit `--stats-unit` for descriptive results or choose `well` for tests on equal-image-weight well means. Existing palette, Order/Group, control and filtering rules apply. See [nuclei-only report details](docs/REFERENCE.md#nuclei-only-reports).
+
+For code navigation, start with [`fia-tools/nuclei_report.py`](fia-tools/nuclei_report.py), then `load_nuclei_run()` in [`marker_report_data.py`](fia-tools/marker_report_data.py) and the `report_kind='nuclei'` profile in [`marker_intensity_report.py`](fia-tools/marker_intensity_report.py). Shared plotting and statistics are reused by this profile. [`tests/test_nuclei_report.py`](tests/test_nuclei_report.py) covers the complete route. The marker-intensity and foci workflows remain available alongside it.
 
 ### Shared preparation
 
