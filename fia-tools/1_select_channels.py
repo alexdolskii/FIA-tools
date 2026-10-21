@@ -85,7 +85,7 @@ def validate_folders(input_json_path: str) -> list:
     return valid_folders
 
 
-def select_settings():
+def select_settings(nuclei_only=False):
     """Request shared channel settings once for the batch."""
     # Request file type
     print("\nSelect input file type:")
@@ -97,6 +97,10 @@ def select_settings():
     # Request the nuclei segmentation channel (1-based).
     nuclei_channel = ask_integer("Enter the nuclei segmentation "
                                  "channel number (1-12; q = cancel): ", 1, 12)
+
+    if nuclei_only:
+        print(f"Nuclei-only preparation: channel {nuclei_channel}.")
+        return file_type, nuclei_channel, []
 
     # Marker channels serve either the foci or nuclear-intensity workflow.
     print("Marker channels can be used for foci analysis or nuclear marker-intensity measurements.")
@@ -150,7 +154,7 @@ def confirm_output_folders(valid_folders):
     return selected, skipped
 
 
-def process_image(valid_folders: list, input_json_path=None) -> list:
+def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) -> list:
     """
     Process all files from the provided directories (.nd2 or .tif/.tiff)
     according to user-selected nuclei segmentation and marker channels.
@@ -210,12 +214,16 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                     IJ = jimport('ij.IJ')
                     ZProjector = jimport('ij.plugin.ZProjector')
                     ChannelSplitter = jimport('ij.plugin.ChannelSplitter')
-                    settings = select_settings()
+                    settings = select_settings(nuclei_only=True) if nuclei_only else select_settings()
                 file_type, nuclei_channel, foci_channels = settings
                 run.logger.info("RUNTIME | ImageJ=%s", ij.getVersion())
-                run.logger.info("SETTINGS | input_type=%s | nuclei_channel=%d | marker_channels=%s",
-                                {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type],
-                                nuclei_channel, foci_channels)
+                if nuclei_only:
+                    run.logger.info("SETTINGS | mode=nuclei-only | input_type=%s | nuclei_channel=%d",
+                                    {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type], nuclei_channel)
+                else:
+                    run.logger.info("SETTINGS | input_type=%s | nuclei_channel=%d | marker_channels=%s",
+                                    {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type],
+                                    nuclei_channel, foci_channels)
                 with bioformats_progress(progress):
                     # Create subfolder for Nuclei
                     nuclei_folder = os.path.join(processed_folder, "Nuclei")
@@ -305,8 +313,9 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
                             # For ND2 files or Z-stack TIFFs (file types 1 and 2)
                             if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff')
                                                        and file_type in (1, 2))):
-                                run.logger.info("PROCESSING | file=%s | nuclei_projection=MAX | marker_projection=SD | "
-                                                "output_bit_depth=8 | resize=False", filename)
+                                run.logger.info("PROCESSING | file=%s | nuclei_projection=MAX%s | "
+                                                "output_bit_depth=8 | resize=False", filename,
+                                                " | marker_projection=SD" if foci_channels else "")
                                 # Check if channels exist
                                 if (nuclei_channel > channels
                                         or any(foci_channel > channels
@@ -436,7 +445,7 @@ def process_image(valid_folders: list, input_json_path=None) -> list:
 
 
 @cancelable
-def select_channel_name(input_json_path: str):
+def select_channel_name(input_json_path: str, nuclei_only=False):
     """
     Reads the JSON file to get valid folders, then prompts the user
     for file type and channel numbers, and processes images accordingly.
@@ -455,7 +464,8 @@ def select_channel_name(input_json_path: str):
         return
 
     # Process images
-    statuses = process_image(valid_folders, input_json_path)
+    statuses = (process_image(valid_folders, input_json_path, nuclei_only=True) if nuclei_only
+                else process_image(valid_folders, input_json_path))
     if not statuses:
         return
     if all(status == "SUCCESS" for status in statuses):

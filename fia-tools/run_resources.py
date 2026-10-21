@@ -25,7 +25,7 @@ RUN_PATTERN = re.compile(r'^\d{8}T\d{12}Z_[0-9a-f]{12}$')
 COMMANDS = (
     'select_channels', 'generate_nuclei_mask', 'generate_foci_mask',
     'quantify_foci', 'quantify_nuclear_intensity',
-    'fia_collect_marker_intensity_results', 'fia_marker_intensity_report',
+    'fia_collect_marker_intensity_results', 'fia_marker_intensity_report', 'fia_nuclei_report',
 )
 
 

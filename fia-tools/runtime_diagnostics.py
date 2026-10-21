@@ -24,7 +24,7 @@ from run_resources import (
     utc_now,
 )
 
-JOURNALS = ('1_log.log', '2_log.log', '3_nuclei_intensity.log',
+JOURNALS = ('1_log.log', '2_log.log', '3_nuclei_intensity.log', '3_nuclei_report.log',
             '4_collect_marker_intensity.log', '5_marker_intensity_report.log')
 
 

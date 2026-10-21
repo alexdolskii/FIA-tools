@@ -39,7 +39,7 @@ def _load_script(filename):
 @_managed
 def select_channels():
     args = _arguments("select_channels")
-    return _load_script("1_select_channels").select_channel_name(args.input)
+    return _load_script("1_select_channels").select_channel_name(args.input, nuclei_only=args.nuclei_only)
 
 
 @_managed
@@ -76,6 +76,11 @@ def fia_collect_marker_intensity_results():
 @_managed
 def fia_marker_intensity_report():
     return _load_script("marker_intensity_report").main()
+
+
+@_managed
+def fia_nuclei_report():
+    return _load_script("nuclei_report").main()
 
 
 def fia_diagnostics():

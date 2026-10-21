@@ -65,7 +65,7 @@ def panel_letter(index):
 
 
 def plot_specs(data):
-    """Plot primary endpoints and selected morphology with a significant adjusted test."""
+    """Nuclei reports always plot core morphology; marker reports retain significance selection."""
     specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
     if data.get('min_nuclei', 0) > 0:
         specs.insert(0, ('Nuclei_count_all', COUNT, 'Non-border nuclei per image — before filtering',
@@ -79,7 +79,8 @@ def plot_specs(data):
                        if row['Category'] == 'Morphology' and row['Status'] == 'TESTED'
                        and row['P_Holm'] is not None and 0 <= row['P_Holm'] < 0.05}
     for category, _, field, unit in report_specs(data, []):
-        if category == 'Morphology' and field in MORPHOLOGY_PLOT_FIELDS and field in significant:
+        if (category == 'Morphology' and field in MORPHOLOGY_PLOT_FIELDS
+                and (data.get('report_kind') == 'nuclei' or field in significant)):
             label = field.removesuffix('_px2').removesuffix('_px').removesuffix('_um2').removesuffix('_um').replace('_', ' ').capitalize()
             display_unit = {'px2': 'px²', 'um2': 'µm²', 'um': 'µm'}.get(unit, unit)
             ylabel = label + f' ({display_unit})'
@@ -233,7 +234,9 @@ def plot_note(data, name, observation, comparisons):
                    'Density stays within the observed range. Fewer than 5 nuclei: box/range; constant or single value: line.')
     effective = 'well' if data['stats_unit'] == 'well' else observation
     inference = ('Statistics disabled.' if data['stats_unit'] is None else
-                 f'Test unit: {effective}. Two-sided Welch; p adjusted by Holm across all metrics and selected markers per color block.')
+                 f'Test unit: {effective}. Two-sided Welch; p adjusted by Holm across '
+                 + ('nucleus count and all morphology metrics per color block.' if data.get('report_kind') == 'nuclei'
+                    else 'all metrics and selected markers per color block.'))
     image_filter = data.get('image_exclusion_rule', 'Image count filtering disabled.')
     note = (description + ' Border nuclei excluded. ' + image_filter + ' '
             'Linear Y; shared limits across panels of this metric. '

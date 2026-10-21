@@ -277,7 +277,7 @@ def validate_rows(bundle, kind):
     bundle.update(namespace=namespace, images=images, nuclei=nuclei, particle_size=particle_size)
 
 
-def load_morphology(run):
+def load_morphology(run, allow_empty=False):
     files = {}
     meta = json_snapshot(run / 'nuclei_run.json', files)
     if (meta.get('schema_version') != 1 or meta.get('status') != 'complete'
@@ -296,7 +296,7 @@ def load_morphology(run):
     if len(expected) != len(processed) or expected != set(bundle['images']):
         raise ValidationError('Morphology images differ from the completed nuclei manifest')
     exclusions.filter_bundle(bundle, exclusions.load_exclusions(run, files))
-    if not bundle['images']:
+    if not bundle['images'] and not allow_empty:
         raise ValidationError('No eligible images remain after processing exclusions')
     return bundle
 

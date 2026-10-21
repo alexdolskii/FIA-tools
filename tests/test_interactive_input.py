@@ -269,7 +269,7 @@ def test_report_cancels_without_creating_outputs(tmp_path, monkeypatch, stop):
 @pytest.mark.parametrize('command', [
     'select_channels', 'generate_nuclei_mask', 'generate_foci_mask', 'quantify_foci',
     'quantify_nuclear_intensity', 'fia_collect_marker_intensity_results',
-    'fia_marker_intensity_report',
+    'fia_marker_intensity_report', 'fia_nuclei_report',
 ])
 def test_installed_entry_points_preserve_cancellation_status(monkeypatch, command):
     path = Path(__file__).parents[1] / 'fia-tools' / '__init__.py'

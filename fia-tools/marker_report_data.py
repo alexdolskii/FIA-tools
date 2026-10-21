@@ -242,6 +242,27 @@ def load_collection(path, progress=None):
             'run_id': run_id, 'particle_size': morphology['particle_size'], 'notes': []}
 
 
+def load_nuclei_run(path, progress=None):
+    """Read validated morphology directly; never discover or open marker results."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_dir() or not collect.NUCLEI_PATTERN.fullmatch(path.name):
+        raise ValidationError(f'Not a regular completed-nuclei directory: {path}')
+    bundle = collect.load_morphology(path, allow_empty=True)
+    bundle['root'] = path.parent.parent
+    checks = []
+    tables = collect.combine(bundle, {}, [], checks, progress)
+    images, nuclei = tables['Images'][1], tables['Nuclei'][1]
+    for row in images + nuclei:
+        row['Well'] = image_well(row)
+    return {'path': path, 'files': bundle['files'], 'info': checks,
+            'images': images, 'nuclei': nuclei,
+            'image_columns': tables['Images'][0] + ['Group'], 'nuclei_columns': tables['Nuclei'][0],
+            'processing_exclusions': bundle['processing_exclusions'],
+            'markers': [], 'availability': {}, 'bundles': {}, 'report_kind': 'nuclei',
+            'run_id': path.name, 'particle_size': bundle['particle_size'],
+            'notes': [row['Details'] for row in checks]}
+
+
 def image_well(row):
     value = str(row.get('Well', ''))
     match = re.fullmatch(r'([A-H])(0?[1-9]|1[0-2])', value, re.IGNORECASE)
@@ -374,7 +395,7 @@ def read_template(path, files, sheet_name=None, statistics=False):
         book.close()
 
 
-def find_template(collection, sheet_name=None):
+def find_template(collection, sheet_name=None, location_label='selected collection'):
     candidates, rejected = [], []
     for path in sorted(collection.iterdir()):
         if (path.name.startswith(('.', '~$')) or path.suffix.lower() != '.xlsx' or path.is_symlink()
@@ -394,8 +415,8 @@ def find_template(collection, sheet_name=None):
                 collection, 'Check the 96-well grid at A1:M9, annotated wells and optional Order/Group table; use --sheet if the layout '
                 'is on another worksheet. Then rerun the report.', '\n'.join(rejected))
         raise PlateMapError(
-            'MISSING_PLATE_MAP', 'Excel experiment layout (.xlsx) is missing from the selected collection.',
-            collection, 'Add the 96-well experiment layout to this collection folder and rerun the same command, '
+            'MISSING_PLATE_MAP', f'Excel experiment layout (.xlsx) is missing from the {location_label}.',
+            collection, f'Add the 96-well experiment layout to the {location_label} and rerun the same command, '
             'or specify its full path with --template. Report calculations have not started.')
     if len(candidates) > 1:
         raise PlateMapError(
@@ -405,9 +426,9 @@ def find_template(collection, sheet_name=None):
     return candidates[0]
 
 
-def select_template(collection, template=None, sheet_name=None):
+def select_template(collection, template=None, sheet_name=None, location_label='selected collection'):
     if template is None:
-        return find_template(Path(collection), sheet_name)
+        return find_template(Path(collection), sheet_name, location_label)
     path = Path(template).expanduser().absolute()
     if not path.exists():
         raise PlateMapError('MISSING_PLATE_MAP', 'The Excel experiment layout specified by --template was not found.',

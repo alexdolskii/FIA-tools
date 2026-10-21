@@ -42,14 +42,20 @@ OUTPUT_PREFIX = 'FIA_Marker_Intensity_Report_'
 WORKBOOK = 'FIA_Marker_Intensity_Report.xlsx'
 MORPHOLOGY_WORKBOOK = 'Nuclei_Morphology_Summary.xlsx'
 MORPHOLOGY_SHEETS = ('Morphology_By_Condition', 'Morphology_Comparisons')
+REPORT_PROFILES = {
+    'marker': {'prefix': OUTPUT_PREFIX, 'workbook': WORKBOOK,
+               'journal': '5_marker_intensity_report.log', 'source': 'Collection'},
+    'nuclei': {'prefix': 'FIA_Nuclei_Report_', 'workbook': 'FIA_Nuclei_Report.xlsx',
+               'journal': '3_nuclei_report.log', 'source': 'Nuclei_run'},
+}
 
 
-def create_output(root):
+def create_output(root, prefix=OUTPUT_PREFIX):
     if Path(root).is_symlink():
         raise inputs.ValidationError(f'Linked output directory is not accepted: {root}')
     stamp = datetime.now().astimezone()
     while True:
-        path = Path(root) / (OUTPUT_PREFIX + stamp.strftime('%Y%m%d_%H%M%S'))
+        path = Path(root) / (prefix + stamp.strftime('%Y%m%d_%H%M%S'))
         try:
             path.mkdir()
             return path
@@ -270,6 +276,7 @@ def morphology_tables(data):
 
 
 def report_tables(data, output, manifest):
+    nuclei_only = data.get('report_kind') == 'nuclei'
     unit = data['stats_unit'] or 'disabled'
     notes = [
         ('Population', 'Non-border nuclei from images retained by the optional --min-nuclei filter. No intensity threshold or additional nucleus-level filtering.'),
@@ -302,6 +309,17 @@ def report_tables(data, output, manifest):
         ('Marker identity', 'Selected folder names are used verbatim. No inferred biological marker names or legacy alias merging.'),
         ('Completion', 'Use this report only when report_status.json says SUCCESS.'),
     ]
+    if nuclei_only:
+        replacements = {
+            'Population': 'Non-border nuclei from images retained by the optional --min-nuclei filter. Existing FIA segmentation and morphology measurements are unchanged.',
+            'Morphology plots': 'Always show Area (separate um2/px2 cohorts), Aspect_ratio, Circularity and Solidity, irrespective of test availability or significance. Violin with inner boxplot, all usable non-border nuclei, no individual dots. All 12 morphology metrics remain in the tables and planned Holm family.',
+            'Plot sample sizes': 'Count labels give images and wells; morphology labels give nuclei, contributing images and wells. Plot_Data contains each observation once per plot. Nuclei_count_all is diagnostic and before filtering.',
+            'Missing data': 'Retained zero-nucleus images contribute zero to counts and no value to morphology means. Processing failures contribute no observations. Wells or conditions with no usable observations keep blank measurements and n=0.',
+            'Multiplicity': 'Holm family includes nucleus count and all morphology metrics, across all treatments in each color block, including unavailable planned tests. Physical and pixel size cohorts remain separate. Choosing four plots does not reduce the planned family.',
+            'Morphology summary': 'Morphology_By_Condition and Morphology_Comparisons in this workbook contain all morphology metrics and the existing comparisons, with separate physical/pixel size cohorts. No additional tests.',
+        }
+        notes = [(name, replacements.get(name, value)) for name, value in notes
+                 if name not in ('Intensity plots', 'Marker identity')]
     notes += [('Selection note', note) for note in data['notes']]
     provenance = []
     for path, content in data['files'].items():
@@ -309,8 +327,11 @@ def report_tables(data, output, manifest):
             relative = Path('Inputs') / 'PlateMap' / path.name
         elif manifest is not None and path == manifest:
             relative = Path('Inputs') / 'input_paths.json'
+        elif path.parent == data['path']:
+            relative = Path('Inputs') / ('Nuclei' if nuclei_only else 'Collection') / path.name
         else:
-            relative = Path('Inputs') / 'Collection' / path.name
+            # A run snapshot and the live registry can have the same basename.
+            relative = Path('Inputs') / 'Source_Extras' / f'{len(provenance):04d}' / path.name
         destination = output / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(content)
@@ -344,7 +365,14 @@ def report_tables(data, output, manifest):
         'NumPy': np.__version__, 'SciPy': scipy.__version__, 'Matplotlib': matplotlib.__version__,
         'openpyxl': openpyxl.__version__,
     }
-    return {
+    if nuclei_only:
+        metadata.pop('Collection')
+        metadata.pop('Markers')
+        metadata.update(Report_schema_version=1, Report_kind='nuclei', Nuclei_run=str(data['path']),
+                        Morphology_summary_tests='Existing Welch/Holm results across nucleus count and all morphology metrics. No tests when statistics are disabled.',
+                        Morphology_plot_rule=replacements['Morphology plots'],
+                        Spatial_units_policy='Calibrated images: um2/um only; uncalibrated images: separate px2/px results')
+    tables = {
         'Overview': as_table([{'Item': key, 'Description': value} for key, value in notes]),
         **morphology_tables(data),
         'Statistics': as_table(data['statistics'], STAT_COLUMNS),
@@ -365,6 +393,12 @@ def report_tables(data, output, manifest):
         'Run_Info': as_table([{'Parameter': key, 'Value': value} for key, value in metadata.items()]),
         'Source_Files': as_table(provenance),
     }
+    if nuclei_only:
+        for title in ('Statistics', 'Summary', 'Image_Values', 'Well_Values'):
+            columns, rows = tables[title]
+            tables[title] = ([column for column in columns if column != 'Marker'],
+                             [{key: value for key, value in row.items() if key != 'Marker'} for row in rows])
+    return tables
 
 
 def write_workbook(output, tables, plots, filename=WORKBOOK, previews=None):
@@ -419,18 +453,18 @@ def write_workbook(output, tables, plots, filename=WORKBOOK, previews=None):
 
 
 def create_report(collection, root, template=None, markers=None, stats_unit=None, sheet=None, manifest=None,
-                  min_nuclei=0, selection_notes=(), audit=None, progress=None, plot_format='pdf'):
+                  min_nuclei=0, selection_notes=(), audit=None, progress=None, plot_format='pdf', report_kind='marker'):
     """Write a report under the experiment's fia_assay directory."""
     root = Path(root).resolve()
     own_audit = audit is None
-    audit = audit or TableJournal('5_marker_intensity_report.log', manifest)
+    audit = audit or TableJournal(REPORT_PROFILES[report_kind]['journal'], manifest)
     if own_audit:
         audit.register(root)
         audit.plan(root, collection)
     try:
         with audit.stage(root, f'Report | {Path(collection).name}', progress) as logger:
             success, output = _create_report(collection, root, template, markers, stats_unit, sheet,
-                                             manifest, min_nuclei, selection_notes, logger, progress, plot_format)
+                                             manifest, min_nuclei, selection_notes, logger, progress, plot_format, report_kind)
         audit.result(root, collection, 'SUCCESS' if success else 'FAILED', output)
         audit.status = 'COMPLETE' if success else 'INCOMPLETE'
         return success, output
@@ -448,30 +482,37 @@ def create_report(collection, root, template=None, markers=None, stats_unit=None
 
 
 def _create_report(collection, root, template, markers, stats_unit, sheet, manifest,
-                   min_nuclei, selection_notes, logger, progress=None, plot_format='pdf'):
-    output = create_output(root / ASSAY_DIR)
+                   min_nuclei, selection_notes, logger, progress=None, plot_format='pdf', report_kind='marker'):
+    profile = REPORT_PROFILES[report_kind]
+    nuclei_only = report_kind == 'nuclei'
+    source_status = {profile['source']: str(collection)}
+    output = create_output(root / ASSAY_DIR, profile['prefix'])
     logger.info('OUTPUT_FOLDER | %s', output)
     stage = 'input validation'
     try:
         if progress:
-            progress.phase('Reading and validating collection')
-        write_status(output, 'RUNNING', Collection=str(collection), Plot_format=plot_format)
-        logger.info('PARAMETERS | collection=%s | statistics=%s | min_nuclei=%s | requested_markers=%s | plot_format=%s',
-                    collection, stats_unit or 'disabled', min_nuclei, markers, plot_format)
-        data = inputs.load_collection(collection, progress=progress)
+            progress.phase('Reading and validating nuclei tables' if nuclei_only else 'Reading and validating collection')
+        write_status(output, 'RUNNING', **source_status, Report_kind=report_kind, Plot_format=plot_format)
+        logger.info('PARAMETERS | report_kind=%s | source=%s | statistics=%s | min_nuclei=%s | plot_format=%s',
+                    report_kind, collection, stats_unit or 'disabled', min_nuclei, plot_format)
+        data = (inputs.load_nuclei_run(collection, progress=progress) if nuclei_only
+                else inputs.load_collection(collection, progress=progress))
+        data['report_kind'] = report_kind
         data['notes'].extend(selection_notes)
         for note in selection_notes:
             logger.info('Selection: %s', note)
-        selected = choose_markers(data, markers)
+        selected = [] if nuclei_only else choose_markers(data, markers)
         stage = 'plate-map validation'
         if progress:
             progress.phase('Reading plate map')
-        plate_map = inputs.select_template(collection, template, sheet)
+        plate_map = (inputs.select_template(root / ASSAY_DIR, template, sheet, location_label='fia_assay folder')
+                     if nuclei_only else inputs.select_template(collection, template, sheet))
         logger.info('PLATE_MAP_SELECTED | file=%s | requested_sheet=%s', plate_map, sheet or 'first sheet')
         # Keep headers even when every image has zero non-border nuclei.
-        excluded = set(data['markers']) - set(selected)
-        source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
-        data['nuclei_columns'] = [c for c in source_columns if not any(c.startswith(m + '_') for m in excluded)]
+        if not nuclei_only:
+            excluded = set(data['markers']) - set(selected)
+            source_columns = collect.csv_snapshot(Path(collection) / 'FIA_Marker_Intensity_Nuclei.csv', data['files'], [])[0]
+            data['nuclei_columns'] = [c for c in source_columns if not any(c.startswith(m + '_') for m in excluded)]
         inputs.annotate(data, plate_map, selected, stats_unit, sheet)
         logger.info('CONDITION_ORDER | source=%s | groups=%s', data['group_order_source'],
                     json.dumps(data['group_order'], ensure_ascii=False))
@@ -488,8 +529,10 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         logger.info('PLOT_STYLE | version=%s | panels=%s | conditions=%s | wells=%s',
                     data['plot_style']['Style_version'], len(data['plot_style']['panels']),
                     len(data['plot_style']['conditions']), len(data['plot_style']['wells']))
-        logger.info('INPUTS_VALIDATED | nuclei_run=%s | markers=%s | images=%s | non_border_nuclei=%s | '
-                    'plate_map=%s | sheet=%s', data['run_id'], selected, len(data['images']),
+        if not nuclei_only:
+            logger.info('MARKERS_SELECTED | %s', selected)
+        logger.info('INPUTS_VALIDATED | nuclei_run=%s | images=%s | non_border_nuclei=%s | '
+                    'plate_map=%s | sheet=%s', data['run_id'], len(data['images']),
                     len(data['nuclei']), plate_map, data['template_sheet'])
         manifest_path = Path(manifest).expanduser().absolute() if manifest else None
         if manifest_path:
@@ -529,21 +572,23 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         tables = report_tables(data, output, manifest_path)
         for title, table in tables.items():
             collect.write_csv(output / (title + '.csv'), *table)
-        write_workbook(output, tables, data['plots'], previews=data['plot_previews'])
+        write_workbook(output, tables, data['plots'], filename=profile['workbook'], previews=data['plot_previews'])
         data['plot_previews'].clear()
-        morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
-        write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
+        if not nuclei_only:
+            morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
+            write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
         logger.info('TABLES_SAVED | folder=%s | workbooks=%s | csv_tables=%s',
-                    output, [WORKBOOK, MORPHOLOGY_WORKBOOK], list(tables))
+                    output, [profile['workbook']] + ([] if nuclei_only else [MORPHOLOGY_WORKBOOK]), list(tables))
         # Verify exact published tables and unchanged inputs before marking success.
         stage = 'final verification'
         if progress:
             progress.phase('Verifying saved tables')
         exported = {title: collect.csv_snapshot(output / (title + '.csv'), {}, columns)
                     for title, (columns, _) in tables.items()}
-        collect.verify_workbook(output / WORKBOOK, {}, exported)
-        collect.verify_workbook(output / MORPHOLOGY_WORKBOOK, {},
-                                {title: exported[title] for title in morphology})
+        collect.verify_workbook(output / profile['workbook'], {}, exported)
+        if not nuclei_only:
+            collect.verify_workbook(output / MORPHOLOGY_WORKBOOK, {},
+                                    {title: exported[title] for title in morphology})
         if progress:
             progress.phase('Verifying unchanged inputs', len(data['files']))
         for path, content in data['files'].items():
@@ -553,10 +598,10 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                 progress.advance(path.name)
             logger.info('INPUT_VERIFIED | %s | bytes=%s | sha256=%s',
                         path, len(content), hashlib.sha256(content).hexdigest())
-        logger.info('Verified %s non-border nuclei, %s images, %s markers, %s planned comparisons',
-                    len(data['nuclei']), len(data['images']), len(selected), len(data['statistics']))
-        write_status(output, 'SUCCESS', Collection=str(collection), Nuclei_run_ID=data['run_id'],
-                     Statistics_unit=stats_unit or 'disabled', Markers=selected,
+        logger.info('Verified %s non-border nuclei, %s images, %s planned comparisons',
+                    len(data['nuclei']), len(data['images']), len(data['statistics']))
+        write_status(output, 'SUCCESS', **source_status, Report_kind=report_kind, Nuclei_run_ID=data['run_id'],
+                     Statistics_unit=stats_unit or 'disabled', **({} if nuclei_only else {'Markers': selected}),
                      Non_border_nuclei=len(data['nuclei']), Images=len(data['images']),
                      Images_before_filter=data['images_before_filter'],
                      Images_excluded=len(data['excluded_images']), Image_exclusion_rule=data['image_exclusion_rule'],
@@ -570,7 +615,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         (progress.message if progress else print)(f'SUCCESS: {output}')
         return True, output
     except (collect.Cancelled, KeyboardInterrupt, EOFError):
-        write_status(output, 'CANCELED', Stage=stage, Collection=str(collection))
+        write_status(output, 'CANCELED', Stage=stage, **source_status, Report_kind=report_kind)
         logger.warning('CANCELLED | stage=%s | output=%s', stage, output)
         raise
     except Exception as error:
@@ -581,7 +626,7 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
                        'Required_action': error.action, 'Plate_map_details': error.details}
         else:
             logger.exception('Report failed during %s', stage)
-        write_status(output, 'FAILED', Stage=stage, Collection=str(collection), Error=str(error), **details)
+        write_status(output, 'FAILED', Stage=stage, **source_status, Report_kind=report_kind, Error=str(error), **details)
         diagnostic = {'Status': 'FAILED', 'Stage': stage, 'Error': str(error), **details}
         collect.write_workbook(output / 'Report_Diagnostics.xlsx', {
             'Diagnostics': (list(diagnostic), [diagnostic])})

@@ -26,7 +26,7 @@ All FIA commands that initialize ImageJ read the same `FIJI_ENDPOINT` from `fia-
 
 The following changes describe the installation, interface, and development infrastructure in `tech_dev`:
 
-- The software can be installed as a Python package, providing seven named terminal commands, including an optional nuclear-intensity workflow, spreadsheet collector and statistical report.
+- The software can be installed as a Python package, providing eight named analysis commands, including nuclei-only reporting, nuclear-intensity measurements, a spreadsheet collector and a marker-intensity report.
 - The analysis scripts are located in `fia-tools/`, with a package entry module in `fia-tools/__init__.py`.
 - A shared `environment.yaml` replaces the separate macOS and Linux environment files. The environment is named `fia_tools` and uses Python 3.10.
 - `pyproject.toml` defines the package dependencies and terminal commands. The `uv.lock` file from `main` is not included in this branch.
@@ -58,7 +58,7 @@ References to older run metadata below do not enable discovery or migration of t
 
 ### Interactive input and terminal progress
 
-All seven commands share validated interactive input. An invalid symbol, format or out-of-range selection prints a short explanation and repeats the same question without discarding earlier answers. Confirmations accept only `yes`/`y` and `no`/`n`; a typo never silently disables colocalization. Enter uses a default only when the prompt advertises one (newest reusable StarDist run, latest compatible intensity masks, or no for legacy-run confirmation). Every prompt accepts `q` to cancel; Ctrl+C and end-of-input also cancel without a traceback. Cancellation during a channel-preparation run is recorded as `CANCELLED` in `1_log.log`; an interrupted image is counted separately from failed images. Nuclei generation records cancellation during processing or a reuse prompt in `fia_assay/2_log.log`. Nuclear intensity records cancellation from its selection prompts onward in `fia_assay/3_nuclei_intensity.log`. Other command logs record cancellation when already open. Existing intensity/report completion markers continue to distinguish interrupted outputs from completed results. Invalid command-line options (for example, `-p abc`) still produce argparse usage errors instead of interactive retries, so automated launches remain noninteractive.
+All eight analysis commands share validated interactive input. An invalid symbol, format or out-of-range selection prints a short explanation and repeats the same question without discarding earlier answers. Confirmations accept only `yes`/`y` and `no`/`n`; a typo never silently disables colocalization. Enter uses a default only when the prompt advertises one (newest reusable StarDist run, latest compatible intensity masks, or no for legacy-run confirmation). Every prompt accepts `q` to cancel; Ctrl+C and end-of-input also cancel without a traceback. Cancellation during a channel-preparation run is recorded as `CANCELLED` in `1_log.log`; an interrupted image is counted separately from failed images. Nuclei generation records cancellation during processing or a reuse prompt in `fia_assay/2_log.log`. Nuclear intensity records cancellation from its selection prompts onward in `fia_assay/3_nuclei_intensity.log`. Other command logs record cancellation when already open. Existing intensity/report completion markers continue to distinguish interrupted outputs from completed results. Invalid command-line options (for example, `-p abc`) still produce argparse usage errors instead of interactive retries, so automated launches remain noninteractive.
 
 `select_channels` and `quantify_nuclear_intensity` use a compact live terminal line for the current image, processing stage, elapsed time and successful-image counters (per folder/run and across the selected batch). An image advances the success counter only after its outputs have been saved; failures are counted separately. Intensity compatibility checks have their own progress after choosing the mask-selection policy. Long filenames are shortened for display; full names remain in the journals.
 
@@ -69,6 +69,8 @@ Bio-Formats ND2 block messages update the stage percentage when available instea
 ```bash
 select_channels -i input_paths.json
 ```
+
+For a new analysis of nuclei alone, add `--nuclei-only`. After confirming folders, select the input type and nuclei channel; marker questions are omitted. Only the nuclei output is prepared. This mode uses the same MAX projection for stacks, 2D channel extraction, existing 8-bit segmentation conversion, native XY dimensions and calibration. Opening a multichannel file can still require reading its other channels; they are not projected, saved or measured as markers. Previously prepared marker files are left untouched and are irrelevant to the nuclei-only report.
 
 The command first asks you to confirm processing and checks output folders for every input folder included in the analysis. It lists new and existing `fia_assay` locations and requests overwrite confirmation for each existing location **before initializing ImageJ or changing any results**. Answer `yes`/`y` to process that folder with overwrite, `no`/`n` to skip only that folder and continue to the next question, or `q` to cancel the entire batch before any writes, including folders already approved. New output locations are included automatically. Skipped folders retain all existing results and logs unchanged and do not enter the progress counters. After all decisions, the command prints selected/skipped folder counts and the number of selected input images. If every folder is skipped, or you decline the initial processing question, it exits normally without a traceback or a misleading analysis-success message. Only when folders remain selected does it initialize ImageJ and ask once for the input image type, nuclei segmentation channel, and number and indices of the marker channels. These markers can be used for foci analysis or nuclear marker-intensity measurements. There are no further overwrite prompts between folders. Confirmation retains the existing behavior of overwriting prepared-channel outputs and metadata; it does not delete the entire `fia_assay` directory or its other analysis runs.
 
@@ -187,6 +189,40 @@ The report chooses units per image **before aggregation, statistics and plotting
 - `Calibration_Summary.csv` and its workbook sheet list retained images, wells with retained images and non-border nuclei per condition and calibration cohort. Plot captions and statistical tables include contributing image counts. Each plotted metric has one complete overview containing all its panels.
 
 Older collected spreadsheets remain readable in pixel units because the report does not reopen original images. To obtain physical units for an existing experiment, rerun `generate_nuclei_mask` with the desired **same pixel threshold** and reuse validated StarDist masks; then rerun `quantify_nuclear_intensity`, `fia_collect_marker_intensity_results`, and `fia_marker_intensity_report`. These runs create new result folders. A new `select_channels` run is necessary only if native prepared images or usable source calibration are unavailable, or if earlier images were resized. No archived spreadsheet is rewritten in place.
+
+## Nuclei-only reports
+
+The independent route uses the existing channel preparation and nuclei segmentation, followed by a direct table report:
+
+```bash
+select_channels -i input_paths.json --nuclei-only
+generate_nuclei_mask -i input_paths.json -p 200
+fia_nuclei_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
+```
+
+The values 200 px² and 20 non-border nuclei are examples, not new defaults. Place one 96-well Excel layout directly in each experiment's `fia_assay/`. Use the same blank template, optional Order/Group table, color blocks and bold control roles as the marker report. `--template` overrides discovery for every selected experiment/run; `--sheet` selects another worksheet. Missing, invalid or ambiguous layouts produce explicit terminal and journal diagnostics and a failed `report_status.json`; calculations do not proceed with a guessed layout.
+
+`fia_nuclei_report` uses all valid folders in the JSON. It validates `Final_Nuclei_Mask_<timestamp>/nuclei_run.json`, the morphology workbook, matching CSV exports, nucleus IDs, counts and image summaries. The default `--nuclei-runs latest` selects the newest valid completed run per experiment, recording rejected newer candidates. Use `all` for separate reports of every valid completed run or `ask` for interactive selection. Experiments and runs are never pooled. There is no collector step, marker selection or dependency on prepared markers, intensity runs or marker collections. The report reads tables and source filenames, not image pixels, and does not initialize ImageJ, StarDist or TensorFlow.
+
+### Nuclei report measurements and plots
+
+The measured population and calculations are the existing FIA morphology population: non-border nuclei after the selected final-mask area filter. The count is `Non_border_nuclei_count` per image; total and border counts remain in the image table. All 12 morphology metrics remain available: Area, Perimeter, Circularity, Aspect ratio, Solidity, Major axis, Minor axis, Feret maximum, Feret minimum, Equivalent diameter, Roundness and Eccentricity. Source orientation, centroids and IDs also remain in the raw nucleus table; no intensity or additional shape descriptors are calculated.
+
+Four morphology metrics are **always plotted**, whether statistics are disabled, unavailable, significant or nonsignificant: **Area, Aspect ratio, Circularity and Solidity**. These use the existing violin/inner-boxplot rendering and small-sample behavior. Together with `Nuclei_count`, this normally gives five complete overview plots. A positive `--min-nuclei` adds `Nuclei_count_all`, giving six. Calibrated and uncalibrated size populations stay separate; if both occur, Area has a physical-unit and a pixel-unit plot, adding one overview. No plots are split into separate block files.
+
+Condition fills, neutral-grey image points, technical-well shapes, red edges below the count threshold and stable condition order follow the shared report style. `--min-nuclei` is inclusive; an image exactly at the threshold is retained. The default 0 disables count filtering. The diagnostic count plot includes successfully processed images before this filter; ordinary counts, morphology summaries and tests use retained images. Genuine zero-nucleus images contribute zero to counts and no morphology values. Processing failures are excluded from every plot, including the diagnostic count plot, using both run snapshots and the current experiment registry. Empty conditions retain their label and n=0; an empty eligible population never becomes an invented zero observation.
+
+Statistics are disabled unless `--stats-unit nucleus` or `well` is supplied. Existing Welch comparisons, control validation, equal-image-weight well means and Holm correction are reused unchanged. Nucleus mode uses images for count tests and nuclei for morphology; well mode uses wells. All 12 morphology metrics and count enter the planned family, not only the four plotted metrics; unavailable planned tests still count. Physical/pixel size cohorts remain distinct. A nuclei-only report has no intensity comparisons, so its Holm family and adjusted p-values can differ from a report that includes markers. Nucleus/image tests remain exploratory with respect to within-well dependence; neither mode infers biological replication.
+
+### Nuclei report outputs
+
+Each run writes `fia_assay/FIA_Nuclei_Report_<timestamp>/` with one `FIA_Nuclei_Report.xlsx`, matching CSV tables, `Plots/`, `plot_style.json` and `report_status.json`. The workbook includes raw Nuclei/Images, Morphology_By_Condition, Morphology_Comparisons, Statistics, exclusion/filter and calibration summaries, plate order, plot data/labels and provenance. All plots are embedded on its Plots sheet. There is no additional morphology-only summary workbook. The field `Marker` in Plot_Data denotes the **geometric point symbol**, not a staining channel.
+
+`--plot-format pdf` is the default; `png` and `both` are supported. Excel raster previews are generated in memory in PDF-only mode. `Inputs/Nuclei/`, `Inputs/PlateMap/` and, when needed, `Inputs/Source_Extras/` preserve source bytes. The source manifest records hashes; snapshots with the same basename retain separate paths. Inputs and exported tables are verified before SUCCESS is recorded.
+
+The current journal is `fia_assay/3_nuclei_report.log`; older journals move to `fia_assay/logs/3_nuclei_report_<timestamp>.log`. One journal covers discovery and all selected nuclei runs for that experiment. It records parameters, excluded inputs, phases, durations, saved results, warnings, errors and completion. Terminal progress uses the same compact table-workflow phases and honest counters as the marker report. Failure in one experiment does not prevent reports for the others. The command participates in the existing managed temporary-resource lifecycle.
+
+The marker-report route remains available and keeps its existing significance-based selection of morphology plots. `fia_marker_intensity_report --markers none` still reports a collected dataset; use `fia_nuclei_report` for the direct nuclei-only route.
 
 ## Nuclear marker intensity
 
@@ -463,7 +499,7 @@ python fia-tools/4_foci_quantification.py -i input_paths.json
 
 ## Temporary resources and system diagnostics
 
-All seven installed analysis commands, and direct execution of their script files, use a lightweight supervisor. Argument validation and `--help` run before a worker or temporary directory is created. The analysis runs in a child Python process with the same interpreter, arguments, working directory and terminal streams. A fresh temporary directory is selected before importing processing libraries. `TMPDIR`, `TEMP` and `TMP` are set only in the worker environment; `fiji_config` supplies `-Djava.io.tmpdir=<directory>` before ImageJ starts. Existing heap limits, Fiji endpoint, StarDist model, image types and numerical settings are preserved. Imported Python functions called directly by another application do not automatically start this CLI lifecycle.
+All eight installed analysis commands, and direct execution of their script files, use a lightweight supervisor. Argument validation and `--help` run before a worker or temporary directory is created. The analysis runs in a child Python process with the same interpreter, arguments, working directory and terminal streams. A fresh temporary directory is selected before importing processing libraries. `TMPDIR`, `TEMP` and `TMP` are set only in the worker environment; `fiji_config` supplies `-Djava.io.tmpdir=<directory>` before ImageJ starts. Existing heap limits, Fiji endpoint, StarDist model, image types and numerical settings are preserved. Imported Python functions called directly by another application do not automatically start this CLI lifecycle.
 
 The default runtime root is `~/.fia-tools` (`~` means the current user's home directory on each OS). An absolute writable `FIA_RUNTIME_HOME` can select another location. For example, in a macOS/Linux shell use `export FIA_RUNTIME_HOME="/path/to/FIA-runtime"`; in PowerShell use `$env:FIA_RUNTIME_HOME = "D:\FIA-runtime"`. Use the same setting for later diagnostics. The supervisor does not silently substitute another location if it cannot create its run storage. This setting does not relocate existing caches or search previous custom runtime roots.
 
@@ -514,6 +550,8 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `fia_assay/2_log.log` | Current nuclei-generation run, from validation and mask selection through StarDist/ImageJ and morphology |
 | `fia_assay/logs/2_log_<timestamp>.log` | Previous nuclei-generation journals preserved on rerun |
 | `fia_assay/logs/2_excluded_images.log` | Cumulative audit of images excluded after a StarDist input or inference failure, including source path, hash, reason and time |
+| `fia_assay/3_nuclei_report.log` | Current nuclei-only report command, including source validation, filtering, plots and saving |
+| `fia_assay/logs/3_nuclei_report_<timestamp>.log` | Archived nuclei-only report journals |
 | `fia_assay/excluded_images.json` | Persistent experiment-wide exclusion registry read by downstream analyses and repeated runs |
 | `fia_assay/3_nuclei_intensity.log` | Current nuclear-intensity command, including selection, validation and all marker/mask combinations |
 | `fia_assay/logs/3_nuclei_intensity_<timestamp>.log` | Previous nuclear-intensity journals preserved on rerun |
@@ -524,6 +562,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 | `fia_assay/Nuclei_StarDist_mask_processed_<timestamp>/` | Initial nuclei masks |
 | `fia_assay/Final_Nuclei_Mask_<timestamp>/` | Processed nuclei masks, morphology workbook/CSV tables and run metadata |
 | `fia_assay/Final_Nuclei_Mask_<timestamp>/Morphology_QC/` | Per-image nucleus ID label maps and numbered PNG previews |
+| `fia_assay/FIA_Nuclei_Report_<timestamp>/` | Direct nuclei-only report workbook/CSV, count and four core morphology overviews, source snapshots and completion status |
 | `fia_assay/Foci_Masks/Foci_<index>_Channel_<channel>_<timestamp>/` | Processed masks for a selected foci channel |
 | `fia_assay/Nuclear_Intensity_<marker-folder>_<timestamp>/` | Separate marker-intensity workbook/CSV, native marker images, per-nucleus masks/ROIs and QC |
 | `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Copied morphology/intensity spreadsheets and combined per-nucleus/per-image tables for one selected nuclei run; diagnostic workbook only if collection fails |
@@ -532,7 +571,7 @@ Each input folder has its own analysis outputs. The following paths are relative
 
 The final table is `all_results_with_coloc_universal.csv`. Its filename is also used when colocalization is disabled. It contains per-nucleus rows across the processed images in one input folder, with channel-specific measurements. Numbered nuclei images are saved as PNG files; intersection masks are saved as TIFF files when requested. Separate study-wide summary tables are not automatically generated by the current final stage.
 
-Channel preparation, nuclei generation, nuclear intensity, collection and reporting keep their current journals in `fia_assay` at the fixed paths listed above, with earlier runs archived in `fia_assay/logs/`. All five record successful events, warnings, errors and final statuses. Other stage-specific logs include `3_val_log.log` in the input folder, and `foci_log.log` and `4_log.log` alongside their corresponding outputs; the final stage also logs progress. Older `2_val_log.log` and per-result nuclei journals are retained, but are no longer written by new nuclei-generation runs.
+Channel preparation, nuclei generation, nuclear intensity, collection and reporting keep their current journals in `fia_assay` at the fixed paths listed above, with earlier runs archived in `fia_assay/logs/`. These journals, including the nuclei-only report journal, record successful events, warnings, errors and final statuses. Other stage-specific logs include `3_val_log.log` in the input folder, and `foci_log.log` and `4_log.log` alongside their corresponding outputs; the final stage also logs progress. Older `2_val_log.log` and per-result nuclei journals are retained, but are no longer written by new nuclei-generation runs.
 
 Nuclei-mask, foci-mask, and final-analysis directories include timestamps. The prepared-channel folders and metadata file use fixed paths, and some log files are overwritten on rerun. The existing foci quantification stage selects the latest matching mask folders; nuclear intensity uses all manifest experiments and the marker/mask-selection policy described above. Preserve the outputs needed for a previous analysis before repeating preparation or switching between analyses in the same input folder.
 
