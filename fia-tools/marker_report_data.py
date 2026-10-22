@@ -446,8 +446,9 @@ def select_template(collection, template=None, sheet_name=None, location_label='
 
 
 def annotate(data, template, markers, stats_unit, sheet_name=None):
-    if stats_unit not in (None, 'nucleus', 'well'):
-        raise ValidationError('Statistics unit must be nucleus, well, or omitted')
+    allowed = (None, 'image', 'well') if data.get('report_kind') == 'pfak' else (None, 'nucleus', 'well')
+    if stats_unit not in allowed:
+        raise ValidationError(f'Statistics unit must be {allowed[1]}, well, or omitted')
     if len(set(markers)) != len(markers) or not set(markers) <= set(marker_catalog(data)[0]):
         raise ValidationError('Select unique marker folders from the available catalog')
     if len({MARKER_PATTERN.fullmatch(m)[1] for m in markers}) != len(markers):
@@ -553,6 +554,8 @@ def metric_specs(markers, images=None):
 
 
 def report_specs(data, markers=None):
+    if 'metric_specs' in data:
+        return data['metric_specs']
     return metric_specs(data['markers'] if markers is None else markers,
                         data['images'] or data.get('calibration_images_before_filter', []))
 

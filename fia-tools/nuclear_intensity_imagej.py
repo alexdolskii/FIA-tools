@@ -85,8 +85,10 @@ class ImageJEngine:
             raise ValueError('Unsupported pixel type for lossless float32 conversion: '
                              + info['Pixel_type'])
 
-    def marker(self, path, mode, channel, expected_info):
-        """Read one channel without autoscaling; use ImageJ MAX over all Z planes."""
+    def marker(self, path, mode, channel, expected_info, projection_method='max'):
+        """Read native planes without scaling; MAX remains the nuclear default."""
+        if projection_method not in ('max', 'sum'):
+            raise ValueError('Projection must be max or sum.')
         import jpype
         ImagePlus = jimport('ij.ImagePlus')
         FloatProcessor = jimport('ij.process.FloatProcessor')
@@ -119,9 +121,9 @@ class ImageJEngine:
         projected = None
         try:
             if info['Z_planes'] > 1:
-                self.phase(f'Marker C{channel} MAX projection')
+                self.phase(f'Marker C{channel} {projection_method.upper()} projection')
                 projector = jimport('ij.plugin.ZProjector')(source)
-                projector.setMethod(projector.MAX_METHOD)
+                projector.setMethod(projector.SUM_METHOD if projection_method == 'sum' else projector.MAX_METHOD)
                 projector.setStartSlice(1)
                 projector.setStopSlice(info['Z_planes'])
                 projector.doProjection()
@@ -130,7 +132,7 @@ class ImageJEngine:
             else:
                 processor = source.getProcessor().duplicate()
             self._active_calibration = spatial.columns(info)
-            result = ImagePlus('Marker MAX' if info['Z_planes'] > 1 else 'Marker',
+            result = ImagePlus('Marker ' + projection_method.upper() if info['Z_planes'] > 1 else 'Marker',
                                processor)
             result.setIgnoreGlobalCalibration(True)
             result.setCalibration(jimport('ij.measure.Calibration')())

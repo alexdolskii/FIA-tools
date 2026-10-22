@@ -238,7 +238,7 @@ def test_native_end_to_end_exports_quoted_csv_and_rerun(tmp_path, engine, monkey
         assert rows[0]['Marker_channel'] == '2'
         assert output.name.startswith('Nuclear_Intensity_Foci_1_Channel_2_')
         book = load_workbook(output / 'Nuclear_Intensity.xlsx')
-        assert book.sheetnames == ['Nuclei', 'Images', 'Run_Info']
+        assert book.sheetnames == ['Nuclei', 'Images', 'Run_Info', 'Processing_Exclusions']
         headers, row = list(book['Images'].values)
         values = dict(zip(headers, row))
         assert values['Non_border_nuclei_count'] == 2

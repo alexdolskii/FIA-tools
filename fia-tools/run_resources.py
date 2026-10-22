@@ -26,6 +26,7 @@ COMMANDS = (
     'select_channels', 'generate_nuclei_mask', 'generate_foci_mask',
     'quantify_foci', 'quantify_nuclear_intensity',
     'fia_collect_marker_intensity_results', 'fia_marker_intensity_report', 'fia_nuclei_report',
+    'quantify_pfak', 'fia_pfak_report',
 )
 
 

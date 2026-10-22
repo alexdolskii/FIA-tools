@@ -23,17 +23,19 @@ def observations(data, field, group):
     if data['stats_unit'] == 'well':
         rows = [r for r in data['well_values'] if r['Metric'] == field and r['Group'] == group]
         return [r['Value'] for r in rows if r['Value'] is not None], 'well'
-    population = data['images'] if field == COUNT else data['nuclei']
+    image_metric = field == COUNT or field in data.get('image_metric_fields', ())
+    population = data['images'] if image_metric else data['nuclei']
     return [metric_value(r, field) for r in population
             if r['Group'] == group and metric_value(r, field) is not None], (
-        'image' if field == COUNT else 'nucleus')
+        'image' if image_metric else 'nucleus')
 
 
 def contribution_counts(data, field, group):
     images = [r for r in data['image_values']
               if r['Metric'] == field and r['Group'] == group and r['Value'] is not None]
     return {'images': len(images), 'wells': len({r['Well'] for r in images}),
-            'nuclei': sum(r['N_nuclei'] if field == COUNT else r['N_values'] for r in images)}
+            'nuclei': sum(r['N_nuclei'] if field == COUNT or field in data.get('image_metric_fields', ())
+                          else r['N_values'] for r in images)}
 
 
 def holm_adjust(p_values, planned_size):
