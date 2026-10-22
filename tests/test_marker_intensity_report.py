@@ -1,7 +1,6 @@
 """Report contracts: provenance, plate design, observation units and literal exports."""
 
 import csv
-from plate_helpers import workbook, M1, M2
 import json
 import os
 import shutil
@@ -18,8 +17,8 @@ import numpy as np
 import pytest
 from marker_report_plots import plot_rows, plot_specs, render_plots
 from marker_report_statistics import calculate_statistics, holm_adjust, observations
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl import load_workbook
+from plate_helpers import M2, workbook
 from scipy.stats import ttest_ind
 from test_collect_marker_intensity_results import (
     collect,
@@ -546,8 +545,8 @@ def test_batch_uses_assignments_and_creates_separate_marker_reports(tmp_path, mo
 
 def marker_preview_folder(path, markers):
     path.mkdir()
-    from plate_helpers import design
     import plate_design
+    from plate_helpers import design
     plate_design.save_snapshot(path, design(path.parent))
     collector.write_csv(path / 'FIA_Marker_Intensity_Images.csv',
                         ['Mask_name', *[marker + '_Availability' for marker in markers]],

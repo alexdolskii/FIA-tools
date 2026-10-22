@@ -4,18 +4,17 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('select_channels'))
 
-from assay_layout import ASSAY_DIR, MARKERS_DIR
-
 import hashlib
 import json
-import plate_design as plate
 import os
 from pathlib import Path
 from uuid import uuid4
 
 import fiji_config
 import imagej
+import plate_design as plate
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR, MARKERS_DIR
 from bioformats_progress import bioformats_progress
 from channel_run_log import ChannelRunLog
 from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
@@ -224,7 +223,7 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                         for method in ('Foci', 'Nuclear intensity', 'Field signal'):
                             for marker in design.markers(method):
                                 folders[marker['id']] = Path(processed_folder) / MARKERS_DIR / marker['id']
-                    for key, folder in folders.items():
+                    for folder in folders.values():
                         folder.mkdir(parents=True, exist_ok=True)
                         prepared[folder] = {}
                         preparation_manifest(folder, design, {}, 'RUNNING', source_hashes, tiff_type or 1)

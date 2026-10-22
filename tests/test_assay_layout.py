@@ -1,16 +1,16 @@
 """The prepared-channel producer and both analysis branches share one fresh layout."""
 
 import json
-import plate_design
 import shutil
 import sys
 
 import collect_marker_intensity_results as collector
 import marker_intensity_report as report
 import nuclear_intensity as intensity
+import plate_design
 import pytest
 from test_select_channels_logging import run, source_folder
-from test_select_channels_logging import runtime  # noqa: F401 - shared pytest fixture
+from test_select_channels_logging import runtime as runtime  # noqa: PLC0414 - pytest fixture re-export
 
 nuclei = sys.modules['nuclei_mask_generation']
 foci = sys.modules['foci_mask_generation']

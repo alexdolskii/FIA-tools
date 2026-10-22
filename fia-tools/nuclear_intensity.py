@@ -6,7 +6,6 @@ if __name__ == '__main__':
 
 
 import csv
-import plate_design as plate
 import json
 import logging
 import re
@@ -16,6 +15,7 @@ from pathlib import Path
 
 import image_exclusions as exclusions
 import numpy as np
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR, MARKERS_DIR
 from intensity_run_log import IntensityJournal

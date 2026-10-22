@@ -1,13 +1,13 @@
 """Versioned, verified FieldSignal tables shared by analysis and image-free reports."""
 
 import hashlib
-import plate_design as plate
 import json
 import math
 from pathlib import Path
 
 import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
+import plate_design as plate
 import spatial_calibration as spatial
 from marker_intensity_report import write_workbook
 from run_resources import temporary_path

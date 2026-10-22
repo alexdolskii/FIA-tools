@@ -2,10 +2,7 @@
 
 import numpy as np
 import tifffile
-
-import nuclear_intensity_imagej as backend
-import plate_design as plate
-from test_nuclear_intensity import engine
+from test_nuclear_intensity import engine as engine  # noqa: PLC0414 - pytest fixture re-export
 from test_plate_design_workflow import scheme
 
 

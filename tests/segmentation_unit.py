@@ -4,8 +4,9 @@ These tests deliberately use arbitrary image names and isolated folders. Actual
 Excel/preparation provenance is exercised by test_plate_design_workflow instead.
 """
 from pathlib import Path
-import pytest
+
 import plate_design
+import pytest
 
 
 def isolate_scheme_boundary(monkeypatch):

@@ -15,13 +15,12 @@ import fiji_config
 import image_exclusions as exclusions
 import imagej
 import numpy as np
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR
 from csbdeep.utils import normalize
 from interactive_input import ask_choice, ask_yes_no, cancelable
 from nuclei_morphology import NucleiMorphologyExport
-import plate_design as plate
-
 from nuclei_run_log import NucleiLogSession, NucleiRunLog, nuclei_log_session
 from run_resources import temporary_path
 from scyjava import jimport

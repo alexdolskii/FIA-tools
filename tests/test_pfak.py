@@ -1,10 +1,10 @@
 """FieldSignal mask/intensity semantics, image-level statistics and portable reports."""
 
 import json
-from pathlib import Path
 import os
 import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import Mock
 from zipfile import ZipFile
 
@@ -15,6 +15,7 @@ import pfak_analysis as analysis
 import pfak_io as io
 import pfak_report as report
 import pfak_report_data as report_data
+import plate_design
 import pytest
 import spatial_calibration as spatial
 import test_nuclear_intensity as native_tests
@@ -23,16 +24,17 @@ from cli_arguments import parse_arguments
 from marker_report_statistics import calculate_statistics, observations
 from pfak_imagej import save_images
 from pfak_measurements import measure_projection, threshold_settings
-from test_collect_marker_intensity_results import create_morphology, sheet_rows
 from plate_helpers import workbook
-import plate_design
+from test_collect_marker_intensity_results import create_morphology, sheet_rows
+
 
 def plate(path, groups=None):
     return workbook(path, groups, ['Nuclei: DAPI', 'Ignore', 'Field signal: pFAK-Y397'])
 
 @pytest.fixture(autouse=True)
 def small_previews(monkeypatch):
-    import marker_report_plots, pfak_plots
+    import marker_report_plots
+    import pfak_plots
     monkeypatch.setattr(marker_report_plots, 'PNG_DPI', 80)
     monkeypatch.setattr(pfak_plots, 'PNG_DPI', 80)
 

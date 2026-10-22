@@ -1,8 +1,6 @@
 """Collector checks using the actual morphology/intensity spreadsheet exporters."""
 
 import csv
-import plate_design as plate_design
-from plate_helpers import design, M1, M2, M3
 import errno
 import json
 import os
@@ -14,8 +12,10 @@ import collect_marker_intensity_results as collector
 import nuclear_intensity as intensity
 import nuclei_morphology as morphology
 import numpy as np
+import plate_design
 import pytest
 from openpyxl import load_workbook
+from plate_helpers import M1, M2, M3, design
 
 
 def create_morphology(root, stamp='20260924_090000', particle_size=2, empty=False):

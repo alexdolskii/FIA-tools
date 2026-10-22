@@ -1,7 +1,6 @@
 """Nuclei-only preparation and direct reporting without any marker dependency."""
 
 import hashlib
-from plate_helpers import design
 import json
 import os
 import subprocess
@@ -19,6 +18,7 @@ import test_select_channels_logging as preparation_tests
 import test_table_workflows as workflow_tests
 from marker_report_plots import plot_specs
 from marker_report_statistics import calculate_statistics
+from plate_helpers import design
 from test_collect_marker_intensity_results import collect, create_morphology, sheet_rows
 from test_marker_intensity_report import annotated, plate
 from test_select_channels_logging import journal, mod, source_folder

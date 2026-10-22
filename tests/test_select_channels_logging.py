@@ -1,7 +1,6 @@
 """Exercise folder journals with real TIFF writes and a stubbed ImageJ runtime."""
 
 import io
-from plate_helpers import design
 import json
 import logging
 import sys
@@ -12,6 +11,7 @@ import numpy as np
 import pytest
 import tifffile
 from channel_run_log import ChannelRunLog
+from plate_helpers import design
 from terminal_progress import CompactProgress
 
 mod = sys.modules["select_channels"]

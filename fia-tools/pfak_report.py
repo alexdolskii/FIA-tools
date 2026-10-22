@@ -6,7 +6,6 @@ if __name__ == '__main__':
 
 import hashlib
 import json
-import plate_design as scheme
 import logging
 from pathlib import Path
 
@@ -15,6 +14,7 @@ import image_exclusions as exclusions
 import marker_report_data as shared
 import pfak_io as io
 import pfak_report_data as measurements
+import plate_design as scheme
 from assay_layout import ASSAY_DIR
 from cli_arguments import parse_arguments
 from interactive_input import CANCELLATION_EXCEPTIONS, choose_indices

@@ -5,12 +5,12 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('fia_nuclei_report'))
 
 import csv
-import plate_design as plate
 import logging
 from datetime import datetime
 
 import collect_marker_intensity_results as collect
 import marker_intensity_report as report
+import plate_design as plate
 from assay_layout import ASSAY_DIR
 from cli_arguments import parse_arguments
 from table_workflow import TableJournal, TableProgress

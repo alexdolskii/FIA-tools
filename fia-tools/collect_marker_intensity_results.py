@@ -6,7 +6,6 @@ if __name__ == '__main__':
 
 
 import csv
-import plate_design as plate
 import hashlib
 import io
 import json
@@ -18,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import image_exclusions as exclusions
+import plate_design as plate
 import spatial_calibration as spatial
-from assay_layout import ASSAY_DIR, MARKERS_DIR
+from assay_layout import ASSAY_DIR
 from interactive_input import Cancelled, ask_choice, choose_indices
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell

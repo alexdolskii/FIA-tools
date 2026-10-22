@@ -9,12 +9,10 @@ import io
 import json
 import re
 import unicodedata
-from zipfile import BadZipFile
 from pathlib import Path
+from zipfile import BadZipFile
 
 from openpyxl import load_workbook
-
-from assay_layout import ASSAY_DIR
 
 METHODS = ('Nuclei', 'Foci', 'Nuclear intensity', 'Field signal', 'Fiber')
 PREFIXES = dict(zip(METHODS, ('Nuclei', 'Foci', 'NuclearIntensity', 'FieldSignal', 'Fiber')))
@@ -37,6 +35,7 @@ JOURNALS = dict(zip((
 def record_validation_failure(command, input_path, roots, errors):
     """Save actionable input errors even before analysis output is created."""
     import logging
+
     from table_workflow import TableJournal
     audit = TableJournal(JOURNALS[command], input_path)
     try:
@@ -90,7 +89,8 @@ def _literal(cell):
     if cell.value is None:
         return ''
     if not isinstance(cell.value, str):
-        raise ValueError(f'{cell.parent.title}!{cell.coordinate}: expected text')
+        # This is a workbook-content validation error, not a Python API type error.
+        raise ValueError(f'{cell.parent.title}!{cell.coordinate}: expected text')  # noqa: TRY004
     return unicodedata.normalize('NFC', cell.value.strip())
 
 

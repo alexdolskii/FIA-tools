@@ -3,12 +3,13 @@ import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import collect_marker_intensity_results as collect
 import numpy as np
+import plate_design as plate
 import pytest
 import tifffile
-import plate_design as plate
-import collect_marker_intensity_results as collect
-from test_plate_design_workflow import scheme, dataset
+from test_plate_design_workflow import dataset, scheme
 
 
 def test_current_preparation_passes_to_stardist_with_scheme_snapshot(tmp_path, monkeypatch):
@@ -38,7 +39,7 @@ def test_current_preparation_passes_to_stardist_with_scheme_snapshot(tmp_path, m
 
 def test_foci_uses_only_assigned_wells_and_explicit_intersections(tmp_path):
     stage = sys.modules['foci_quantification']
-    design, run, _ = dataset(tmp_path/'experiment', wells=('A01','F01','G01'))
+    design, _run, _ = dataset(tmp_path/'experiment', wells=('A01','F01','G01'))
     root = design.path.parent
     pixels = np.zeros((20,30), dtype=np.uint8)
     pixels[2:4,2:4] = 255

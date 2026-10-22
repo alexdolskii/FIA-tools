@@ -3,15 +3,14 @@ import json
 from copy import copy, deepcopy
 from pathlib import Path
 
-import pytest
-from openpyxl import load_workbook
-from openpyxl.styles import Font, PatternFill
-
 import marker_intensity_report as report
 import marker_report_data as inputs
 import marker_report_plots as plots
 import plate_design
+import pytest
 from marker_report_statistics import calculate_statistics
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
 from test_collect_marker_intensity_results import sheet_rows
 from test_marker_intensity_report import MARKER, annotated, collection, plate
 

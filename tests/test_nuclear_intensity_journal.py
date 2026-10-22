@@ -7,11 +7,11 @@ from unittest.mock import MagicMock
 
 import nuclear_intensity as app
 import numpy as np
+import plate_design
 import pytest
 from openpyxl import load_workbook
-from test_nuclear_intensity import two_marker_experiment as make_experiment
 from plate_helpers import design
-import plate_design
+from test_nuclear_intensity import two_marker_experiment as make_experiment
 
 
 @pytest.fixture

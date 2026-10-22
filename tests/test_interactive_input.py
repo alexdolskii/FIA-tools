@@ -12,7 +12,6 @@ import collect_marker_intensity_results as collect
 import interactive_input as prompts
 import marker_intensity_report as report
 import nuclear_intensity as intensity
-import pandas as pd
 import pytest
 from channel_run_log import ChannelRunLog
 from terminal_progress import CompactProgress

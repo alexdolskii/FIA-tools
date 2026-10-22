@@ -265,4 +265,4 @@ class TestInitializeImageJ:
                 mod.initialize_imagej()
 
 # Isolate the numerical/progress boundary; current-format integration is tested separately.
-from segmentation_unit import scheme_boundary
+from segmentation_unit import scheme_boundary as scheme_boundary  # noqa: PLC0414 - pytest fixture re-export

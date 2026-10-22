@@ -7,16 +7,15 @@ import shutil
 import warnings
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
 
-import pytest
 import collect_marker_intensity_results as collect
 import marker_intensity_report as report
 import marker_report_data as inputs
 import marker_report_plots as plots
+import pytest
 from table_workflow import TableJournal, TableProgress
-from test_collect_marker_intensity_results import create_morphology, create_intensity
-from test_marker_intensity_report import collection, annotated
+from test_collect_marker_intensity_results import create_intensity, create_morphology
+from test_marker_intensity_report import annotated, collection
 
 
 def manifest(tmp_path, roots):

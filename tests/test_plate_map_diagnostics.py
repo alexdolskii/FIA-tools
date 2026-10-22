@@ -1,9 +1,10 @@
 """Raw-folder scheme errors remain actionable before any report calculations."""
 import json
-import pytest
-from openpyxl import Workbook
+
 import marker_intensity_report as report
 import marker_report_data as inputs
+import pytest
+from openpyxl import Workbook
 from test_collect_marker_intensity_results import sheet_rows
 from test_marker_intensity_report import collection, plate
 

@@ -12,9 +12,8 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
-from skimage.io import imread, imsave
-
 from nuclei_run_log import NucleiLogSession, NucleiProgress, NucleiRunLog
+from skimage.io import imread, imsave
 
 mod = sys.modules['nuclei_mask_generation']
 
@@ -390,4 +389,4 @@ def test_later_folder_failure_keeps_completed_folder_status_and_its_own_diagnost
     assert 'second folder failed to open' not in logs[0] + logs[2]
 
 # Isolate the numerical/progress boundary; current-format integration is tested separately.
-from segmentation_unit import scheme_boundary
+from segmentation_unit import scheme_boundary as scheme_boundary  # noqa: PLC0414 - pytest fixture re-export

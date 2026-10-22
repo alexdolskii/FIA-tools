@@ -5,7 +5,6 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('quantify_field_signal'))
 
 import csv
-import plate_design as plate
 import json
 import logging
 import time
@@ -13,10 +12,11 @@ import time
 import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
 import pfak_io as io
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR
 from cli_arguments import parse_arguments
-from interactive_input import CANCELLATION_EXCEPTIONS, ask_integer
+from interactive_input import CANCELLATION_EXCEPTIONS
 from marker_intensity_report import create_output
 from marker_report_data import WELL_PATTERN
 from pfak_measurements import measure_projection, nuclear_population

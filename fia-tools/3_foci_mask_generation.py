@@ -4,10 +4,9 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('generate_foci_mask'))
 
-import logging
 import hashlib
 import json
-import plate_design as plate
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,12 +14,14 @@ from pathlib import Path
 import fiji_config
 import image_exclusions as exclusions
 import imagej
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR, MARKERS_DIR
-from table_workflow import TableJournal, TableProgress
-from interactive_input import CANCELLATION_EXCEPTIONS
-from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
+from interactive_input import (
+    CANCELLATION_EXCEPTIONS,
+)
 from scyjava import jimport
+from table_workflow import TableJournal, TableProgress
 from validate_folders import validate_input_file
 
 
@@ -360,7 +361,7 @@ def main_filter_foci(input_json_path: str, foci_threshold: int, markers=None):
                                 failures += not complete
                     except CANCELLATION_EXCEPTIONS:
                         raise
-                    except Exception as error:
+                    except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
                         failures += 1
                         audit.incomplete(root, str(error))
         audit.status = 'INCOMPLETE' if failures else 'COMPLETE'
@@ -368,7 +369,7 @@ def main_filter_foci(input_json_path: str, foci_threshold: int, markers=None):
     except CANCELLATION_EXCEPTIONS:
         audit.status = 'CANCELLED'
         return 130
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
         print(f'Foci masking failed: {error}')
         audit.status = 'FAILED'
         return 1

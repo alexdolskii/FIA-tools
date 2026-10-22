@@ -1,7 +1,6 @@
 """Native crash isolation and durable exclusions across the FIA analysis chain."""
 
 import json
-from segmentation_unit import isolate_scheme_boundary
 import os
 import shutil
 import sys
@@ -17,6 +16,7 @@ import nuclear_intensity as intensity
 import numpy as np
 import pytest
 import tifffile
+from segmentation_unit import isolate_scheme_boundary
 from stardist_worker import ImageInferenceError, IsolatedStarDist, checked_normalize
 from test_collect_marker_intensity_results import (
     create_intensity,

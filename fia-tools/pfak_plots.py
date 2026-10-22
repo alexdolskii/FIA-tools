@@ -6,11 +6,11 @@ import matplotlib.pyplot as plt
 import plot_palette as palette
 from marker_report_plots import (
     PNG_DPI,
-    panel_grid,
     assigned_group,
     draw_distribution,
     draw_image_points,
     p_label,
+    panel_grid,
     plot_font,
     wrap_label,
 )

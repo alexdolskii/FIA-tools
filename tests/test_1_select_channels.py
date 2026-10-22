@@ -14,12 +14,12 @@ Each test is structured in three sections:
 """
 
 import json
-from plate_helpers import design
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from plate_helpers import design
 
 # The module was loaded and registered by conftest.py.
 mod = sys.modules["select_channels"]

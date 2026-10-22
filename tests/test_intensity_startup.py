@@ -9,9 +9,9 @@ import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import nuclear_intensity as app
 import numpy as np
 import pytest
-import nuclear_intensity as app
 from intensity_run_log import IntensityJournal
 from terminal_progress import CompactProgress
 from test_nuclear_intensity import make_experiment
@@ -187,7 +187,7 @@ def test_prepared_marker_files_are_not_measurement_inputs(setup_batch):
 
 
 def test_missing_json_folder_stops_whole_batch_before_engine(setup_batch, tmp_path):
-    manifest, roots, _, _, engine, factory = setup_batch(count=1, multiple=False)
+    manifest, roots, _, _, _engine, factory = setup_batch(count=1, multiple=False)
     missing = tmp_path / 'unavailable'
     manifest.write_text(json.dumps({'paths_to_files': [str(roots[0]), str(missing)]}))
     assert app.main(manifest) == 1

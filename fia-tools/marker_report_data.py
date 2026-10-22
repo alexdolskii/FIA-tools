@@ -1,9 +1,8 @@
 """Validate collected FIA spreadsheets and annotate nuclei from a plate map."""
 
 import hashlib
-import json
-import plate_design as plate
 import io
+import json
 import math
 import re
 from collections import defaultdict
@@ -13,6 +12,7 @@ from zipfile import BadZipFile
 import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
 import numpy as np
+import plate_design as plate
 import spatial_calibration as spatial
 from openpyxl import load_workbook
 

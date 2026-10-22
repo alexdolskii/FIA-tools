@@ -5,10 +5,8 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('quantify_foci'))
 
 import itertools
-import logging
 import json
-import hashlib
-import plate_design as plate
+import logging
 import os
 import re
 import time
@@ -20,14 +18,14 @@ import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
 import numpy as np
 import pandas as pd
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR
-from table_workflow import TableJournal, TableProgress
-from run_resources import write_json, utc_now
 from interactive_input import CANCELLATION_EXCEPTIONS
-from interactive_input import Cancelled, ask_yes_no, cancelable
 from PIL import Image, ImageDraw
+from run_resources import utc_now, write_json
 from skimage import io, measure
+from table_workflow import TableJournal, TableProgress
 from validate_folders import validate_input_file
 
 
@@ -574,9 +572,9 @@ def gather_paths_and_channels(base_folder: str, design=None):
 
     nuclei_files = []
     for f in os.listdir(nuclei_mask_folder):
-        if not f.startswith('.') and f.endswith(".tif") and exclusions.image_key(f) not in excluded:
-            if design is None or design.assigned(plate.well_from_name(f), 'Foci'):
-                nuclei_files.append(os.path.join(nuclei_mask_folder, f))
+        if (not f.startswith('.') and f.endswith(".tif") and exclusions.image_key(f) not in excluded
+                and (design is None or design.assigned(plate.well_from_name(f), 'Foci'))):
+            nuclei_files.append(os.path.join(nuclei_mask_folder, f))
 
     latest_foci = get_latest_foci_folders(fia_assay_folder, design)
     channels_dict = {}
@@ -727,10 +725,9 @@ def main_summarize_res(input_json_path: str, njobs=4):
                         df['Well'] = df['Image Key'].map(plate.well_from_name)
                         for marker in design.markers('Foci'):
                             mid = marker['id']
-                            df[mid + '_Availability'] = df['Well'].map(
-                                lambda w: 'AVAILABLE' if design.assigned(w, 'Foci', mid) else 'NOT_APPLICABLE')
-                            df[mid + '_Source_channel'] = df['Well'].map(
-                                lambda w: design.channel(w, 'Foci', mid) if design.assigned(w, 'Foci', mid) else None)
+                            df[mid + '_Availability'] = np.where(
+                                df['Well'].isin(marker['channels']), 'AVAILABLE', 'NOT_APPLICABLE')
+                            df[mid + '_Source_channel'] = df['Well'].map(marker['channels'])
                         df.sort_values(['Image Key', 'Nucleus']).to_csv(output / 'all_results_with_coloc_universal.csv', index=False)
                         pd.DataFrame([{'Marker_ID': m['id'], 'Marker_name': m['name'], 'Well': w, 'Original_channel': c}
                                       for m in design.markers('Foci') for w, c in m['channels'].items()]).to_csv(
@@ -752,7 +749,7 @@ def main_summarize_res(input_json_path: str, njobs=4):
                 except CANCELLATION_EXCEPTIONS:
                     state.update(Status='CANCELLED')
                     raise
-                except Exception as error:
+                except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
                     failures += 1
                     state.update(Status='FAILED', Error=str(error))
                     audit.incomplete(root, str(error))
@@ -765,7 +762,7 @@ def main_summarize_res(input_json_path: str, njobs=4):
     except CANCELLATION_EXCEPTIONS:
         audit.status = 'CANCELLED'
         return 130
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
         audit.status = 'FAILED'
         print(f'Foci quantification failed: {error}')
         return 1

@@ -4,8 +4,6 @@ Set FIA_IMAGEJ_JAR and FIA_BIOFORMATS_JAR to installed JAR paths for native test
 """
 
 import csv
-import plate_design as plate_design
-from plate_helpers import design, M1, M2, M3
 import io
 import json
 import os
@@ -15,10 +13,12 @@ from unittest.mock import MagicMock
 import nuclear_intensity as app
 import nuclear_intensity_imagej as backend
 import numpy as np
+import plate_design
 import pytest
 import tifffile
 from openpyxl import load_workbook
 from PIL import Image
+from plate_helpers import M1, M2, M3, design
 from terminal_progress import CompactProgress
 
 
@@ -425,7 +425,7 @@ def two_marker_experiment(tmp_path):
 
 
 def test_marker_catalog_uses_assignments_and_originals_not_prepared_folders(tmp_path):
-    manifest, raw, run, _, _ = two_marker_experiment(tmp_path)
+    _manifest, raw, _run, _, _ = two_marker_experiment(tmp_path)
     catalog = app.discover_markers([{'root': raw.parent, 'design': plate_design.load_design(raw.parent)}])
     assert {m['name'] for m in catalog} == {M1, M2}
     assert all(m['channel'] is None for m in catalog)

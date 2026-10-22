@@ -6,21 +6,20 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
-import pytest
-import tifffile
-from openpyxl import load_workbook
-
 import collect_marker_intensity_results as collect
 import marker_intensity_report as report
 import marker_report_data as data
 import nuclear_intensity as intensity
 import nuclei_morphology as morphology
+import numpy as np
 import plate_design as plate
+import pytest
 import spatial_calibration as spatial
-from marker_report_plots import panel_grid, plot_panels, plot_specs
+import tifffile
+from marker_report_plots import panel_grid
 from marker_report_statistics import calculate_statistics
-from test_select_channels_logging import runtime
+from openpyxl import load_workbook
+from test_select_channels_logging import runtime as runtime  # noqa: PLC0414 - pytest fixture re-export
 
 GOLD = Path(__file__).parents[1] / 'templates/FIA_96_well_Golden_Standard.xlsx'
 BLANK = GOLD.with_name('FIA_96_well_Template.xlsx')
@@ -175,7 +174,7 @@ def test_invalid_assignments_are_actionable(tmp_path, sheet, cell, value, reason
 
 
 def test_same_marker_changes_channel_and_nothing_else_is_measured(tmp_path):
-    design, run, output, engine = measured_collection(tmp_path/'experiment')
+    design, _run, output, engine = measured_collection(tmp_path/'experiment')
     measured = [x for x in engine.calls if x[0].startswith('MEASURE_')]
     assert measured == [('MEASURE_C01', 3), ('MEASURE_C02', 3), ('MEASURE_H04', 2), ('MEASURE_H04', 3)]
     combined = data.load_collection(output)

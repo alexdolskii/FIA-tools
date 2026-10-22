@@ -6,7 +6,6 @@ if __name__ == '__main__':
 
 
 import csv
-import plate_design as plate
 import hashlib
 import json
 import logging
@@ -21,6 +20,7 @@ import marker_report_data as inputs
 import matplotlib
 import numpy as np
 import openpyxl
+import plate_design as plate
 import scipy
 from assay_layout import ASSAY_DIR
 from cli_arguments import parse_arguments

@@ -1,10 +1,11 @@
 """Build real current-format schemes for focused regression fixtures."""
-from pathlib import Path
-from copy import copy
 import json
-from openpyxl import load_workbook
-from openpyxl.styles import PatternFill, Font
+from copy import copy
+from pathlib import Path
+
 import plate_design as plate
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill
 
 TEMPLATE = Path(__file__).parents[1] / 'templates/FIA_96_well_Template.xlsx'
 M1 = plate.marker_id('Nuclear intensity', 'Marker 1')
