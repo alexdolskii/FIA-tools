@@ -1,6 +1,8 @@
 # FIA-tools
 
-FIA-tools analyzes nuclei and independently assigned markers in multichannel confocal images. The `tech_dev` workflow uses **one FIA Excel scheme beside each experiment's raw images**. The scheme defines the condition, comparison block, control, per-well channel assignments, requested Foci intersections and plot layout.
+FIA-tools analyzes nuclei and independently assigned markers in multichannel confocal images. The Excel-based workflow uses **one FIA Excel scheme beside each experiment's raw images**. The scheme defines the condition, comparison block, control, per-well channel assignments, requested Foci intersections and plot layout.
+
+**Version for these instructions:** [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), branch `feat/plate-scheme-routing`, targeting `tech_dev`. Until that PR is merged, updating only `tech_dev` does not install this workflow. Use the PR branch as shown below; after the merge, use `tech_dev` instead.
 
 This development version extends the [original protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1), associated with `main`. Record the exact commit (`git rev-parse HEAD`), environment and analysis parameters.
 
@@ -27,8 +29,8 @@ macOS and Linux environment builds are configured in CI; this is not a guarantee
 Run in a terminal with Conda available:
 
 ```bash
-git clone --branch tech_dev --single-branch https://github.com/alexdolskii/FIA-tools.git FIA-tools-tech_dev
-cd FIA-tools-tech_dev
+git clone --branch feat/plate-scheme-routing --single-branch https://github.com/alexdolskii/FIA-tools.git FIA-tools-plate-scheme
+cd FIA-tools-plate-scheme
 conda env create -f environment.yaml
 conda activate fia_tools
 python -m pip install .
@@ -44,9 +46,25 @@ conda activate fia_tools_tech_dev
 
 Then run `python -m pip install .` in that environment. The initial package installation resolves any additional requirements. First ImageJ initialization and StarDist model loading may require internet downloads; `--help` checks command availability, not full image-processing readiness.
 
-### Updating an existing installation
+### Switching an existing installation to the Excel workflow
 
-In your `tech_dev` checkout, with its environment active:
+Run these commands inside your existing FIA-tools checkout. Use the environment into which you previously installed FIA:
+
+```bash
+conda activate fia_tools
+git fetch origin feat/plate-scheme-routing:refs/remotes/origin/feat/plate-scheme-routing
+git switch feat/plate-scheme-routing
+git pull --ff-only origin feat/plate-scheme-routing
+python -m pip install --no-deps .
+git log -1 --oneline
+quantify_field_signal --help
+```
+
+This also works after testing a detached commit: it switches back to the named PR branch. `--help` confirms that the installed command exists; `git log` identifies the checked-out revision. The package must be reinstalled after updating the checkout.
+
+### Subsequent updates
+
+In the same checkout and branch, with its environment active:
 
 ```bash
 git pull --ff-only
@@ -68,9 +86,9 @@ When updating an existing environment to the version with managed temporary file
 }
 ```
 
-Use absolute paths to raw-image folders and the same JSON for all commands. Each image name must identify exactly one well, for example `WellA02`; a `PointA02` token, if present, must agree. Supported sources are ND2 and multichannel TIFF. Hidden/macOS sidecar files are ignored. ND2 input is detected automatically; ambiguous TIFF projection semantics may require a prompt or `--input-type`.
+Save this as `input_paths.json`. Use absolute paths to raw-image folders and the same JSON for all commands. All valid experiment folders listed in it are used; no extra experiment selection is needed. Each image name must identify exactly one well, for example `WellA02`; a `PointA02` token, if present, must agree. Supported sources are ND2 and multichannel TIFF. Hidden/macOS sidecar files are ignored. ND2 input is detected automatically; TIFF stack/projection semantics may require a prompt. Only `quantify_nuclear_intensity` also accepts `--input-type`.
 
-Place exactly one **`FIA*.xlsx`** in each raw-image folder before starting. Do not put both the example and template in an experiment. `UMA*.xlsx` files are independent and ignored. Every selected experiment is checked before the imaging engine starts.
+Place exactly one **`FIA*.xlsx`** in each raw-image folder before starting, for example `/path/to/Experiment_01/FIA_Plate_01.xlsx`, beside its ND2/TIFF files, **not inside `fia_assay`**. Start from the blank template and fill it for the actual plate. Do not put both the example and template in an experiment. `UMA*.xlsx` files are independent and ignored. Every selected experiment is checked before the imaging engine starts.
 
 - [Blank template](templates/FIA_96_well_Template.xlsx)
 - [Golden standard with worked examples](templates/FIA_96_well_Golden_Standard.xlsx)
@@ -80,43 +98,98 @@ On **Plate Map**, annotate conditions in B2:M9. Direct solid fill defines a comp
 
 On **Channels**, the four cells for a well are original C1–C4. Each existing channel must contain `Method: marker name` or `Ignore`. Use exactly one `Nuclei` assignment per annotated well. A blank channel cell means an absent trailing channel; all cells are blank for an unused well. `Fiber` is recorded but excluded from FIA measurements. Marker names are freely editable after the colon.
 
+For example, a three-channel well could contain `Nuclei: DAPI`, `Ignore`, `Field signal: pFAK-Y397`, then a blank C4. Another well in the same condition may have different staining and channel assignments. The method text before the colon selects the analysis route; the name after it is the exact marker name used by `--marker`. Do not renumber channels when ignoring one.
+
 In **Requested intersections**, enter only the desired Foci combinations, for example `C2+C4; C2+C3+C4`. `+` means the shared mask intersection. A triple does not implicitly request its pairs. Every participating channel must be assigned `Foci` in that well.
 
 ## Run the analysis
 
-Prepare the assigned channels and nuclei once:
+Activate your installed environment in each new terminal with `conda activate fia_tools` (or your chosen environment name). Run the examples from the directory containing `input_paths.json`, or replace `input_paths.json` with its absolute path. The commands are installed executables; do not run the numbered Python source files directly. Use lowercase **`-i`**, not `-I`.
+
+### 1. Prepare channels and nucleus masks once
 
 ```bash
 select_channels -i input_paths.json
 generate_nuclei_mask -i input_paths.json -p 200
+```
+
+The first command reads each well's assignments from Excel and prepares `Nuclei` and the supported marker channels in `fia_assay`. It no longer asks you to assign channel roles. The second command segments nuclei and creates a completed `Final_Nuclei_Mask_<timestamp>` run shared by the later routes. `-p 200` is an example minimum nucleus area in pixels squared; choose an appropriate value for your images. The default without `-p` is 2500 px².
+
+For a **nuclei-only analysis**, replace the first command with:
+
+```bash
+select_channels -i input_paths.json --nuclei-only
+```
+
+Then run `generate_nuclei_mask` and the common report below. No marker measurement or collection command is needed for that route. For a mixed-staining workflow, use the default preparation once and then run whichever marker routes you need.
+
+### 2. Create the common nuclei report
+
+```bash
 fia_nuclei_report -i input_paths.json --stats-unit well --min-nuclei 20
 ```
 
-`-p 200` is an example minimum nucleus area in pixels squared, not a universal recommendation. The common report contains nucleus counts and four core morphology graphs (area, aspect ratio, circularity, solidity); all 12 morphology metrics remain in tables. For only this route, `select_channels --nuclei-only` prepares only the Excel-assigned nuclei channels.
+This report uses **all annotated, successfully processed wells**, regardless of marker staining. It contains nucleus counts and four core morphology graphs (area, aspect ratio, circularity, solidity); all 12 morphology metrics remain in tables. `--min-nuclei 20` retains images with at least 20 non-border nuclei. It filters report observations, not the saved nucleus masks.
 
-Run any applicable marker route independently:
+The example requests statistics using wells as the statistical unit. Omit `--stats-unit well` for a descriptive report without hypothesis tests. Choose the statistical unit from the experimental design, not simply from the number of nuclei available. PDF is the default standalone graph format; add `--plot-format png` or `--plot-format both` if needed.
+
+### 3A. Foci: masks, measurements and explicit intersections
+
+Use this route only for wells assigned `Foci: ...`. Supply the exact marker name from Excel. For two markers needing different thresholds, for example:
 
 ```bash
-# Foci: an 8-bit threshold on the existing prepared projection.
 generate_foci_mask -i input_paths.json --marker "Marker 1" -f 150
-# Repeat masking with appropriate thresholds for other Foci markers.
+generate_foci_mask -i input_paths.json --marker "Marker 2" -f 120
 quantify_foci -i input_paths.json -j 4
+```
 
-# Nuclear intensity: original MAX values, no intensity threshold.
+Create masks for **every Foci marker assigned in the selected experiments before running `quantify_foci`**. That command has no `--marker` option: it uses the latest compatible completed masks for all assigned Foci markers and the latest compatible completed nucleus run. If all Foci markers should share one threshold, omit `--marker` from `generate_foci_mask` instead.
+
+`-f` is a threshold on the prepared 8-bit Foci projection (0–255). The values above are examples. `-j 4` uses four parallel workers. Requested pair/triple intersections come only from Excel; leave the intersection cell blank when none is needed. This route saves measurement tables and requested intersection masks under `fia_assay/foci_analysis`; it does not introduce a new Foci statistical plotting command. `--min-nuclei` is a report option, not an option to `quantify_foci`.
+
+### 3B. Nuclear intensity: measure, collect, report
+
+Use this route only for wells assigned `Nuclear intensity: ...`:
+
+```bash
 quantify_nuclear_intensity -i input_paths.json
 fia_collect_marker_intensity_results -i input_paths.json
 fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
+```
 
-# Field signal: one raw SUM32 threshold interval, e.g. for pFAK-Y397.
+The first command rereads the assigned **original channel** and measures MAX-projection values inside existing nucleus IDs; it has no intensity threshold. The collector combines compatible measurements and nuclear QC tables. The report then creates separate results for each marker and collection. `--stats-unit nucleus` reproduces the nucleus-level analysis; use `well` if that is the chosen statistical unit, or omit the option for descriptive results.
+
+The default is all assigned Nuclear intensity markers. To measure only one, add `--marker "pSMAD2"` to `quantify_nuclear_intensity`; to select it in the report, use the distinct plural option `--markers "pSMAD2"`. Use the exact name in your scheme. Other assigned but unmeasured markers are missing measurements, not zeros. For a known TIFF input type, add `--input-type tiff-stack` or `--input-type tiff-2d` to the measurement command.
+
+### 3C. Field signal: thresholded SUM measurements and report
+
+Use this route only for wells assigned `Field signal: ...`, for example `Field signal: pFAK-Y397`:
+
+```bash
 quantify_field_signal -i input_paths.json --marker "pFAK-Y397" -t 100000 300000
 fia_field_signal_report -i input_paths.json --stats-unit well --min-nuclei 20
 ```
 
-Use marker names actually entered in your scheme. Threshold values above are examples. Foci and Field signal thresholds have different units and are not interchangeable. `--marker` restricts a method to a named marker; it never changes its source channels. Without it, the method processes all its assigned markers using that invocation's settings. To use different thresholds within a method, run it separately for each marker. Nuclear intensity has no threshold parameter.
+`-t LOWER UPPER` is an inclusive interval in raw SUM32 units; `-t LOWER` has no upper limit. There is no default threshold. These example numbers must be replaced with values chosen for the marker and acquisition. They are not interchangeable with the 8-bit Foci threshold. Run `quantify_field_signal` separately with `--marker` for markers needing different thresholds. There is no collection command between Field signal measurement and its report.
+
+By default, both nuclear normalization denominators exclude border nuclei. Add `--include-border-nuclei` to the measurement command to include their visible counts and areas. pFAK/other Field signal is measured over the whole field in either case. The report's `--min-nuclei` criterion still uses non-border nuclei. Different thresholds, nucleus runs and border policies remain separate analysis profiles; the report defaults to the latest completed result **per profile**, not one pooled result.
 
 Field signal generalizes the previously pFAK-specific commands. It retains SUM32, an inclusive threshold mask, RawIntDen, IntDen, positive area, connected-object counts and sizes, and separate normalizations by nucleus count and nuclear area. No watershed or background subtraction is added. See [field-signal measurement details](docs/PFAK.md).
 
-The marker-intensity report creates a separate report per marker and collection. The field-signal report keeps each marker/threshold/nucleus-run/border-policy profile separate. General nuclear graphs and statistics belong to `fia_nuclei_report`; nuclear QC measurements remain in marker tables. Missing staining is `NOT_APPLICABLE`, never a measured zero. `--min-nuclei` applies after assignment-based selection and existing processing exclusions.
+**Routes 3A–3C are independent:** run any subset, in any order, after common preparation. You do not need to repeat `select_channels` or nucleus segmentation for each marker. Marker routes select wells by their method/name assignments, even when those wells share a condition with other staining. General nuclear graphs and statistics belong to `fia_nuclei_report`; nuclear QC measurements remain in marker tables. Missing staining is `NOT_APPLICABLE`, never a measured zero. Report filtering applies after assignment-based selection and existing processing exclusions.
+
+### Prompts and repeat runs
+
+Channel roles and Foci intersections no longer need terminal selection. Prompts may still ask to confirm processing/overwriting prepared channels, distinguish TIFF stacks from existing projections, reuse compatible StarDist results, or choose among compatible result runs. The commands below document run-selection options where available; use `ask` for manual selection.
+
+| What changed? | What to rerun |
+| --- | --- |
+| `--min-nuclei`, graph format, statistical unit, condition labels or `PLOT LAYOUT` | The relevant report only, using compatible existing measurements. |
+| Foci threshold | `generate_foci_mask` for the affected marker, then `quantify_foci`. |
+| Requested Foci intersections | `quantify_foci`; no nucleus resegmentation is needed. |
+| Field signal threshold or border-nucleus normalization | `quantify_field_signal` for the affected marker, then `fia_field_signal_report`. |
+| Nucleus area filter (`-p`) | `generate_nuclei_mask` (compatible StarDist masks may be reused), then affected measurements, collection where applicable, and reports. |
+| Channel assignments or marker identity | Regenerate affected prepared inputs and dependent analyses; old measurements are not silently relabeled. |
 
 ## Command-line parameters
 
@@ -151,7 +224,18 @@ Each managed run uses `~/.fia-tools/runs/<run-id>`. `FIA_RUNTIME_HOME` sets anot
 
 ## Results and documentation
 
-All generated analyses remain under each experiment's `fia_assay`. Each new run preserves earlier outputs. `plate_design.json` and `plate_design.xlsx` record the scheme used; per-image tables record original channels separately from marker identity. Reordering plot panels allows report regeneration; changing channel assignments requires regeneration of affected measurements.
+All generated analyses remain under each experiment's `fia_assay`. Timestamped measurement/report runs preserve earlier outputs; channel preparation can overwrite its prepared images after confirmation. `plate_design.json` and `plate_design.xlsx` record the scheme used; per-image tables record original channels separately from marker identity. Reordering plot panels allows report regeneration; changing channel assignments requires regeneration of affected measurements.
+
+| Result | Location inside `fia_assay` |
+| --- | --- |
+| Common nuclei report | `FIA_Nuclei_Report_<timestamp>` |
+| Foci measurements and intersections | `foci_analysis/Results_<timestamp>` |
+| Collected nuclear intensity tables | `FIA_Marker_Intensity_Combined_Results_<timestamp>` |
+| Nuclear intensity reports | `FIA_Marker_Intensity_Report_<timestamp>` |
+| Field signal measurements | Folders beginning `FIA_Field_Signal_Results_` |
+| Field signal reports | `FIA_Field_Signal_Report_<timestamp>` |
+
+The terminal prints the output and log paths for each experiment. Check its final status and journal before treating a folder as a completed analysis.
 
 - [Scheme and code navigation](docs/PLATE_SCHEME.md)
 - [Technical reference](docs/REFERENCE.md)
