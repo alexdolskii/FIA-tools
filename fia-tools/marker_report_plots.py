@@ -66,6 +66,8 @@ def panel_letter(index):
 
 def plot_specs(data):
     """Nuclei reports always plot core morphology; marker reports retain significance selection."""
+    if 'custom_plot_specs' in data:
+        return data['custom_plot_specs']
     specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
     if data.get('min_nuclei', 0) > 0:
         specs.insert(0, ('Nuclei_count_all', COUNT, 'Non-border nuclei per image — before filtering',
@@ -222,6 +224,8 @@ def draw_image_points(ax, records):
 
 
 def plot_note(data, name, observation, comparisons):
+    if name in data.get('plot_notes', {}):
+        return data['plot_notes'][name]
     if name == 'Nuclei_count_all':
         return ('Diagnostic count overview before image-count filtering; all validated images, including zero counts. '
                 'One grey point = one image; shape = technical well within the condition. '
@@ -262,6 +266,8 @@ def render_figure(data, spec, panels, points, comparisons, limits, high, span, n
 
 
 def short_plot_note(data, observation, field=None, name=None):
+    if name in data.get('plot_captions', {}):
+        return data['plot_captions'][name]
     population = 'Non-border nuclei.' if observation == 'nucleus' else 'One point = one image; non-border nuclei counted.'
     threshold = data.get('min_nuclei', 0)
     filtering = f' Image filter (--min-nuclei): ≥{threshold} non-border nuclei/image.' if threshold else ' No image-count filter.'

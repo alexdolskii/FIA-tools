@@ -83,5 +83,15 @@ def fia_nuclei_report():
     return _load_script("nuclei_report").main()
 
 
+@_managed
+def quantify_pfak():
+    return _load_script('pfak_analysis').main()
+
+
+@_managed
+def fia_pfak_report():
+    return _load_script('pfak_report').main()
+
+
 def fia_diagnostics():
     return _load_script('runtime_diagnostics').main()
