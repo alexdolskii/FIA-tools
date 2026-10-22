@@ -6,6 +6,7 @@ if __name__ == '__main__':
 
 
 import csv
+import plate_design as plate
 import json
 import logging
 import re
@@ -34,7 +35,7 @@ INPUT_MODES = ('nd2', 'tiff-stack', 'tiff-2d')
 IDENTIFIERS = [
     'Dataset', 'Dataset_path', 'Image_name', 'Source_file', 'Mask_file', 'ID_map',
     'Nuclei_run_ID', 'Intensity_run_ID', 'Particle_size_px2', 'StarDist_source',
-    'Marker_folder', 'Marker_folder_path', 'Marker_channel',
+    'Marker_folder', 'Marker_folder_path', 'Marker_channel', 'Marker_name', 'Analysis_method', 'Well',
     'Input_type', 'Projection', 'Z_planes', 'Width_px', 'Height_px',
     'Pixel_type',
 ] + spatial.CALIBRATION_COLUMNS
@@ -86,52 +87,31 @@ def discover(input_path, audit=None, skipped=None):
 
 
 def discover_markers(experiments):
-    """Use visible nonempty marker folders as the channel catalog, never as pixel inputs."""
     catalog = {}
     for experiment in experiments:
         root = experiment['root']
-        markers = root / ASSAY_DIR / MARKERS_DIR
-        if not markers.is_dir():
-            print(f'No marker-channel catalog: {markers}')
-            continue
-        for folder in sorted(markers.iterdir()):
-            if folder.name.startswith('.') or not folder.is_dir():
+        design = experiment.get('design') or plate.load_design(root)
+        experiment['design'] = design
+        for item in design.markers('Nuclear intensity'):
+            images, _ = plate.sources(root, design, 'Nuclear intensity', item['id'])
+            if not images:
                 continue
-            match = MARKER_PATTERN.fullmatch(folder.name)
-            if match is None:
-                print(f'Skipping unrecognized marker folder: {folder}')
-                continue
-            count = len(visible_files(folder, {'.tif', '.tiff'}))
-            if count == 0:
-                print(f'Skipping marker folder without visible TIFF images: {folder}')
-                continue
-            marker = catalog.setdefault(folder.name, {
-                'name': folder.name, 'index': int(match[1]),
-                'channel': int(match[2]), 'folders': {},
-            })
-            marker['folders'][root] = {'path': folder, 'image_count': count}
-    return sorted(catalog.values(), key=lambda marker: (
-        marker['index'], marker['channel'], marker['name']))
+            marker = catalog.setdefault(item['id'], {'name': item['id'], 'label': item['name'],
+                'channel': None, 'folders': {}})
+            marker['folders'][root] = {'path': root / ASSAY_DIR / MARKERS_DIR / item['id'],
+                                      'image_count': len(images)}
+    return list(catalog.values())
 
 
-def select_markers(experiments):
+def select_markers(experiments, requested=None):
     catalog = discover_markers(experiments)
-    if not catalog:
-        raise ValueError('No nonempty Foci_<index>_Channel_<channel> folders were found. '
-                         'Prepare marker channels with stage 1 first.')
-    print('\nAvailable markers (Channel_N selects channel N in the original image):')
-    for index, marker in enumerate(catalog, 1):
-        print(f"{index}. {marker['name']} | original channel {marker['channel']}")
-        for experiment in experiments:
-            root = experiment['root']
-            folder = marker['folders'].get(root)
-            availability = f"{folder['image_count']} TIFF images" if folder else 'unavailable or empty'
-            print(f'   {root}: {availability}')
-    if len(catalog) == 1:
-        print(f"Marker: {catalog[0]['name']} | original channel {catalog[0]['channel']} — selected automatically")
-        return catalog
-    return [catalog[index] for index in choose(
-        'Select marker numbers (e.g. 1,3), all, or q: ', len(catalog))]
+    if requested:
+        selected = plate.selected_markers([e['design'] for e in experiments], 'Nuclear intensity', requested)
+        ids = {m['id'] for m in selected}
+        catalog = [m for m in catalog if m['name'] in ids]
+    for item in catalog:
+        print(f"Nuclear intensity: {item['label']} | source channels from Excel")
+    return catalog
 
 
 def fingerprint(path):
@@ -140,10 +120,12 @@ def fingerprint(path):
 
 
 def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
-    channel = marker['channel']
+    design = experiment.get('design') or plate.load_design(experiment['root'])
+    channel = None
     record = {'dataset': experiment['root'], 'path': run, 'pairs': [],
               'metadata': {}, 'errors': [], 'mask_count': 0, 'marker': marker}
     try:
+        plate.validate_snapshot(run, design)
         excluded = exclusions.load_exclusions(run)
         record['processing_exclusions'] = excluded
         masks = visible_files(run, {'.tif', '.tiff'})
@@ -180,6 +162,10 @@ def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
             if raw.suffix.lower() in extensions:
                 sources.setdefault(raw.stem, []).append(raw)
         for mask in masks:
+            well = plate.well_from_name(mask.name)
+            if not design.assigned(well, 'Nuclear intensity', marker['name']):
+                continue
+            channel = design.channel(well, 'Nuclear intensity', marker['name'])
             if exclusions.image_key(mask.name) in excluded:
                 if progress and progress.logger:
                     progress.logger.warning('IMAGE_EXCLUDED | file=%s | prior processing failure', mask)
@@ -199,13 +185,14 @@ def inspect_run(experiment, run, mode, marker, engine, cache, progress=None):
                 if key not in cache:
                     cache[key] = engine.inspect(source, mode, channel)
                 info = cache[key]
+                design.validate_channels(well, info['Channels'])
                 if progress and progress.logger:
                     progress.logger.info('VALIDATED_SOURCE | file=%s | channel=%s | %s', source, channel, info)
                 id_map = run / 'Morphology_QC' / f'{mask.stem}_ids.tif'
                 fingerprints = {str(p): fingerprint(p) for p in (source, mask, id_map)}
                 engine.labels(mask, id_map, info)
                 record['pairs'].append({'source': source, 'mask': mask, 'ids': id_map,
-                                        'info': info, 'fingerprints': fingerprints})
+                                        'info': info, 'fingerprints': fingerprints, 'channel': channel, 'well': well})
                 if progress:
                     progress.finish_image()
             except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
@@ -278,7 +265,8 @@ def candidate_inventory(experiments, markers, audit, skipped):
             folder = choice['folders'].get(root)
             reason = None
             if folder is None:
-                reason = 'Selected marker folder is missing or has no visible TIFF images'
+                audit.event(root, 'NOT_APPLICABLE | marker=%s | not assigned in this experiment', choice['name'])
+                continue
             elif not experiment['raw']:
                 reason = 'No original images found'
             elif not experiment['runs']:
@@ -288,11 +276,13 @@ def candidate_inventory(experiments, markers, audit, skipped):
                                 'channel': choice['channel'], 'reason': reason})
                 audit.incomplete(root, f"{choice['name']}: {reason}")
                 continue
-            marker = {'name': choice['name'], 'channel': choice['channel'], 'folder': folder['path']}
+            marker = {'name': choice['name'], 'label': choice.get('label', choice['name']),
+                      'channel': None, 'folder': folder['path']}
             for run in experiment['runs']:
                 record = {'dataset': root, 'path': run, 'marker': marker,
                           'metadata': {}, 'errors': [], 'eligible': False}
                 try:
+                    plate.validate_snapshot(run, experiment['design'])
                     record['metadata_fingerprint'] = fingerprint(run / 'nuclei_run.json')
                     metadata = json.loads((run / 'nuclei_run.json').read_text(encoding='utf-8'))
                     if (not isinstance(metadata, dict) or metadata.get('schema_version') != 1
@@ -343,7 +333,7 @@ def validate_candidates(experiments, candidates, mode, policy, engine, audit, sk
                     else:
                         record = inspect_run(lookup[root], candidate['path'], mode, marker, engine, cache, progress)
                     records.append(record)
-                    summary = (f"{record['path']} | {marker['name']} | original channel {marker['channel']} "
+                    summary = (f"{record['path']} | {marker['name']} | channels from Excel "
                                f"| -p {record['metadata'].get('particle_size_pixels_squared', '?')} "
                                f"| masks: {record['mask_count']} | compatible pairs: {len(record['pairs'])} "
                                f"| {'READY' if record['eligible'] else 'UNAVAILABLE'}")
@@ -499,18 +489,25 @@ def _analyze_run(record, output, mode, engine, batch_path, progress, logger):
     record['pairs'] = [pair for pair in record['pairs'] if exclusions.image_key(pair['source']) not in excluded]
     exclusions.write_snapshot(output, excluded)
     logger.info('PROCESSING_EXCLUSIONS | count=%s | table=%s', len(excluded), exclusions.TABLE)
-    channel = record['marker']['channel']
+    design = plate.load_design(record['dataset'])
+    plate.validate_snapshot(record['path'], design)
+    plate.save_snapshot(output, design)
+    channel = None
     marker_identity = {'Marker_folder': record['marker']['name'],
                        'Marker_folder_path': str(record['marker']['folder']),
-                       'Marker_channel': channel}
+                       'Marker_channel': channel, 'Marker_name': record['marker'].get('label', record['marker']['name']),
+                       'Analysis_method': 'Nuclear intensity'}
     nuclei, images = [], []
     info = {
-        'Schema_version': 3, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
+        'Schema_version': 4, 'Status': 'running', 'Started_UTC': datetime.now(timezone.utc).isoformat(),
         'Nuclei_run': str(record['path']), 'Intensity_run': str(output),
         'Particle_size_px2': record['metadata']['particle_size_pixels_squared'],
         'StarDist_source': record['metadata'].get('stardist_folder', ''),
         **marker_identity, 'Input_type': mode,
-        'Channel_selection': 'Channel_N parsed from the selected marker folder; no manual channel override',
+        'Channel_selection': 'Per-well assignments from the FIA workbook',
+        'Channels_by_well': {well: design.channel(well, 'Nuclear intensity', record['marker']['name'])
+                             for well in design.wells if design.assigned(well, 'Nuclear intensity', record['marker']['name'])},
+        'Scope_SHA256': design.scope_hash('Nuclear intensity', record['marker']['name']),
         'Projection': 'Already projected (assumed MAX)' if mode == 'tiff-2d' else 'MAX over all Z planes',
         'ImageJ_version': engine.version, 'BioFormats_version': engine.bioformats_version,
         'Batch_journal': str(batch_path),
@@ -533,16 +530,20 @@ def _analyze_run(record, output, mode, engine, batch_path, progress, logger):
         progress.group(f"Measuring {record['dataset'].name} | {record['marker']['name']} | {record['path'].name}",
                        len(record['pairs']))
     for index, pair in enumerate(record['pairs'], 1):
+        channel = pair['channel']
         identifiers = {
             'Dataset': record['dataset'].name, 'Dataset_path': str(record['dataset']),
             'Image_name': pair['source'].name, 'Source_file': str(pair['source']),
             'Mask_file': str(pair['mask']), 'ID_map': str(pair['ids']),
             'Nuclei_run_ID': record['path'].name, 'Intensity_run_ID': output.name,
             'Particle_size_px2': info['Particle_size_px2'], 'StarDist_source': info['StarDist_source'],
-            **marker_identity, 'Input_type': mode, 'Projection': info['Projection'],
+            **marker_identity, 'Marker_channel': channel, 'Well': pair['well'],
+            'Input_type': mode, 'Projection': info['Projection'],
             **(spatial.columns(pair['info']) if pair['info'].get('Calibration_status') else spatial.uncalibrated()),
             **{key: pair['info'][key] for key in ('Width_px', 'Height_px', 'Z_planes', 'Pixel_type')},
         }
+        logger.info('CHANNEL_ASSIGNMENT | file=%s | well=%s | method=Nuclear intensity | marker=%s | channel=%s',
+                    pair['source'], pair['well'], marker_identity['Marker_name'], channel)
         marker = None
         counts = dict.fromkeys(COUNTS)
         image_folder = output / f'image_{index:04d}'
@@ -610,19 +611,20 @@ def _analyze_run(record, output, mode, engine, batch_path, progress, logger):
     return info['Status']
 
 
-def main(input_path, mode=None):
+def main(input_path, mode=None, markers=None):
     audit = IntensityJournal(input_path)
-    result = _main(input_path, mode, audit)
+    result = _main(input_path, mode, audit, markers)
     saved = audit.finish()
     return result if saved or result else 1
 
 
-def _main(input_path, mode, audit):
+def _main(input_path, mode, audit, requested_markers=None):
     """Plan every JSON experiment before creating measurement outputs."""
     journal = None
     engine = None
     skipped_experiments = []
     try:
+        plate.preflight(input_path, command='quantify_nuclear_intensity')
         experiments = discover(input_path, audit=audit, skipped=skipped_experiments)
         if not experiments:
             raise ValueError('No existing visible experiment folders were found.')
@@ -634,7 +636,11 @@ def _main(input_path, mode, audit):
             print(f"{experiment['root']} | original images: {len(experiment['raw'])} "
                   f"| final-mask runs: {len(experiment['runs'])}")
         with audit.stage(None, 'Marker selection'):
-            markers = select_markers(experiments)
+            markers = select_markers(experiments, requested_markers)
+        if not markers:
+            print("No Nuclear intensity assignments with images; nothing to measure.")
+            audit.status = "complete"
+            return 0
         for experiment in experiments:
             for marker in markers:
                 audit.event(experiment['root'], 'MARKER_SELECTED | %s | original_channel=%s | available=%s',
@@ -669,7 +675,7 @@ def _main(input_path, mode, audit):
               'Each combination gets separate results.')
         for record in runs:
             print(f"  {record['path']} | {record['marker']['name']} "
-                  f"| original channel {record['marker']['channel']}")
+                  f"| channels from Excel")
         audit.plan(runs)
         journal = {'status': 'running', 'run_id': audit.run_id,
                    'input_manifest': str(Path(input_path).resolve()),

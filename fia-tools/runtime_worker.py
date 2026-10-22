@@ -26,6 +26,13 @@ def main():
                 'started_utc': utc_now()})
     import __init__ as entrypoints
     sys.argv = [command, *sys.argv[2:]]
+    from plate_design import preflight
+    args = entrypoints._arguments(command)
+    try:
+        preflight(args.input, getattr(args, 'template', None), command=command)
+    except (OSError, ValueError, KeyError) as error:
+        print(f'Input validation failed: {error}', file=sys.stderr)
+        return 2
     return getattr(entrypoints, command).__wrapped__()
 
 

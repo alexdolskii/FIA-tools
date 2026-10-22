@@ -9,7 +9,9 @@ import nuclear_intensity as app
 import numpy as np
 import pytest
 from openpyxl import load_workbook
-from test_nuclear_intensity import make_experiment
+from test_nuclear_intensity import two_marker_experiment as make_experiment
+from plate_helpers import design
+import plate_design
 
 
 @pytest.fixture
@@ -23,7 +25,7 @@ def batch_setup(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: home))
     engine = MagicMock(version='test', bioformats_version='test')
     engine.inspect.return_value = {'Width_px': labels.shape[1], 'Height_px': labels.shape[0],
-                                   'Z_planes': 3, 'Pixel_type': 'uint16'}
+                                   'Z_planes': 3, 'Pixel_type': 'uint16', 'Channels': 3}
     engine.labels.return_value = np.zeros_like(labels)
     engine.populations.return_value = (set(), set(), set())
     engine.measure.return_value = ([], {key: 0 for key in app.COUNTS})
@@ -54,7 +56,8 @@ def test_success_keeps_identical_journals_and_valid_metadata_in_each_result(batc
         assert parameters['Batch_journal'] == str(path)
         book = load_workbook(output / 'Nuclear_Intensity.xlsx', read_only=True)
         try:
-            assert dict(list(book['Run_Info'].values)[1:])['Batch_journal'] == str(path)
+            parameters = dict(book['Run_Info'].iter_rows(min_row=2, max_col=2, values_only=True))
+            assert parameters['Batch_journal'] == str(path)
         finally:
             book.close()
     assert not list(manifest.parent.glob('Nuclear_Intensity_Batch_*'))
@@ -78,7 +81,10 @@ def test_failed_image_updates_all_copies_and_retains_diagnostics(batch_setup):
 
 def test_interruption_preserves_completed_interrupted_and_pending_runs(batch_setup):
     manifest, run, engine, _ = batch_setup
-    third = run.parent / 'markers' / 'Foci_3_Channel_1'
+    scheme = design(run.parent.parent, channels=['Nuclei: DAPI', 'Nuclear intensity: Marker 1', 'Nuclear intensity: Marker 2', 'Nuclear intensity: Marker 3'])
+    plate_design.save_snapshot(run, scheme)
+    engine.inspect.return_value['Channels'] = 4
+    third = run.parent / 'markers' / 'unused'
     third.mkdir()
     (third / 'prepared.tif').touch()
     engine.measure.side_effect = [engine.measure.return_value, KeyboardInterrupt()]
@@ -137,6 +143,8 @@ def test_journal_write_failure_keeps_fallback_links_and_signals_failure(batch_se
 
 def test_cancel_before_measurement_creates_text_log_but_no_result_journal(batch_setup, monkeypatch):
     manifest, run, _, home = batch_setup
+    import shutil
+    shutil.copytree(run, run.with_name('Final_Nuclei_Mask_20260923_130000'))
     monkeypatch.setattr('builtins.input', lambda _: 'q')
     assert app.main(manifest, mode='tiff-stack') == 130
     assert not result_journals(run) and not list(home.rglob('batch.json'))

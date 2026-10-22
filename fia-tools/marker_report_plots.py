@@ -68,6 +68,10 @@ def plot_specs(data):
     """Nuclei reports always plot core morphology; marker reports retain significance selection."""
     if 'custom_plot_specs' in data:
         return data['custom_plot_specs']
+    if data.get('report_kind') == 'marker':
+        return [(marker + '_Integrated_density', marker + '_Marker_RawIntDen',
+                 data.get('marker_labels', {}).get(marker, marker) + ': nuclear integrated intensity',
+                 'RawIntDen (sum of pixel values)', 'nucleus') for marker in data['markers']]
     specs = [('Nuclei_count', COUNT, 'Non-border nuclei per image', 'Nuclei per image', 'image')]
     if data.get('min_nuclei', 0) > 0:
         specs.insert(0, ('Nuclei_count_all', COUNT, 'Non-border nuclei per image — before filtering',
@@ -137,6 +141,17 @@ def short_labels(groups):
 
 def plot_panels(data):
     """Use existing comparison blocks, including empty groups, without splitting test families."""
+    if data.get('layout_panels'):
+        context, _ = short_labels(data['groups'])
+        panels = []
+        for index, item in enumerate(data['layout_panels'], 1):
+            prefix, labels = short_labels(item['groups'])
+            heading = prefix[len(context):].strip() if context and prefix.startswith(context) else prefix
+            panels.append({'id': f'Block_{index:02d}', 'block': item['block'], 'groups': item['groups'],
+                           'title': heading or f'Block {index}', 'labels': labels, 'context': context,
+                           'layout_row': item['row'], 'layout_column': item['column'],
+                           'layout_end_column': item['end_column']})
+        return panels
     blocks = {color: list(groups) for color, groups in data.get('blocks', {}).items()}
     if not blocks:
         colors = {}
@@ -292,15 +307,35 @@ def short_plot_note(data, observation, field=None, name=None):
     return population + filtering + ' Box: median and IQR.' + inference + cohort + encoding + area_note
 
 
+def panel_grid(panels):
+    """Respect the drawn panel positions; blank Excel columns are gutters."""
+    if not all('layout_row' in p for p in panels):
+        columns = min(2, len(panels))
+        return (math.ceil(len(panels) / columns), columns,
+                [(i // columns, i % columns, i % columns + 1) for i in range(len(panels))], [1] * columns)
+    row_order = sorted({p['layout_row'] for p in panels})
+    left = min(p['layout_column'] for p in panels)
+    right = max(p['layout_end_column'] for p in panels)
+    positions = [(row_order.index(p['layout_row']), p['layout_column'] - left, p['layout_end_column'] - left + 1)
+                 for p in panels]
+    widths = [1 if any(p['layout_column'] <= c <= p['layout_end_column'] for p in panels) else .2
+              for c in range(left, right + 1)]
+    return len(row_order), len(widths), positions, widths
+
+
+def assigned_group(data, field, group):
+    marker = next((spec[1] for spec in report_specs(data) if spec[2] == field), '')
+    eligible = data.get('eligible_wells', {}).get(marker)
+    return eligible is None or any(row['Group'] == group and row['Well'] in eligible for row in data['design'])
+
+
 def _render_figure(data, spec, panels, points, comparisons, limits, high, span, path, plot_format):
     name, field, title, ylabel, observation = spec
-    columns = min(2, len(panels))
-    rows = math.ceil(len(panels) / columns)
+    rows, columns, positions, widths = panel_grid(panels)
     panel_width = max(7.2, 1.85 * max(len(p['groups']) for p in panels))
-    width = columns * panel_width
+    width = sum(widths) * panel_width / min(sum(widths[a:b]) for _, a, b in positions)
     caption = wrap_label(short_plot_note(data, observation, field, name), (width - 0.6) * 72, FONT_SIZES['note'])
-    subtitle = ' · '.join(part for part in (panels[0]['context'],
-                         name.removesuffix('_Integrated_density') if name.endswith('_Integrated_density') else '') if part)
+    subtitle = panels[0]['context']
     heading = wrap_label(title, (width - 0.6) * 72, FONT_SIZES['title'], 'bold')
     subtitle = wrap_label(subtitle, (width - 0.6) * 72, FONT_SIZES['panel'])
     wrapped = {}
@@ -326,11 +361,12 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
                     fontweight='bold', transform=header.transAxes)
         if subtitle:
             header.text(0.5, 0, subtitle, ha='center', va='bottom', fontsize=FONT_SIZES['panel'], transform=header.transAxes)
-        grid = outer[1].subgridspec(rows, columns)
+        grid = outer[1].subgridspec(rows, columns, width_ratios=widths)
         if len(panels) > 1:
             fig.supylabel(ylabel, fontsize=FONT_SIZES['axis'])
         for index, panel in enumerate(panels):
-            ax = fig.add_subplot(grid[index // columns, index % columns])
+            grid_row, start, end = positions[index]
+            ax = fig.add_subplot(grid[grid_row, start:end])
             ax.set_label(panel['id'])
             styles = {row['Group']: row for row in data['plot_style']['conditions'] if row['Panel'] == panel['id']}
             labels = []
@@ -347,6 +383,8 @@ def _render_figure(data, spec, panels, points, comparisons, limits, high, span, 
                 images = len({row['Mask_name'] for row in records})
                 sample = (f'n={len(values):,} nuclei\n{images} images · {wells} wells' if observation == 'nucleus' else
                           f'n={len(values):,} images · {wells} wells')
+                if not assigned_group(data, field, group):
+                    sample = 'Not assigned'
                 sample_font = FontProperties(family=plot_font(), size=FONT_SIZES['sample'])
                 if observation == 'image' and TextPath((0, 0), sample, prop=sample_font).get_extents().width > label_widths[panel['id']]:
                     sample = f'n={len(values):,} {unit}\n{wells} wells'

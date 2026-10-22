@@ -1,6 +1,8 @@
 """Validate collected FIA spreadsheets and annotate nuclei from a plate map."""
 
 import hashlib
+import json
+import plate_design as plate
 import io
 import math
 import re
@@ -16,7 +18,7 @@ from openpyxl import load_workbook
 
 ValidationError = collect.ValidationError
 COLLECTION_PATTERN = re.compile(r'^FIA_Marker_Intensity_Combined_Results_(\d{8}_\d{6})$')
-MARKER_PATTERN = re.compile(r'^(?:Foci_[1-9][0-9]*_)?Channel_([1-9][0-9]*)$')
+MARKER_PATTERN = re.compile(r'^(?:(?:Foci_[1-9][0-9]*_)?Channel_([1-9][0-9]*)|NuclearIntensity_[A-Za-z0-9_]+_[0-9a-f]{12})$')
 WELL_PATTERN = re.compile(r'Well([A-H])(0?[1-9]|1[0-2])(?!\d)', re.IGNORECASE)
 COUNT = 'Non_border_nuclei_count'
 EXCLUDED_IMAGE_COLUMNS = ['Image_name', 'Source_file', 'Mask_name', 'Well', 'Group',
@@ -103,12 +105,18 @@ def _read_intensity(path, marker, files, copied):
     if meta.get('Status') != 'complete':
         raise ValidationError(f'Incomplete intensity: {marker}')
     meta['Schema_version'] = collect.number(meta.get('Schema_version'), 'Schema_version', integer=True)
-    if meta['Schema_version'] not in (1, 2, 3):
+    if meta['Schema_version'] not in (1, 2, 3, 4):
         raise ValidationError('Unsupported intensity schema')
-    channel = int(MARKER_PATTERN.fullmatch(marker)[1])
-    if (collect.number(meta.get('Marker_channel'), 'Marker_channel', integer=True) != channel
-            or (meta['Schema_version'] in (2, 3) and meta.get('Marker_folder') != marker)):
-        raise ValidationError('Marker identity differs from its metadata')
+    if meta['Schema_version'] == 4:
+        channel = None
+        meta['Channels_by_well'] = json.loads(meta['Channels_by_well'])
+        if meta.get('Marker_folder') != marker or meta.get('Analysis_method') != 'Nuclear intensity':
+            raise ValidationError('Marker identity differs from metadata')
+    else:
+        channel = int(MARKER_PATTERN.fullmatch(marker)[1])
+        if (collect.number(meta.get('Marker_channel'), 'Marker_channel', integer=True) != channel
+                or (meta['Schema_version'] in (2, 3) and meta.get('Marker_folder') != marker)):
+            raise ValidationError('Marker identity differs from its metadata')
     run = Path(collect.basename(meta.get('Intensity_run', '')))
     if not collect.INTENSITY_PATTERN.fullmatch(run.name):
         raise ValidationError('Invalid intensity run reference')
@@ -121,6 +129,9 @@ def load_collection(path, progress=None):
     """Use archived tables only; original images and original drives are not required."""
     path = Path(path)
     files = {}
+    scheme = plate.snapshot_design(path)
+    collect.snapshot(path / plate.SNAPSHOT, files)
+    collect.snapshot(path / 'plate_design.xlsx', files)
     info = collection_info(path, files)
     stored_exclusions = exclusions.read_manifest(path / exclusions.MANIFEST, files)
     recorded_exclusions = [row for row in info if row.get('Category') == 'Processing exclusions'
@@ -179,19 +190,39 @@ def load_collection(path, progress=None):
         progress.phase('Validating marker tables', len(markers))
     for marker in markers:
         states = {row.get(marker + '_Availability') for sheet in combined.values() for row in sheet[1]}
-        if len(states) != 1 or not states <= {'AVAILABLE', 'MISSING'}:
+        if not states <= {'AVAILABLE', 'MISSING', 'NOT_APPLICABLE'} or {'AVAILABLE', 'MISSING'} <= states:
             raise ValidationError(f'Inconsistent availability: {marker}')
-        availability[marker] = states.pop()
+        availability[marker] = 'AVAILABLE' if 'AVAILABLE' in states else 'MISSING'
+        for _, rows in combined.values():
+            for row in rows:
+                expected = (availability[marker] if scheme.assigned(plate.well_from_name(row['Mask_name']), 'Nuclear intensity', marker)
+                            else 'NOT_APPLICABLE')
+                if row[marker + '_Availability'] != expected:
+                    raise ValidationError(f'{marker}: availability differs from the scheme')
+                applicable = expected != 'NOT_APPLICABLE'
+                channel = collect.number(row.get(marker + '_Source_channel'), 'Source_channel', integer=True, blank=True)
+                if channel != (scheme.channel(plate.well_from_name(row['Mask_name']), 'Nuclear intensity', marker)
+                               if applicable else None):
+                    raise ValidationError(f'{marker}: exported source channel differs from the scheme')
+                if expected != 'AVAILABLE' and any(value not in (None, '') for col, value in row.items()
+                       if col.startswith(marker + '_') and col not in {
+                           marker + '_Availability', marker + '_Marker_name', marker + '_Source_channel'}):
+                    raise ValidationError('Unmeasured marker contains values')
         if availability[marker] == 'MISSING':
             for _, rows in combined.values():
                 if any(value for row in rows for col, value in row.items()
-                       if col.startswith(marker + '_') and col != marker + '_Availability'):
+                       if col.startswith(marker + '_') and col not in {marker + '_Availability', marker + '_Marker_name', marker + '_Source_channel'}):
                     raise ValidationError('Missing marker contains measurements')
             if progress:
                 progress.advance(marker)
             continue
         bundle = _read_intensity(path, marker, files, copied)
         exclusions.filter_bundle(bundle, stored_exclusions)
+        if bundle['metadata'].get('Schema_version') == 4:
+            expected = {w: scheme.channel(w, 'Nuclear intensity', marker) for w in scheme.wells
+                        if scheme.assigned(w, 'Nuclear intensity', marker)}
+            if bundle['metadata']['Channels_by_well'] != expected:
+                raise ValidationError('Archived marker routing differs from collection scheme')
         collect.validate_compatibility(morphology, bundle)
         bundles[marker] = bundle
         for sheet, merged, source in (('Nuclei', merged_nuclei, bundle['nuclei']),
@@ -212,6 +243,9 @@ def load_collection(path, progress=None):
         progress.phase('Checking image records', len(merged_images))
     for row in merged_images.values():
         record = collect.typed_morphology(row)
+        for marker in markers:
+            field = marker + '_Source_channel'
+            record[field] = collect.number(row.get(field), field, integer=True, blank=True)
         record['Well'] = image_well(record)
         images.append(record)
         if progress:
@@ -226,9 +260,11 @@ def load_collection(path, progress=None):
             raise ValidationError('Nucleus/image identity mismatch')
         record['Well'] = image['Well']
         for marker in markers:
+            channel_field = marker + '_Source_channel'
+            record[channel_field] = collect.number(row.get(channel_field), channel_field, integer=True, blank=True)
             for metric in collect.INTENSITY_METRICS:
                 field = marker + '_' + metric
-                record[field] = collect.number(row.get(field), field, blank=availability[marker] == 'MISSING')
+                record[field] = collect.number(row.get(field), field, blank=row[marker + '_Availability'] != 'AVAILABLE')
         nuclei.append(record)
         if progress:
             progress.advance(record['Image_name'])
@@ -238,7 +274,7 @@ def load_collection(path, progress=None):
     return {'path': path, 'files': files, 'info': info, 'images': images, 'nuclei': nuclei,
             'image_columns': combined['Images'][0] + ['Group'],
             'processing_exclusions': active_exclusions,
-            'markers': markers, 'availability': availability, 'bundles': bundles,
+            'markers': markers, 'availability': availability, 'bundles': bundles, 'report_kind': 'marker',
             'run_id': run_id, 'particle_size': morphology['particle_size'], 'notes': []}
 
 
@@ -248,6 +284,8 @@ def load_nuclei_run(path, progress=None):
     if path.is_symlink() or not path.is_dir() or not collect.NUCLEI_PATTERN.fullmatch(path.name):
         raise ValidationError(f'Not a regular completed-nuclei directory: {path}')
     bundle = collect.load_morphology(path, allow_empty=True)
+    for source in (path / plate.SNAPSHOT, path / 'plate_design.xlsx'):
+        collect.snapshot(source, bundle['files'])
     bundle['root'] = path.parent.parent
     checks = []
     tables = collect.combine(bundle, {}, [], checks, progress)
@@ -300,148 +338,42 @@ def _color(cell):
     return f'{color.type}:{color.value}:tint={color.tint}'
 
 
-def _template_group_order(sheet, design):
-    """Validate optional Order/Group columns without changing well assignments or roles."""
-    groups = list(dict.fromkeys(row['Group'] for row in design))
-    columns = {'order': [], 'group': []}
-    for cell in sheet[1][13:]:
-        header = str(cell.value or '').strip().casefold()
-        if header in ('order', 'group', 'groups'):
-            columns['order' if header == 'order' else 'group'].append(cell)
-    explicit = {}
-    if any(columns.values()):
-        if any(len(cells) != 1 for cells in columns.values()):
-            found = ', '.join(cell.coordinate for cells in columns.values() for cell in cells)
-            raise ValidationError(
-                f'{sheet.title}: expected one Order and one Group (or Groups) header '
-                f'in row 1 to the right of the plate grid; found headers at {found}')
-        order_col, group_col = (columns[key][0].column for key in ('order', 'group'))
-        if any(area.min_col <= col <= area.max_col
-               for area in sheet.merged_cells.ranges for col in (order_col, group_col)):
-            raise ValidationError('Do not merge cells in the Order/Group columns')
-        numbers = {}
-        for row in range(2, sheet.max_row + 1):
-            number, name = sheet.cell(row, order_col), sheet.cell(row, group_col)
-            blank = [cell.value is None or (isinstance(cell.value, str) and not cell.value.strip())
-                     for cell in (number, name)]
-            if all(blank):
-                continue
-            location = f'{number.coordinate}/{name.coordinate}'
-            if any(blank):
-                raise ValidationError(f'{location}: fill both Order and Group, or leave both blank')
-            if name.data_type in ('f', 'e') or not isinstance(name.value, str):
-                raise ValidationError(f'{name.coordinate}: Group must be literal text matching the plate grid')
-            value = number.value
-            if isinstance(value, str) and re.fullmatch(r'[0-9]+', value.strip()):
-                value = int(value.strip())
-            if (number.data_type in ('f', 'e') or isinstance(value, bool)
-                    or not isinstance(value, (int, float)) or not math.isfinite(value)
-                    or value <= 0 or int(value) != value):
-                raise ValidationError(f'{number.coordinate}: Order must be a positive whole number')
-            value = int(value)
-            if name.value not in groups:
-                raise ValidationError(f'{name.coordinate}: unknown Group {name.value!r}; '
-                                      'use the exact condition name from the plate grid')
-            if name.value in explicit:
-                raise ValidationError(f'{name.coordinate}: repeated Group {name.value!r}; '
-                                      f'already listed at {explicit[name.value]["Order_group_cell"]}')
-            if value in numbers:
-                raise ValidationError(f'{number.coordinate}: repeated Order {value}; '
-                                      f'already used at {numbers[value]}')
-            numbers[value] = number.coordinate
-            explicit[name.value] = {'Group_order': value, 'Order_source': 'order_table',
-                                    'Order_cell': number.coordinate, 'Order_group_cell': name.coordinate}
-        missing = [group for group in groups if group not in explicit]
-        if explicit and missing:
-            raise ValidationError('Order/Group table is incomplete; add conditions: ' + ', '.join(map(repr, missing)))
-    for row in design:
-        row.update(explicit.get(row['Group'], {
-            'Group_order': groups.index(row['Group']) + 1, 'Order_source': 'plate_grid',
-            'Order_cell': '', 'Order_group_cell': '',
-        }))
-
-
 def read_template(path, files, sheet_name=None, statistics=False):
-    book = load_workbook(io.BytesIO(collect.snapshot(path, files)), read_only=False, data_only=False)
+    if sheet_name not in (None, 'Plate Map'):
+        raise ValidationError('The current FIA scheme uses the named Plate Map and Channels sheets')
     try:
-        sheet = book[sheet_name] if sheet_name else book.worksheets[0]
-        if any(area.min_row <= 9 and area.min_col <= 13 for area in sheet.merged_cells.ranges):
-            raise ValidationError('Merged cells in the plate grid')
-        if ([str(sheet.cell(1, col).value) for col in range(2, 14)] != [str(n) for n in range(1, 13)]
-                or [str(sheet.cell(row, 1).value).upper() for row in range(2, 10)] != list('ABCDEFGH')):
-            raise ValidationError('Expected a 96-well grid at A1:M9')
-        if statistics:
-            for conditional in sheet.conditional_formatting:
-                if any(area.min_row <= 9 and area.max_row >= 2 and area.min_col <= 13 and area.max_col >= 2
-                       for area in conditional.sqref.ranges):
-                    raise ValidationError('Use direct fills/bold, not conditional formatting, for the plate grid')
-        design = []
-        for row, letter in enumerate('ABCDEFGH', 2):
-            for column in range(1, 13):
-                cell = sheet.cell(row, column + 1)
-                if cell.value is None or not str(cell.value).strip():
-                    continue
-                if cell.data_type in ('f', 'e') or not isinstance(cell.value, str):
-                    raise ValidationError(f'{cell.coordinate}: group names must be literal text')
-                direct_fill = cell.fill.patternType == 'solid' and cell.fill.fgColor.type in ('rgb', 'theme', 'indexed')
-                design.append({'Well': f'{letter}{column:02d}', 'Group': cell.value, 'Excel_cell': cell.coordinate,
-                               'Is_control': bool(cell.font.bold),
-                               'Color': _color(cell) if statistics or direct_fill else ''})
-        if not design:
-            raise ValidationError('No annotated wells')
-        _template_group_order(sheet, design)
-        return sheet.title, design
-    finally:
-        book.close()
+        scheme = plate.read_design(path)
+    except ValueError as error:
+        raise ValidationError(str(error)) from error
+    files[Path(path)] = scheme.content
+    return 'Plate Map', scheme.report_rows()
 
 
-def find_template(collection, sheet_name=None, location_label='selected collection'):
-    candidates, rejected = [], []
-    for path in sorted(collection.iterdir()):
-        if (path.name.startswith(('.', '~$')) or path.suffix.lower() != '.xlsx' or path.is_symlink()
-                or not path.is_file()
-                or path.name == collect.COMBINED_NAME or path.name == 'Nuclei_Morphology.xlsx'
-                or path.name.startswith('Nuclear_Intensity_')):
-            continue
-        try:
-            read_template(path, {}, sheet_name)
-            candidates.append(path)
-        except (OSError, ValueError, KeyError, BadZipFile) as error:
-            rejected.append(f'{path.name}: {error}')
-    if not candidates:
-        if rejected:
-            raise PlateMapError(
-                'INVALID_PLATE_MAP', 'Excel file(s) were found, but none was recognized as a valid experiment layout.',
-                collection, 'Check the 96-well grid at A1:M9, annotated wells and optional Order/Group table; use --sheet if the layout '
-                'is on another worksheet. Then rerun the report.', '\n'.join(rejected))
-        raise PlateMapError(
-            'MISSING_PLATE_MAP', f'Excel experiment layout (.xlsx) is missing from the {location_label}.',
-            collection, f'Add the 96-well experiment layout to the {location_label} and rerun the same command, '
-            'or specify its full path with --template. Report calculations have not started.')
-    if len(candidates) > 1:
-        raise PlateMapError(
-            'AMBIGUOUS_PLATE_MAP', f'Expected one experiment layout, found {len(candidates)} valid workbooks.',
-            collection, 'Select the intended experiment layout using --template and rerun the report.',
-            '\n'.join(path.name for path in candidates))
-    return candidates[0]
+def find_template(collection, sheet_name=None, location_label='raw-image folder'):
+    path = None
+    try:
+        path = plate.find_design(collection)
+        read_template(path, {}, sheet_name)
+        return path
+    except (OSError, ValueError, KeyError, BadZipFile) as error:
+        candidates = [p for p in Path(collection).glob('FIA*.xlsx') if p.is_file() and not p.name.startswith('._')]
+        code = ('MISSING_PLATE_MAP' if path is None and not candidates else
+                'AMBIGUOUS_PLATE_MAP' if path is None and len(candidates) > 1 else 'INVALID_PLATE_MAP')
+        raise PlateMapError(code, str(error), collection,
+                            'Place one completed FIA*.xlsx scheme beside the raw images and rerun.',
+                            details=str(error)) from error
 
 
-def select_template(collection, template=None, sheet_name=None, location_label='selected collection'):
+def select_template(collection, template=None, sheet_name=None, location_label='raw-image folder'):
     if template is None:
         return find_template(Path(collection), sheet_name, location_label)
     path = Path(template).expanduser().absolute()
-    if not path.exists():
-        raise PlateMapError('MISSING_PLATE_MAP', 'The Excel experiment layout specified by --template was not found.',
-                            path, 'Check the --template path and make the workbook available, then rerun the report.')
-    if path.name.startswith(('.', '~$')) or path.is_symlink() or not path.is_file():
-        raise PlateMapError('INVALID_PLATE_MAP', 'The --template path is not an accepted experiment layout file.',
-                            path, 'Select a regular, visible Excel experiment layout workbook with --template.')
     try:
         read_template(path, {}, sheet_name)
     except (OSError, ValueError, KeyError, BadZipFile) as error:
-        raise PlateMapError('INVALID_PLATE_MAP', 'The specified Excel file is not a valid experiment layout.',
-                            path, 'Check the 96-well grid at A1:M9, optional Order/Group table and --sheet, then rerun the report.',
-                            str(error)) from error
+        code = 'MISSING_PLATE_MAP' if isinstance(error, FileNotFoundError) else 'INVALID_PLATE_MAP'
+        raise PlateMapError(code, str(error), path, 'Use the current FIA template with sheet Plate Map and rerun.',
+                            details=str(error)) from error
     return path
 
 
@@ -451,14 +383,35 @@ def annotate(data, template, markers, stats_unit, sheet_name=None):
         raise ValidationError(f'Statistics unit must be {allowed[1]}, well, or omitted')
     if len(set(markers)) != len(markers) or not set(markers) <= set(marker_catalog(data)[0]):
         raise ValidationError('Select unique marker folders from the available catalog')
-    if len({MARKER_PATTERN.fullmatch(m)[1] for m in markers}) != len(markers):
-        raise ValidationError('Multiple marker folders refer to the same channel; select one result per channel')
     sheet, design = read_template(template, data['files'], sheet_name, statistics=stats_unit is not None)
+    scheme = plate.read_design(template)
+    if markers and not set(markers) <= {m['id'] for m in scheme.markers('Nuclear intensity')}:
+        raise ValidationError('Selected marker is not assigned to Nuclear intensity in this scheme')
+    unannotated = {row['Well'] for row in data['images'] if row['Well'] not in scheme.wells}
+    if unannotated:
+        raise ValidationError('Unannotated imaged well: ' + ', '.join(sorted(unannotated)))
+    data['plate_design'] = scheme
+    data['layout_panels'] = scheme.panels
+    data['marker_labels'] = {m['id']: m['name'] for method in ('Nuclear intensity', 'Field signal')
+                             for m in scheme.markers(method)}
+    data['eligible_wells'] = {m['id']: set(m['channels']) for method in ('Nuclear intensity', 'Field signal')
+                              for m in scheme.markers(method)}
+    if data.get('report_kind') == 'pfak':
+        ids = [data['metadata']['Marker_ID']]
+    else:
+        ids = markers
+    if ids:
+        allowed_wells = set().union(*(data['eligible_wells'].get(m, set()) for m in ids))
+        data['images'] = [row for row in data['images'] if row['Well'] in allowed_wells]
+        retained = {row['Mask_name'] for row in data['images']}
+        data['nuclei'] = [row for row in data['nuclei'] if row['Mask_name'] in retained]
     mapping = {row['Well']: row['Group'] for row in design}
     processing_rows = []
     for row in data.get('processing_exclusions', {}).values():
         matches = WELL_PATTERN.findall(row['Image_key'])
         well = f'{matches[0][0].upper()}{int(matches[0][1]):02d}' if len(matches) == 1 else ''
+        if ids and well not in allowed_wells:
+            continue
         processing_rows.append({**row, 'Well': well, 'Group': mapping.get(well, '')})
     data['processing_exclusion_rows'] = processing_rows
     for row in data['nuclei'] + data['images']:
@@ -556,8 +509,9 @@ def metric_specs(markers, images=None):
 def report_specs(data, markers=None):
     if 'metric_specs' in data:
         return data['metric_specs']
-    return metric_specs(data['markers'] if markers is None else markers,
-                        data['images'] or data.get('calibration_images_before_filter', []))
+    specs = metric_specs(data['markers'] if markers is None else markers,
+                         data['images'] or data.get('calibration_images_before_filter', []))
+    return [s for s in specs if s[0] == 'Intensity'] if data.get('report_kind') == 'marker' else specs
 
 
 def metric_eligible(row, field):
@@ -591,6 +545,8 @@ def aggregate(data, progress=None):
     for category, marker, field, unit in specs:
         per_well = defaultdict(list)
         for image in data['images']:
+            if marker and image['Well'] not in data.get('eligible_wells', {}).get(marker, {image['Well']}):
+                continue
             if not metric_eligible(image, field):
                 if progress:
                     progress.advance(image['Image_name'])
@@ -615,6 +571,8 @@ def aggregate(data, progress=None):
             if progress:
                 progress.advance(image['Image_name'])
         for annotation in data['design']:
+            if marker and annotation['Well'] not in data.get('eligible_wells', {}).get(marker, {annotation['Well']}):
+                continue
             records = per_well[annotation['Well']]
             valid = [row['Value'] for row in records if row['Value'] is not None]
             well_values.append({'Category': category, 'Marker': marker, 'Metric': field, 'Unit': unit,

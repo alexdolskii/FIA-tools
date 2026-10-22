@@ -388,3 +388,6 @@ def test_later_folder_failure_keeps_completed_folder_status_and_its_own_diagnost
         assert journal.count('RUN_STARTED |') == 1
     assert 'Traceback' in logs[1]
     assert 'second folder failed to open' not in logs[0] + logs[2]
+
+# Isolate the numerical/progress boundary; current-format integration is tested separately.
+from segmentation_unit import scheme_boundary

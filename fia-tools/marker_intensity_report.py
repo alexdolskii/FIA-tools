@@ -6,6 +6,7 @@ if __name__ == '__main__':
 
 
 import csv
+import plate_design as plate
 import hashlib
 import json
 import logging
@@ -142,26 +143,14 @@ def choose_collections(roots, mode, audit=None):
 def choose_markers(data, selection):
     catalog, notes = inputs.marker_catalog(data)
     data['notes'].extend(notes)
-    for note in notes:
-        print(note)
     if isinstance(selection, (list, tuple)):
         return list(selection)
-    if selection is not None:
-        if selection == 'all':
-            return catalog
-        if selection == 'none':
-            return []
-        return [name.strip() for name in selection.split(',') if name.strip()]
-    if not catalog:
-        print('No marker columns: morphology-only report.')
-        return []
-    if len(catalog) == 1:
-        print(f'Marker selected automatically: {catalog[0]} ({data["availability"][catalog[0]]})')
+    if selection in (None, 'all'):
         return catalog
-    for index, marker in enumerate(catalog, 1):
-        print(f'{index}. {marker}: {data["availability"][marker]}')
-    return [catalog[index] for index in collect.choose_indices(
-        'Select markers, all, none (morphology only), or q: ', len(catalog), allow_none=True)]
+    if selection == 'none':
+        raise inputs.ValidationError('Use fia_nuclei_report for common nuclear analysis; select an assigned marker here')
+    names = {m['name']: m['id'] for m in plate.snapshot_design(data['path']).markers('Nuclear intensity')}
+    return [names.get(name.strip(), name.strip()) for name in selection.split(',') if name.strip()]
 
 
 def preview_markers(collection):
@@ -173,9 +162,9 @@ def preview_markers(collection):
     availability = {}
     for marker in markers:
         states = {row[marker + '_Availability'] for row in rows}
-        if len(states) != 1 or not states <= {'AVAILABLE', 'MISSING'}:
+        if not states <= {'AVAILABLE', 'MISSING', 'NOT_APPLICABLE'} or {'AVAILABLE', 'MISSING'} <= states:
             raise inputs.ValidationError(f'Inconsistent availability: {marker}')
-        availability[marker] = states.pop()
+        availability[marker] = 'AVAILABLE' if 'AVAILABLE' in states else 'MISSING'
     catalog, _ = inputs.marker_catalog({'markers': markers})
     return {marker: availability[marker] for marker in catalog}
 
@@ -197,35 +186,18 @@ def choose_batch_markers(collections, selection, audit=None, owners=None):
         states = '; '.join(f'collection {number}: {catalogs[path].get(marker, "NOT PRESENT")}'
                            for number, path in enumerate(collections, 1) if path in catalogs)
         print(f'{index}. {marker} | {states}')
-    while True:
-        if selection is not None:
-            selected = (catalog if selection == 'all' else [] if selection == 'none'
-                        else [name.strip() for name in selection.split(',') if name.strip()])
-        elif len(catalog) <= 1:
-            selected = catalog
-            print(f'Markers selected automatically: {", ".join(selected) or "none (morphology only)"}')
-        else:
-            selected = [catalog[index] for index in collect.choose_indices(
-                'Select markers for all collections, all, none (morphology only), or q: ',
-                len(catalog), allow_none=True)]
-        if len(set(selected)) != len(selected) or not set(selected) <= set(catalog):
-            raise inputs.ValidationError('Select unique marker folders from the displayed batch catalog')
-        conflicts = []
-        for path, markers in catalogs.items():
-            present = [marker for marker in selected if marker in markers]
-            if len({inputs.MARKER_PATTERN.fullmatch(marker)[1] for marker in present}) != len(present):
-                conflicts.append(str(path))
-        if not conflicts:
-            break
-        message = ('Multiple selected marker folders refer to the same channel in: ' + '; '.join(conflicts)
-                   + '. Select one result per channel in each collection.')
-        if selection is not None:
-            raise inputs.ValidationError(message)
-        print(message)
-    print(f'Batch markers: {", ".join(selected) or "none (morphology only)"}')
+    labels = {}
+    for path in catalogs:
+        for marker in plate.snapshot_design(path).markers('Nuclear intensity'):
+            labels[marker['name']] = marker['id']
+    selected = (catalog if selection in (None, 'all') else
+                [labels.get(name.strip(), name.strip()) for name in selection.split(',') if name.strip()])
+    if len(set(selected)) != len(selected) or not set(selected) <= set(catalog):
+        raise inputs.ValidationError('Select unique nuclear marker names or IDs from the plate schemes')
+    print(f'Batch markers: {", ".join(selected) or "unavailable: full validation required"}')
     plans = {}
     for path in collections:
-        present, notes = [], []
+        present, notes = ([] if path in catalogs else None), []
         if path in catalogs:
             for marker in selected:
                 state = catalogs[path].get(marker)
@@ -287,7 +259,7 @@ def report_tables(data, output, manifest):
         ('Image points', 'Neutral grey #D0D0D0 with #111314 edges; red #D62728 below --min-nuclei on Nuclei_count_all. Shapes identify technical wells within each condition: 12 geometric shapes, then numbers. Sorted plate wells include missing images; image offsets are deterministic. No nucleus dots on violins. plot_style.json records the complete mapping; Plot_Data records displayed image styles; Plot_Labels records condition fills and medians.'),
         ('Intensity plots', 'Violin with an inner boxplot from all usable non-border nuclei; no individual dots. Original Marker_RawIntDen on a linear axis; no averaging or intensity normalization.'),
         ('Morphology plots', 'Only Area (separate um2/px2 cohorts), Aspect_ratio, Circularity and Solidity are eligible. Add a violin with an inner boxplot when that metric has at least one tested control comparison with P_Holm < 0.05. Show all conditions and comparisons for that metric, using all usable non-border nuclei without individual dots. All morphology metrics remain in summary and comparison tables and the full Holm family.'),
-        ('Plot layout', 'Panels follow plate-map color blocks, with shared linear Y limits per metric. One overview contains all panels for that metric in up to two columns, with additional rows as needed; no page splitting. Complete overview previews are embedded in the workbook for every export format; no separate panel exports. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
+        ('Plot layout', 'Panels follow PLOT LAYOUT positions and condition order, with shared linear Y limits per metric. One overview contains all comparison blocks for that metric; no page splitting or separate panel exports. Complete overview previews are embedded in the workbook for every export format. Shared name prefixes move to titles; Plot_Labels maps display labels to full condition names.'),
         ('Plot typography and export', 'Arial with Liberation Sans/DejaVu Sans fallback. Titles 20 pt; panel headings 16 pt; conditions, axes and significance 14 pt; sample sizes and short captions 12 pt. Standalone format: ' + data['plot_format'] + '. PDF is vector; PNG and embedded Excel previews use 300 dpi. PDF-only previews are generated in memory without standalone PNG files. Plot_Info stores only exported file paths, full methods and short display captions. Run IDs appear in the footer.'),
         ('Plot significance', 'Brackets show Holm-adjusted significance only: ns for p >= 0.05; * for p < 0.05; ** for p < 0.01; *** for p < 0.001; **** for p < 0.0001. Not tested is distinct from ns. Exact raw and adjusted p-values remain in Statistics and morphology comparison tables.'),
         ('Plot sample sizes', 'Count labels give images and wells; intensity/morphology labels give nuclei, contributing images and wells. Plot_Info Points is the number of observations represented, not the number of dots; Rendered_points counts visible observation dots. Plot_Data contains each observation once per plot; Nuclei_count_all is explicitly before_filter and includes excluded images only for diagnosis.'),
@@ -320,6 +292,17 @@ def report_tables(data, output, manifest):
         }
         notes = [(name, replacements.get(name, value)) for name, value in notes
                  if name not in ('Intensity plots', 'Marker identity')]
+    notes = [(name, ('PLOT LAYOUT sets panel positions and condition order; direct plate fills define blocks and bold marks control.'
+                     if name == 'Condition order' else value)) for name, value in notes]
+    if not nuclei_only:
+        replacements = {'Population': 'Only images assigned to the selected Nuclear intensity marker; non-border nuclei after min-nuclei filtering.',
+                        'Multiplicity': 'Separate Holm family for each marker and comparison block; only comparisons assigned by the scheme are planned. Unavailable planned tests remain in that family.',
+                        'Marker identity': 'Method and marker name from Excel; original source channel recorded separately per image.',
+                        'Plot sample sizes': 'Intensity labels give nuclei, contributing images and wells. Plot_Info Points is the number of nuclei represented by the distribution; no individual nucleus dots. Plot_Data contains each observation once per plot.',
+                        'Missing data': 'Not assigned, missing measurement, processing exclusion and measured zero are distinct. Nuclear quality-control fields are retained in tables.'}
+        notes = [(name, replacements.get(name, value)) for name, value in notes
+                 if name not in ('Morphology plots', 'Morphology summary', 'Count test exception',
+                                 'Count plot', 'Image points')]
     notes += [('Selection note', note) for note in data['notes']]
     provenance = []
     for path, content in data['files'].items():
@@ -338,7 +321,7 @@ def report_tables(data, output, manifest):
         provenance.append({'Source': str(path), 'Archived_copy': str(relative), 'Bytes': len(content),
                            'SHA256': hashlib.sha256(content).hexdigest()})
     metadata = {
-        'Report_schema_version': 7, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
+        'Report_schema_version': 8, 'Created_UTC': datetime.now(timezone.utc).isoformat(),
         'Collection': str(data['path']), 'Nuclei_run_ID': data['run_id'],
         'Particle_size_px2': data['particle_size'], 'Markers': ', '.join(data['markers']),
         'Plate_map': str(data['template']), 'Plate_map_sheet': data['template_sheet'],
@@ -354,7 +337,10 @@ def report_tables(data, output, manifest):
         'Morphology_plot_rule': 'Only Area_um2, Area_px2, Aspect_ratio, Circularity and Solidity; each requires at least one TESTED control comparison with P_Holm < 0.05 in the selected statistics unit. Physical/pixel area cohorts stay separate. No morphology plots when statistics are disabled or no eligible comparisons qualify. All morphology tests remain in the full Holm family.',
         'Plot_format': data['plot_format'],
         'Plot_style_version': data['plot_style']['Style_version'], 'Plot_style_file': 'plot_style.json',
-        'Diagnostic_count_plot': data['min_nuclei'] > 0,
+        'Diagnostic_count_plot': nuclei_only and data['min_nuclei'] > 0,
+        'Marker_labels': json.dumps(data.get('marker_labels', {}), ensure_ascii=False),
+        'Plate_scheme_SHA256': data['plate_design'].workbook_sha256,
+        'Layout': json.dumps(data.get('layout_panels', []), ensure_ascii=False),
         'Plot_export_policy': 'One complete overview per plotted metric in the selected format (pdf, png or both), with all panels. Excel always embeds raster previews; PDF-only previews stay in memory. No separate panel files.',
         'Images': len(data['images']), 'Images_before_filter': data['images_before_filter'],
         'Images_excluded': len(data['excluded_images']), 'Image_exclusion_rule': data['image_exclusion_rule'],
@@ -372,9 +358,12 @@ def report_tables(data, output, manifest):
                         Morphology_summary_tests='Existing Welch/Holm results across nucleus count and all morphology metrics. No tests when statistics are disabled.',
                         Morphology_plot_rule=replacements['Morphology plots'],
                         Spatial_units_policy='Calibrated images: um2/um only; uncalibrated images: separate px2/px results')
+    if not nuclei_only:
+        metadata = {key: value for key, value in metadata.items() if not key.startswith('Morphology_')}
+        metadata['Nuclei_QC'] = 'Nucleus counts and morphology retained in tables; general nuclear plots/statistics are in fia_nuclei_report.'
     tables = {
         'Overview': as_table([{'Item': key, 'Description': value} for key, value in notes]),
-        **morphology_tables(data),
+        **(morphology_tables(data) if nuclei_only else {}),
         'Statistics': as_table(data['statistics'], STAT_COLUMNS),
         'Summary': as_table(data['summary']),
         'Nuclei': as_table(data['nuclei'], data['nuclei_columns'] + ['Group']),
@@ -505,8 +494,15 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         stage = 'plate-map validation'
         if progress:
             progress.phase('Reading plate map')
-        plate_map = (inputs.select_template(root / ASSAY_DIR, template, sheet, location_label='fia_assay folder')
-                     if nuclei_only else inputs.select_template(collection, template, sheet))
+        plate_map = inputs.select_template(root, template, sheet, location_label='raw-image folder')
+        design = plate.read_design(plate_map)
+        plate.validate_snapshot(collection, design)
+        if not nuclei_only:
+            if not selected:
+                raise inputs.ValidationError('No nuclear intensity markers selected; use fia_nuclei_report for the common nuclei analysis')
+            for marker in selected:
+                plate.validate_snapshot(collection, design, 'Nuclear intensity', marker)
+        plate.save_snapshot(output, design)
         logger.info('PLATE_MAP_SELECTED | file=%s | requested_sheet=%s', plate_map, sheet or 'first sheet')
         # Keep headers even when every image has zero non-border nuclei.
         if not nuclei_only:
@@ -574,11 +570,8 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
             collect.write_csv(output / (title + '.csv'), *table)
         write_workbook(output, tables, data['plots'], filename=profile['workbook'], previews=data['plot_previews'])
         data['plot_previews'].clear()
-        if not nuclei_only:
-            morphology = {title: tables[title] for title in (*MORPHOLOGY_SHEETS, 'Run_Info')}
-            write_workbook(output, morphology, [], MORPHOLOGY_WORKBOOK)
         logger.info('TABLES_SAVED | folder=%s | workbooks=%s | csv_tables=%s',
-                    output, [profile['workbook']] + ([] if nuclei_only else [MORPHOLOGY_WORKBOOK]), list(tables))
+                    output, [profile['workbook']], list(tables))
         # Verify exact published tables and unchanged inputs before marking success.
         stage = 'final verification'
         if progress:
@@ -586,9 +579,6 @@ def _create_report(collection, root, template, markers, stats_unit, sheet, manif
         exported = {title: collect.csv_snapshot(output / (title + '.csv'), {}, columns)
                     for title, (columns, _) in tables.items()}
         collect.verify_workbook(output / profile['workbook'], {}, exported)
-        if not nuclei_only:
-            collect.verify_workbook(output / MORPHOLOGY_WORKBOOK, {},
-                                    {title: exported[title] for title in morphology})
         if progress:
             progress.phase('Verifying unchanged inputs', len(data['files']))
         for path, content in data['files'].items():
@@ -648,9 +638,13 @@ def main(argv=None):
 def _main(args, audit):
     skipped = []
     try:
-        roots = collect.discover_sources(args.input, audit, skipped)
+        designs = plate.preflight(args.input, args.template, command='fia_marker_intensity_report')
+        roots = [root for root in collect.discover_sources(args.input, audit, skipped)
+                 if designs[root].markers('Nuclear intensity')]
         if not roots:
-            raise inputs.ValidationError('No existing experiment folders')
+            print('No Nuclear intensity assignments; no marker reports requested by the schemes.')
+            audit.status = 'COMPLETE'
+            return 0
         for root in skipped:
             audit.event(None, 'SKIPPED_EXPERIMENT | %s', root, level=logging.WARNING)
         print(f'Experiments from JSON: {len(roots)} (all valid paths)')
@@ -674,13 +668,14 @@ def _main(args, audit):
                 markers, notes = marker_plans[collection]
                 root = owners[collection]
                 progress.group(f'Report {index}/{len(selected)} | {root.name}')
-                progress.message(f'{collection.name} | Markers: {", ".join(markers) or "none (morphology only)"}')
+                progress.message(f'{collection.name} | Markers: {", ".join(markers or []) or "full validation required"}')
                 try:
-                    success, _ = create_report(collection, root, args.template, markers,
-                                               args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
-                                               selection_notes=notes, audit=audit, progress=progress,
-                                               plot_format=args.plot_format)
-                    failures += not success
+                    for marker in (markers if markers is not None else [None]):
+                        success, _ = create_report(collection, root, args.template, [marker] if marker else 'all',
+                                                   args.stats_unit, args.sheet, args.input, min_nuclei=args.min_nuclei,
+                                                   selection_notes=notes, audit=audit, progress=progress,
+                                                   plot_format=args.plot_format)
+                        failures += not success
                 except OSError as error:
                     progress.message(f'Cannot write report for {collection}: {error}')
                     failures += 1

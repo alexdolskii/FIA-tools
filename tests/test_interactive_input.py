@@ -41,21 +41,11 @@ def answer_with(monkeypatch, values):
     return reader
 
 
-def test_channel_settings_retry_each_field_without_restarting(monkeypatch, capsys):
-    reader = answer_with(monkeypatch, [
-        'abc', '', '1.5', '0', '4', '2',
-        'x', '13', '1',
-        '-1', '', '2',
-        '0', 'abc', '2',
-        '13', '3',
-    ])
-    assert channels.select_settings() == (2, 1, [2, 3])
+def test_tiff_semantics_retry_without_channel_questions(monkeypatch, capsys):
+    reader = answer_with(monkeypatch, ['abc', '', '1.5', '0', '4', '2'])
+    assert channels.select_settings() == 2
     questions = [call.args[0] for call in reader.call_args_list]
-    assert questions[0] == questions[5]
-    assert questions[6] == questions[8]
-    assert questions[9] == questions[11]
-    assert questions[12] == questions[14]
-    assert questions[15] == questions[16]
+    assert len(questions) == 6 and len(set(questions)) == 1
     assert 'Traceback' not in capsys.readouterr().out
 
 
@@ -140,6 +130,7 @@ def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, tmp_pat
     monkeypatch.setattr(nuclei, 'find_nuclei', process)
     monkeypatch.setattr(nuclei, 'process_nuclei', process)
     answer_with(monkeypatch, ['1', stop])
+    monkeypatch.setattr(nuclei.plate, 'preflight', lambda *a, **kw: {})
     assert nuclei.main('input.json', 2500) == 130
     process.assert_not_called()
     journal = (tmp_path / 'fia_assay' / '2_log.log').read_text()
@@ -147,57 +138,46 @@ def test_legacy_confirmation_can_cancel_before_segmentation(monkeypatch, tmp_pat
     assert 'Traceback' not in journal
 
 
-def foci_folder(tmp_path, monkeypatch):
-    folder = tmp_path / 'markers'
-    (folder / 'Foci_1_Channel_2').mkdir(parents=True)
-    info = {'foci_folder': str(folder)}
-    monkeypatch.setattr(foci, 'validate_folders', lambda path: {'sample': info})
-    process = Mock()
+def foci_config(tmp_path):
+    from plate_helpers import design
+    scheme = design(tmp_path/'experiment', channels=['Nuclei: DAPI', 'Foci: Marker 1'])
+    config = tmp_path/'input.json'
+    config.write_text(json.dumps({'paths_to_files':[str(scheme.path.parent)]}))
+    return config, scheme
+
+
+def test_foci_assignment_has_no_interactive_channel_questions(tmp_path, monkeypatch):
+    config, scheme = foci_config(tmp_path)
+    process = Mock(return_value=None)
     monkeypatch.setattr(foci, 'filter_foci', process)
-    return info, process
+    reader = answer_with(monkeypatch, [])
+    assert foci.main_filter_foci(str(config), 150) == 0
+    reader.assert_not_called()
+    assert process.call_count == 1
+    assert process.call_args.args[1:3] == (scheme.markers('Foci')[0]['id'], 150)
 
 
-def test_foci_selection_and_confirmation_retry_before_processing(tmp_path, monkeypatch):
-    info, process = foci_folder(tmp_path, monkeypatch)
-    reader = answer_with(monkeypatch, ['abc', '0', '2', '1', 'yess', '', 'yes'])
-    assert foci.main_filter_foci('input.json', 150) is None
-    assert reader.call_count == 7
-    process.assert_called_once_with(info, 'Foci_1_Channel_2', 150)
+@pytest.mark.parametrize('stop', [KeyboardInterrupt(), EOFError()])
+def test_foci_processing_can_be_cancelled(tmp_path, monkeypatch, stop):
+    config, _ = foci_config(tmp_path)
+    monkeypatch.setattr(foci, 'filter_foci', Mock(side_effect=stop))
+    assert foci.main_filter_foci(str(config), 150) == 130
 
 
-@pytest.mark.parametrize('answers', [['q'], ['1', 'q'], ['1', 'no'],
-                                     ['1', KeyboardInterrupt()], ['1', EOFError()]])
-def test_foci_cancellation_does_not_start_processing(tmp_path, monkeypatch, answers):
-    _, process = foci_folder(tmp_path, monkeypatch)
-    answer_with(monkeypatch, answers)
-    assert foci.main_filter_foci('input.json', 150) == 130
-    process.assert_not_called()
+def test_quantification_never_asks_to_infer_intersections(tmp_path, monkeypatch):
+    config, _ = foci_config(tmp_path)
+    monkeypatch.setattr(quantify, 'gather_paths_and_channels', lambda *a: ([], {}))
+    reader = answer_with(monkeypatch, [])
+    assert quantify.main_summarize_res(str(config)) == 0
+    reader.assert_not_called()
 
 
-@pytest.mark.parametrize('answer,enabled', [('yes', True), ('no', False)])
-def test_colocalization_never_interprets_a_typo_as_no(tmp_path, monkeypatch, answer, enabled):
-    info = {'fia_assay_folder': str(tmp_path)}
-    monkeypatch.setattr(quantify, 'validate_folders', lambda path: {str(tmp_path): info})
-    monkeypatch.setattr(quantify, 'extract_metadata', lambda path: {})
-    monkeypatch.setattr(quantify, 'gather_paths_and_channels', lambda path: (['image.tif'], {}))
-    process = Mock(return_value=pd.DataFrame())
-    monkeypatch.setattr(quantify, 'parallel_processing', process)
-    reader = answer_with(monkeypatch, ['maybe', 'yes', 'yess', '', answer])
-    quantify.main_summarize_res('input.json', njobs=2)
-    assert reader.call_count == 5
-    assert process.call_args.kwargs['perform_colocalization'] is enabled
-    assert process.call_args.kwargs['max_workers'] == 2
-
-
-@pytest.mark.parametrize('stop', ['q', KeyboardInterrupt(), EOFError()])
-def test_colocalization_cancellation_creates_no_results(tmp_path, monkeypatch, stop):
-    monkeypatch.setattr(quantify, 'validate_folders', lambda path: {str(tmp_path): {}})
-    process = Mock()
-    monkeypatch.setattr(quantify, 'parallel_processing', process)
-    answer_with(monkeypatch, ['yes', stop])
-    assert quantify.main_summarize_res('input.json') == 130
-    process.assert_not_called()
-    assert not list(tmp_path.iterdir())
+@pytest.mark.parametrize('stop', [KeyboardInterrupt(), EOFError()])
+def test_quantification_cancel_before_outputs(tmp_path, monkeypatch, stop):
+    config, scheme = foci_config(tmp_path)
+    monkeypatch.setattr(quantify, 'gather_paths_and_channels', Mock(side_effect=stop))
+    assert quantify.main_summarize_res(str(config)) == 130
+    assert not (scheme.path.parent/'fia_assay/foci_analysis').exists()
 
 
 def test_intensity_type_retry_and_cancellation_precede_imagej(monkeypatch, tmp_path):

@@ -1,4 +1,4 @@
-"""Whole-field pFAK measurements from one inclusive SUM32 threshold mask.
+"""Whole-field FieldSignal measurements from one inclusive SUM32 threshold mask.
 
 No background subtraction, rescaling, morphology, hole filling or watershed.
 Objects are 8-connected positive regions, including regions touching the field
@@ -86,13 +86,13 @@ def measure_projection(projection, nuclei_ids, limits, calibration, include_bord
              'Normalization_nuclear_area': nuclear_area,
              'Normalization_mean_nuclear_area': nuclear_area / counts['Normalization_nuclei_count']
              if counts['Normalization_nuclei_count'] else None,
-             'pFAK_Positive_pixels': n_positive, 'pFAK_Area': area,
-             'pFAK_Coverage_percent': 100.0 * n_positive / projection.size,
-             'pFAK_RawIntDen': raw, 'pFAK_IntDen': intensity,
-             'pFAK_Object_count': count, 'pFAK_Border_object_count': len(edge_ids),
-             'pFAK_Median_object_area': float(np.median(sizes[1:]) * pixel_area) if count else None,
+             'FieldSignal_Positive_pixels': n_positive, 'FieldSignal_Area': area,
+             'FieldSignal_Coverage_percent': 100.0 * n_positive / projection.size,
+             'FieldSignal_RawIntDen': raw, 'FieldSignal_IntDen': intensity,
+             'FieldSignal_Object_count': count, 'FieldSignal_Border_object_count': len(edge_ids),
+             'FieldSignal_Median_object_area': float(np.median(sizes[1:]) * pixel_area) if count else None,
              'Projection_Min': float(projection.min()), 'Projection_Max': float(projection.max())}
-    for field in ('pFAK_RawIntDen', 'pFAK_IntDen', 'pFAK_Area'):
+    for field in ('FieldSignal_RawIntDen', 'FieldSignal_IntDen', 'FieldSignal_Area'):
         image[field + '_per_nucleus'] = (image[field] / counts['Normalization_nuclei_count']
                                          if counts['Normalization_nuclei_count'] else None)
         image[field + '_per_nuclear_area'] = image[field] / nuclear_area if nuclear_area else None

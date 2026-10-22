@@ -1,6 +1,7 @@
-"""pFAK mask/intensity semantics, image-level statistics and portable reports."""
+"""FieldSignal mask/intensity semantics, image-level statistics and portable reports."""
 
 import json
+from pathlib import Path
 import os
 import subprocess
 import sys
@@ -23,7 +24,18 @@ from marker_report_statistics import calculate_statistics, observations
 from pfak_imagej import save_images
 from pfak_measurements import measure_projection, threshold_settings
 from test_collect_marker_intensity_results import create_morphology, sheet_rows
-from test_marker_intensity_report import plate
+from plate_helpers import workbook
+import plate_design
+
+def plate(path, groups=None):
+    return workbook(path, groups, ['Nuclei: DAPI', 'Ignore', 'Field signal: pFAK-Y397'])
+
+@pytest.fixture(autouse=True)
+def small_previews(monkeypatch):
+    import marker_report_plots, pfak_plots
+    monkeypatch.setattr(marker_report_plots, 'PNG_DPI', 80)
+    monkeypatch.setattr(pfak_plots, 'PNG_DPI', 80)
+
 
 
 def sample():
@@ -47,16 +59,16 @@ def test_inclusive_mask_raw_and_integrated_density_without_rescaling():
     expected = (projection >= 5) & (projection <= 25)
     assert mask.dtype == np.uint8 and np.array_equal(mask, expected * 255)
     assert ids.dtype == np.uint32 and np.array_equal(ids > 0, expected)
-    assert row['pFAK_Object_count'] == 2
-    assert row['pFAK_Positive_pixels'] == 12 and row['pFAK_Area'] == 1.5
-    assert row['pFAK_RawIntDen'] == 215 and row['pFAK_IntDen'] == 215 * .125
+    assert row['FieldSignal_Object_count'] == 2
+    assert row['FieldSignal_Positive_pixels'] == 12 and row['FieldSignal_Area'] == 1.5
+    assert row['FieldSignal_RawIntDen'] == 215 and row['FieldSignal_IntDen'] == 215 * .125
     assert [o['Area_px2'] for o in objects] == [3, 9]
     assert [o['Touches_border'] for o in objects] == [True, False]
     assert row['Normalization_nuclei_count'] == 2 and row['Normalization_nuclear_area'] == 1
-    assert row['pFAK_RawIntDen_per_nucleus'] == 107.5
-    assert row['pFAK_IntDen_per_nuclear_area'] == 26.875
-    assert row['pFAK_Area_per_nucleus'] == .75
-    assert row['pFAK_Area_per_nuclear_area'] == 1.5
+    assert row['FieldSignal_RawIntDen_per_nucleus'] == 107.5
+    assert row['FieldSignal_IntDen_per_nuclear_area'] == 26.875
+    assert row['FieldSignal_Area_per_nucleus'] == .75
+    assert row['FieldSignal_Area_per_nuclear_area'] == 1.5
     assert projection.max() == 50
 
 
@@ -67,10 +79,10 @@ def test_border_option_changes_only_both_denominators():
     with_border, _, mask2, ids2 = measure_projection(*args, include_border=True)
     assert without['Normalization_nuclei_count'] == 2 and with_border['Normalization_nuclei_count'] == 3
     assert without['Normalization_nuclear_area_px2'] == 8 and with_border['Normalization_nuclear_area_px2'] == 14
-    assert with_border['pFAK_RawIntDen_per_nucleus'] == pytest.approx(215 / 3)
-    assert with_border['pFAK_IntDen_per_nuclear_area'] == pytest.approx(215 / 14)
+    assert with_border['FieldSignal_RawIntDen_per_nucleus'] == pytest.approx(215 / 3)
+    assert with_border['FieldSignal_IntDen_per_nuclear_area'] == pytest.approx(215 / 14)
     assert np.array_equal(mask1, mask2) and np.array_equal(ids1, ids2)
-    for field in ('pFAK_Area', 'pFAK_RawIntDen', 'pFAK_IntDen', 'pFAK_Object_count'):
+    for field in ('FieldSignal_Area', 'FieldSignal_RawIntDen', 'FieldSignal_IntDen', 'FieldSignal_Object_count'):
         assert without[field] == with_border[field]
     assert without['Non_border_nuclei_count'] == with_border['Non_border_nuclei_count'] == 2
 
@@ -78,9 +90,9 @@ def test_border_option_changes_only_both_denominators():
 def test_empty_mask_and_zero_denominators_have_distinct_meanings():
     projection, ids = sample()
     row, objects, mask, _ = measure_projection(projection, ids * 0, threshold_settings([100]), spatial.uncalibrated())
-    assert row['pFAK_RawIntDen'] == row['pFAK_IntDen'] == row['pFAK_Area'] == row['pFAK_Object_count'] == 0
-    assert objects == [] and not mask.any() and row['pFAK_Median_object_area'] is None
-    for metric in ('pFAK_RawIntDen', 'pFAK_IntDen', 'pFAK_Area'):
+    assert row['FieldSignal_RawIntDen'] == row['FieldSignal_IntDen'] == row['FieldSignal_Area'] == row['FieldSignal_Object_count'] == 0
+    assert objects == [] and not mask.any() and row['FieldSignal_Median_object_area'] is None
+    for metric in ('FieldSignal_RawIntDen', 'FieldSignal_IntDen', 'FieldSignal_Area'):
         assert row[metric + '_per_nucleus'] is None and row[metric + '_per_nuclear_area'] is None
 
 
@@ -105,10 +117,10 @@ def test_lossless_saved_projection_mask_ids_and_calibration(tmp_path):
     folder = tmp_path / 'image'
     saved = save_images(folder, projection, mask, ids, nuclei, calibration, objects)
     assert len(saved) == 5
-    assert np.array_equal(tifffile.imread(folder / 'pFAK_SUM32.tif'), projection)
-    assert np.array_equal(tifffile.imread(folder / 'pFAK_mask.tif'), mask)
-    assert np.array_equal(tifffile.imread(folder / 'pFAK_objects.tif'), ids)
-    assert spatial.compatible(spatial.tiff_calibration(folder / 'pFAK_SUM32.tif')[0], calibration)
+    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_SUM32.tif'), projection)
+    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_mask.tif'), mask)
+    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_objects.tif'), ids)
+    assert spatial.compatible(spatial.tiff_calibration(folder / 'FieldSignal_SUM32.tif')[0], calibration)
 
 
 class FakeEngine:
@@ -124,7 +136,7 @@ class FakeEngine:
         assert channel == 3 and mode == 'nd2'
         self.read.append(path.name)
         return {**spatial.normalize(.2, .3, 'um'), 'Width_px': 30, 'Height_px': 20,
-                'Z_planes': 3, 'Z_step_um': .5, 'Pixel_type': 'uint16'}
+                'Z_planes': 3, 'Z_step_um': .5, 'Pixel_type': 'uint16', 'Channels': 3}
 
     def labels(self, mask, ids, info):
         return tifffile.imread(ids)
@@ -150,6 +162,8 @@ def experiment(tmp_path):
     tifffile.imwrite(qc / (mask.stem + '_ids.tif'), ids)
     manifest = tmp_path / 'input.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(raw.parent)]}))
+    plate(raw.parent/'FIA_scheme.xlsx')
+    plate_design.save_snapshot(run, plate_design.load_design(raw.parent))
     return run, raw, manifest
 
 
@@ -158,7 +172,7 @@ def pfak_run(tmp_path):
     run, raw, manifest = experiment(tmp_path)
     engine = FakeEngine()
     before = raw.read_bytes()
-    assert analysis.main(['-i', str(manifest), '--channel', '3', '-t', '100000', '200000'], lambda: engine) == 0
+    assert analysis.main(['-i', str(manifest), '-t', '100000', '200000'], lambda: engine) == 0
     assert raw.read_bytes() == before and engine.read == [raw.name]
     output = next(run.parent.glob(io.PREFIX + '*'))
     return output, run, raw, manifest
@@ -169,11 +183,11 @@ def test_analysis_preserves_provenance_and_both_intensity_metrics(pfak_run):
     data = io.load_run(output)
     assert data['metadata']['Status'] == 'SUCCESS'
     row = data['images'][0]
-    assert row['pFAK_RawIntDen'] == 720000 and row['pFAK_IntDen'] == pytest.approx(43200)
-    assert row['pFAK_Object_count'] == 2 and row['pFAK_Positive_pixels'] == 7
+    assert row['FieldSignal_RawIntDen'] == 720000 and row['FieldSignal_IntDen'] == pytest.approx(43200)
+    assert row['FieldSignal_Object_count'] == 2 and row['FieldSignal_Positive_pixels'] == 7
     assert row['Normalization_nuclei_count'] == 2 and row['Normalization_nuclear_area_px2'] == 32
-    assert row['pFAK_RawIntDen_per_nucleus'] == 360000
-    assert row['pFAK_IntDen_per_nuclear_area'] == pytest.approx(22500)
+    assert row['FieldSignal_RawIntDen_per_nucleus'] == 360000
+    assert row['FieldSignal_IntDen_per_nuclear_area'] == pytest.approx(22500)
     assert row['Channel'] == 3 and row['Projection'] == 'SUM'
     assert (run.parent / analysis.JOURNAL).exists()
     assert data['metadata']['Include_border_nuclei'] is False
@@ -186,7 +200,7 @@ def test_analysis_preserves_provenance_and_both_intensity_metrics(pfak_run):
 def test_failed_missing_mask_is_not_a_zero_measurement_and_other_images_continue(tmp_path):
     run, raw, manifest = experiment(tmp_path)
     (raw.parent / 'field_WellA3.nd2').write_bytes(b'new image without nuclei preparation')
-    assert analysis.main(['-i', str(manifest), '--channel', '3', '-t', '100000'], FakeEngine) == 1
+    assert analysis.main(['-i', str(manifest), '-t', '100000'], FakeEngine) == 1
     output = next(run.parent.glob(io.PREFIX + '*'))
     data = io.load_run(output)
     assert data['metadata']['Status'] == 'PARTIAL'
@@ -201,8 +215,8 @@ def test_real_pdf_report_embeds_all_graphs_and_objects_without_png_exports(pfak_
     ok, output = report.create_report(source, raw.parent, min_nuclei=2, stats_unit='image')
     assert ok, (output / 'report_status.json').read_text()
     pdfs = list((output / 'Plots').glob('*.pdf'))
-    assert len(pdfs) == 14 and all(p.read_bytes().startswith(b'%PDF') for p in pdfs)
-    assert (output / 'Plots' / 'pFAK_Object_area_um2.pdf').is_file()
+    assert len(pdfs) == 12 and all(p.read_bytes().startswith(b'%PDF') for p in pdfs)
+    assert (output / 'Plots' / 'FieldSignal_Object_area_um2.pdf').is_file()
     assert not list(output.rglob('*.png'))
     with ZipFile(output / report.WORKBOOK) as archive:
         assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == len(pdfs)
@@ -211,8 +225,8 @@ def test_real_pdf_report_embeds_all_graphs_and_objects_without_png_exports(pfak_
     plot_rows = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
     assert len([r for r in plot_rows if r['Observation'] == 'object']) == 2
     stats = sheet_rows(output / report.WORKBOOK, 'Statistics')
-    assert len(stats) == 13 and all(r['Effective_unit'] == 'image' for r in stats)
-    assert all(r['Family_size_planned'] == 13 for r in stats)
+    assert len(stats) == 12 and all(r['Effective_unit'] == 'image' for r in stats)
+    assert all(r['Family_size_planned'] == 12 for r in stats)
     assert all(r['N_control'] <= 1 for r in stats)
     exported = {path.stem: collect.csv_snapshot(path, {}, [])[0:2]
                 for path in output.glob('*.csv')}
@@ -226,7 +240,7 @@ def test_minimum_filter_order_style_and_object_population(pfak_run):
     assert data['images'] == data['objects'] == []
     assert len(data['calibration_images_before_filter']) == 1
     assert data['plot_style']['images'][0]['Point_edgecolor'] == '#D62728'
-    assert len(data['metric_specs']) == 13
+    assert len(data['metric_specs']) == 12
     assert data['groups'] == ['Control', 'Treatment']
 
 
@@ -244,11 +258,12 @@ def test_later_processing_exclusion_removes_old_pfak_results(pfak_run):
 
 def test_missing_excel_produces_actionable_report_diagnostics(pfak_run):
     source, _, raw, _ = pfak_run
+    (raw.parent/'FIA_scheme.xlsx').unlink()
     ok, output = report.create_report(source, raw.parent)
     assert not ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Error_code'] == 'MISSING_PLATE_MAP'
-    assert 'fia_assay' in status['Required_action']
+    assert 'raw images' in status['Required_action']
 
 
 def test_statistics_use_images_or_equal_image_weight_wells_not_objects(pfak_run):
@@ -258,22 +273,22 @@ def test_statistics_use_images_or_equal_image_weight_wells_not_objects(pfak_run)
     original = data['images'][0]
     data['images'], data['objects'] = [], []
     for index, (well, value) in enumerate([('A02', 1), ('A02', 9), ('A03', 20), ('A04', 10), ('A04', 30)]):
-        row = dict(original, Well=well, Image_name=f'field{index}_Well{well}.nd2', Mask_name=f'mask_{index}', pFAK_RawIntDen=value)
+        row = dict(original, Well=well, Image_name=f'field{index}_Well{well}.nd2', Mask_name=f'mask_{index}', FieldSignal_RawIntDen=value)
         data['images'].append(row)
     report_data.prepare(data, template, 'image', None, 0)
-    values, unit = observations(data, 'pFAK_RawIntDen', 'Control')
+    values, unit = observations(data, 'FieldSignal_RawIntDen', 'Control')
     assert values == [1, 9, 20] and unit == 'image'
     data['stats_unit'] = 'well'
-    values, unit = observations(data, 'pFAK_RawIntDen', 'Control')
+    values, unit = observations(data, 'FieldSignal_RawIntDen', 'Control')
     assert values == [5, 20] and unit == 'well'
     calculate_statistics(data)
     assert all(row['N_control'] == 2 for row in data['statistics'])
 
 
-@pytest.mark.parametrize('command', ['quantify_pfak', 'fia_pfak_report'])
+@pytest.mark.parametrize('command', ['quantify_field_signal', 'fia_field_signal_report'])
 def test_help_needs_no_imaging_runtime_and_no_storage(tmp_path, command):
     script = f'import __init__ as app; app.{command}()'
-    env = dict(os.environ, FIA_RUNTIME_HOME=str(tmp_path / 'runtime'))
+    env = dict(os.environ, FIA_RUNTIME_HOME=str(tmp_path / 'runtime'), PYTHONPATH=str(Path(analysis.__file__).parent))
     result = subprocess.run([sys.executable, '-c', script, '--help'], capture_output=True, text=True, env=env, check=False)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / 'runtime').exists()
@@ -283,9 +298,9 @@ def test_help_needs_no_imaging_runtime_and_no_storage(tmp_path, command):
 def test_cli_rejects_bad_limits_channels_and_object_statistics():
     for args in (['-t', '2', '1'], ['-t', '2', '--channel', '0'], ['-t', 'nan'], ['-t', '1', '2', '3']):
         with pytest.raises(SystemExit):
-            parse_arguments('quantify_pfak', ['-i', 'input.json', *args])
+            parse_arguments('quantify_field_signal', ['-i', 'input.json', *args])
     with pytest.raises(SystemExit):
-        parse_arguments('fia_pfak_report', ['-i', 'input.json', '--stats-unit', 'object'])
+        parse_arguments('fia_field_signal_report', ['-i', 'input.json', '--stats-unit', 'object'])
 
 
 @pytest.fixture
@@ -316,7 +331,7 @@ def test_native_sum_channel_calibration_and_imagej_intdens(tmp_path, native_engi
     ids = np.zeros(projection.shape, dtype=np.uint16)
     ids[2:4, 2:4] = 1
     row, _, mask, _ = measure_projection(projection, ids, threshold_settings([100000, 125000]), info)
-    assert row['pFAK_Positive_pixels'] == 40 and row['pFAK_RawIntDen'] == 4400000
+    assert row['FieldSignal_Positive_pixels'] == 40 and row['FieldSignal_RawIntDen'] == 4400000
 
     J = jpype.JClass
     image = J('ij.ImagePlus')('SUM', J('ij.process.FloatProcessor')(
@@ -329,16 +344,16 @@ def test_native_sum_channel_calibration_and_imagej_intdens(tmp_path, native_engi
         table = J('ij.measure.ResultsTable')()
         flags = J('ij.measure.Measurements')
         J('ij.plugin.filter.Analyzer')(image, flags.AREA | flags.INTEGRATED_DENSITY, table).measure()
-        assert row['pFAK_RawIntDen'] == table.getValue('RawIntDen', 0)
-        assert row['pFAK_IntDen'] == table.getValue('IntDen', 0)
-        assert row['pFAK_Area'] == table.getValue('Area', 0)
+        assert row['FieldSignal_RawIntDen'] == table.getValue('RawIntDen', 0)
+        assert row['FieldSignal_IntDen'] == table.getValue('IntDen', 0)
+        assert row['FieldSignal_Area'] == table.getValue('Area', 0)
     finally:
         image.close()
 
 
 def test_latest_keeps_threshold_and_border_profiles_separate_and_archives_logs(pfak_run):
     first, run, raw, manifest = pfak_run
-    common = ['-i', str(manifest), '--channel', '3']
+    common = ['-i', str(manifest)]
     for options in (['-t', '100000', '200000'],
                     ['-t', '100000', '200000', '--include-border-nuclei'],
                     ['-t', '110000']):
@@ -348,7 +363,7 @@ def test_latest_keeps_threshold_and_border_profiles_separate_and_archives_logs(p
     assert first not in {item['path'] for item in found}
     assert len({item['profile'] for item in found}) == 3
     assert len(report.discover_runs(raw.parent, 'all', Mock(), Mock())) == 4
-    assert len(list((run.parent / 'logs').glob('3_pfak_analysis_*.log'))) == 3
+    assert len(list((run.parent / 'logs').glob('3_field_signal_*.log'))) == 3
 
 
 def test_physical_and_uncalibrated_area_endpoints_never_pool(pfak_run):
@@ -357,12 +372,12 @@ def test_physical_and_uncalibrated_area_endpoints_never_pool(pfak_run):
     original = data['images'][0]
     row = {**original, **spatial.uncalibrated(), 'Area_unit': 'px2',
            'Image_name': 'second_WellA2.nd2', 'Mask_name': 'second_mask',
-           'pFAK_Area': 7, 'pFAK_IntDen': 720000, 'pFAK_Area_per_nucleus': 3.5}
+           'FieldSignal_Area': 7, 'FieldSignal_IntDen': 720000, 'FieldSignal_Area_per_nucleus': 3.5}
     data['images'].append(row)
     template = plate(run.parent / 'layout.xlsx')
     report_data.prepare(data, template, 'image', None, 0)
-    for field, expected in [('pFAK_Area_um2', [.42]), ('pFAK_Area_px2', [7]),
-                            ('pFAK_IntDen_um2', [43200]), ('pFAK_IntDen_px2', [720000])]:
+    for field, expected in [('FieldSignal_Area_um2', [.42]), ('FieldSignal_Area_px2', [7]),
+                            ('FieldSignal_IntDen_um2', [43200]), ('FieldSignal_IntDen_px2', [720000])]:
         values, unit = observations(data, field, 'Control')
         assert values == pytest.approx(expected) and unit == 'image'
-    assert len(observations(data, 'pFAK_RawIntDen', 'Control')[0]) == 2
+    assert len(observations(data, 'FieldSignal_RawIntDen', 'Control')[0]) == 2

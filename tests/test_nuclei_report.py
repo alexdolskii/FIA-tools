@@ -1,6 +1,7 @@
 """Nuclei-only preparation and direct reporting without any marker dependency."""
 
 import hashlib
+from plate_helpers import design
 import json
 import os
 import subprocess
@@ -27,16 +28,17 @@ runtime = preparation_tests.runtime
 table_only_report = workflow_tests.table_only_report
 
 
-@pytest.mark.parametrize('file_type,filename', [('1', 'good.nd2'), ('2', 'good.tiff'), ('3', 'good.tif')])
+@pytest.mark.parametrize('file_type,filename', [('1', 'good_WellA02.nd2'), ('2', 'good_WellA02.tiff'), ('3', 'good_WellA02.tif')])
 def test_only_selected_nuclei_channel_is_prepared(tmp_path, monkeypatch, runtime, file_type, filename):
     root = source_folder(tmp_path, filenames=(filename,))
-    answers = iter([file_type, '2'])
+    design(root, channels=['Ignore', 'Nuclei: DAPI', 'Ignore'])
+    answers = iter([file_type if file_type != '1' else '2'])
     monkeypatch.setattr('builtins.input', lambda prompt: next(answers))
     assert mod.process_image([str(root)], nuclei_only=True) == ['SUCCESS']
     assert runtime.saveAs.call_count == 1
     assert not (root / 'fia_assay' / 'markers').exists()
     log = journal(root)
-    assert 'nuclei_channel=2' in log and 'output_files=1' in log
+    assert 'nuclei_C=2' in log and 'output_files=1' in log
     assert 'marker_channels=' not in log and 'marker_projection=' not in log
     assert 'native_XY_preserved=True' in log
     nuclei = root / 'fia_assay' / 'Nuclei'
@@ -50,7 +52,7 @@ def test_real_pdf_report_ignores_unrelated_marker_files_and_preserves_measuremen
     run, export, raw = create_morphology(tmp_path / 'experiment')
     plate(run.parent / 'plate.xlsx')
     # These deliberately broken files must never be discovered or opened.
-    for dirname in ('markers', 'Nuclear_Intensity_Foci_1_Channel_2_20260924_100000',
+    for dirname in ('markers', 'Nuclear_Intensity_NuclearIntensity_Marker_1_783c3a1993a9_20260924_100000',
                     'FIA_Marker_Intensity_Combined_Results_20260924_110000'):
         directory = run.parent / dirname
         directory.mkdir()
@@ -60,7 +62,7 @@ def test_real_pdf_report_ignores_unrelated_marker_files_and_preserves_measuremen
     ok, output = report.create_report(run, raw.parent)
     assert ok
     assert output.parent == run.parent and output.name.startswith(report.OUTPUT_PREFIX)
-    assert {p.name for p in output.glob('*.xlsx')} == {report.WORKBOOK}
+    assert {p.name for p in output.glob('*.xlsx')} == {report.WORKBOOK, 'plate_design.xlsx'}
     expected = {'Nuclei_count', 'Morphology_Area_px2', 'Morphology_Aspect_ratio',
                 'Morphology_Circularity', 'Morphology_Solidity'}
     pdfs = list((output / 'Plots').glob('*.pdf'))
@@ -139,6 +141,7 @@ def test_statistics_match_existing_morphology_only_route(tmp_path, unit):
     assert ok
     template = plate(morph[0].parent / 'plate.xlsx')
     datasets = [inputs.load_nuclei_run(morph[0]), inputs.load_collection(collection)]
+    datasets[1]['report_kind'] = 'nuclei'
     for data in datasets:
         inputs.annotate(data, template, [], unit)
         inputs.filter_images(data, 0)
@@ -147,7 +150,7 @@ def test_statistics_match_existing_morphology_only_route(tmp_path, unit):
     assert datasets[0]['statistics'] == datasets[1]['statistics']
     assert len(datasets[0]['statistics']) == 13
     assert len(plot_specs(datasets[0])) == 5
-    assert len(plot_specs(datasets[1])) == 1  # Existing marker-report policy stays intact.
+    assert len(plot_specs(datasets[1])) == 5  # Existing marker-report policy stays intact.
     # Nonconstant populations also exercise tested p-values and well aggregation.
     direct, collected = annotated(), annotated()
     for data in (direct, collected):
@@ -189,21 +192,17 @@ def test_batch_selects_latest_valid_runs_and_rotates_journals(tmp_path, monkeypa
     assert report.main(['-i', str(path), '--nuclei-runs', 'ask']) == 130
 
 
-def test_missing_plate_map_is_reported_but_other_experiments_continue(tmp_path, table_only_report, capsys):
-    roots = [tmp_path / 'missing_layout', tmp_path / 'ready']
+def test_missing_plate_map_stops_batch_before_reports(tmp_path, table_only_report, capsys):
+    roots = [tmp_path/'missing_layout', tmp_path/'ready']
     for root in roots:
         create_morphology(root)
-    plate(roots[1] / 'fia_assay' / 'plate.xlsx')
+    (roots[0]/'FIA_scheme.xlsx').unlink()
     path = manifest(tmp_path, roots)
-    assert report.main(['-i', str(path)]) == 1
-    statuses = []
+    assert report.main(['-i',str(path)]) == 1
     for root in roots:
-        output = next((root / 'fia_assay').glob(report.OUTPUT_PREFIX + '*'))
-        statuses.append(json.loads((output / 'report_status.json').read_text()))
-    assert [s['Status'] for s in statuses] == ['FAILED', 'SUCCESS']
-    assert statuses[0]['Error_code'] == 'MISSING_PLATE_MAP'
-    assert 'fia_assay' in statuses[0]['Required_action']
-    assert 'MISSING_PLATE_MAP' in capsys.readouterr().out
+        assert not list((root/'fia_assay').glob(report.OUTPUT_PREFIX+'*'))
+        assert 'status=FAILED' in (root/'fia_assay/3_nuclei_report.log').read_text()
+    assert 'FIA*.xlsx' in capsys.readouterr().out
 
 
 def test_nuclei_report_import_and_help_need_no_imaging_runtime(tmp_path):

@@ -1,13 +1,15 @@
-# Whole-field pFAK analysis
+# Field signal analysis (including pFAK-Y397)
 
 This additional route is designed for pFAK-Y397 in fibroblast/ECM units with a nuclei-staining channel. It measures the selected original pFAK channel over the full XY field. It does not use fibronectin, segment cells, assign pFAK objects to individual cells, or measure pFAK only inside nuclei.
 
 ## Commands and inputs
 
-1. Prepare nuclei with `select_channels -i input_paths.json --nuclei-only` and `generate_nuclei_mask -i input_paths.json`. Existing compatible final nuclei results can be reused.
-2. Run `quantify_pfak -i input_paths.json --channel 3 -t LOWER [UPPER]`, replacing the placeholders with numeric thresholds. Channel numbers start at 1. If omitted, the pFAK channel is requested once with validated input and cancellation support.
-3. Put one 96-well Excel layout in each experiment's `fia_assay`.
-4. Run `fia_pfak_report -i input_paths.json --min-nuclei 20`. The cutoff is an example. Add `--stats-unit image` or `well` only when the selected statistical unit fits the experimental design.
+1. Put one current-format FIA scheme beside each experiment's raw images. Assign `Nuclei: DAPI` and `Field signal: pFAK-Y397` to the appropriate physical channels in every applicable well.
+2. Prepare nuclei with `select_channels -i input_paths.json` and `generate_nuclei_mask -i input_paths.json`. Existing compatible complete nucleus runs can be reused.
+3. Run `quantify_field_signal -i input_paths.json --marker "pFAK-Y397" -t LOWER [UPPER]`, replacing thresholds with numeric values. Channels come exclusively from Excel and may differ between wells.
+4. Run `fia_field_signal_report -i input_paths.json --min-nuclei 20`. The cutoff is an example. Add `--stats-unit image` or `well` only when appropriate for the design.
+
+Other marker names use the same Field signal method. Without `--marker`, all assigned Field signal markers are processed separately with the invocation's thresholds. Use separate invocations for different marker thresholds.
 
 All valid experiment folders in the `paths_to_files` JSON are used. Original ND2/TIFF files must match existing final nucleus masks and Morphology_QC IDs at native XY dimensions. Metadata, counts, non-border IDs, areas and available calibration are validated. Multiseries, multitimepoint and RGB-packed originals are rejected with image-level diagnostics. Single-plane images are used unchanged as a one-slice SUM; an earlier projection method cannot be inferred or reversed.
 
@@ -49,7 +51,7 @@ By default only non-border nucleus IDs are selected. `--include-border-nuclei` s
 
 The tables preserve total, border, non-border and normalization nucleus counts; total visible nuclear area; normalization nuclear area; mean selected nuclear area; and the border fraction. Including border nuclei uses their truncated visible areas. Excluding border nuclei while measuring pFAK over the whole field creates an operational field-level ratio: pFAK from cells with border/outside nuclei can remain in the numerator. It must not be interpreted as a direct measurement of the same individually identified cells.
 
-`--min-nuclei` always uses the number of non-border nuclei, independently of normalization policy. Equality passes. It filters images consistently across pFAK endpoints and object distributions in the report, not during measurement. The diagnostic count plot retains all eligible input images and marks below-threshold images with a red edge.
+`--min-nuclei` always uses the number of non-border nuclei, independently of normalization policy. Equality passes. It filters images consistently across pFAK endpoints and object distributions in the report, not during measurement. Nuclear QC remains in the report tables. Common nuclear count and morphology graphs belong to fia_nuclei_report.
 
 Zero positive objects is a valid result: count, area and integrated intensities equal zero. Median object area is undefined. A zero selected nucleus count/area makes the corresponding normalized value undefined, even when the numerator is zero. Missing/failed images are not zero measurements.
 
@@ -63,29 +65,29 @@ Review the SUM32 image, binary mask, numbered object overlay and tabular border 
 
 ## Reports and statistics
 
-Reports discover the plate layout directly in `fia_assay`, or use `--template` / `--sheet`. Existing FIA Order/Group, comparison-block and bold-control rules apply. Condition fill colors, grey image points and technical-well shapes are assigned before filtering and stay stable. Descriptive reports can omit a uniquely identified control; statistical reports use the strict shared validation.
+Reports discover one FIA workbook beside raw images, or use an explicit `--template`. The named `Plate Map` and `Channels` sheets and `PLOT LAYOUT` follow [the scheme contract](PLATE_SCHEME.md). The report selects only this marker's assigned wells. Layout positions and condition order are retained, including conditions without assigned data. Box/violin colors and grey technical-well marker shapes follow the shared palette.
 
 Each main endpoint has one overview containing all comparison blocks. Mean intensity has no separate plot. The object-area overview has two panels per block: image medians with image points, and pooled object-area distributions. Pooled distributions are descriptive and weight images according to their object counts. They never supply statistical replicates. Empty conditions keep their positions and n=0. For fewer than five objects or constant values, the shared distribution renderer uses box/range/line displays instead of fabricating a violin density.
 
-With one area-unit cohort there are 13 overview files, plus the all-images count diagnostic when `--min-nuclei` is positive. Mixing calibrated and uncalibrated inputs adds separate area-dependent overviews; those observations are never pooled in an area-dependent test. Both intensity representations and both normalizations are deliberately retained even where mathematically related.
+With one area-unit cohort there are 12 overview files; common nuclear count graphs belong to the nuclei report. Mixing calibrated and uncalibrated inputs adds separate area-dependent overviews; those observations are never pooled in an area-dependent test. Both intensity representations and both normalizations are deliberately retained even where mathematically related.
 
-Statistics are optional. `image` compares image endpoints; `well` compares equal-image-weight means within each well. The object-size endpoint is the per-image median, not individual objects. Tests are two-sided Welch comparisons against the designated control; Holm correction includes all planned image endpoints and treatments within each comparison block, including both requested intensity representations. Unavailable tests remain in the planned family. Images and technical wells are not automatically independent biological replicates.
+Statistics are optional. `image` compares image endpoints; `well` compares equal-image-weight means within each well. The object-size endpoint is the per-image median, not individual objects. Tests are two-sided Welch comparisons against the designated control; Holm correction includes planned image endpoints and applicable treatments within each marker/comparison block, including both requested intensity representations. Planned tests with insufficient retained observations remain in the family. Conditions without this staining are NOT_APPLICABLE and do not create tests. Images and technical wells are not automatically independent biological replicates.
 
 PDF is the default standalone format; `--plot-format png` or `both` changes it. Excel embeds every plot, including the paired object-area plots. PDF-only reports do not create standalone PNG plot previews. Image-analysis QC PNGs are separate diagnostic outputs.
 
 ## Runs, exclusions and provenance
 
-Analysis directories are named `fia_assay/FIA_pFAK_Results_C<channel>_threshold_<limits>_<timestamp>`. Every execution creates a new directory. It contains:
+Analysis directories are named `fia_assay/FIA_Field_Signal_Results_<marker-id>_threshold_<limits>_<timestamp>`. Every execution creates a new directory. It contains:
 
-- `Images.csv`, `Objects.csv`, `Failed_Images.csv`, `Run_Info.csv` and `pFAK_Measurements.xlsx`;
-- `pfak_run.json`, `run_parameters.json` and processing-exclusion snapshots;
-- per-image `pFAK_SUM32.tif`, `pFAK_mask.tif`, `pFAK_objects.tif`, `nuclei_ids.tif` and `objects_QC.png` under numbered `Images` subfolders.
+- `Images.csv`, `Objects.csv`, `Failed_Images.csv`, `Run_Info.csv` and `Field_Signal_Measurements.xlsx`;
+- `field_signal_run.json`, `run_parameters.json` and processing-exclusion snapshots;
+- per-image `FieldSignal_SUM32.tif`, `FieldSignal_mask.tif`, `FieldSignal_objects.tif`, `nuclei_ids.tif` and `objects_QC.png` under numbered `Images` subfolders.
 
-The current analysis journal is `fia_assay/3_pfak_analysis.log`. Prior invocations are archived in `fia_assay/logs`. Logs record stages, inputs, image parameters, saves, elapsed times, warnings and errors. Temporary resources use the existing FIA supervisor and diagnostics.
+The current analysis journal is `fia_assay/3_field_signal.log`. Prior invocations are archived in `fia_assay/logs`. Logs record stages, inputs, image parameters, saves, elapsed times, warnings and errors. Temporary resources use the existing FIA supervisor and diagnostics.
 
 Individual failures are logged and listed separately while remaining images continue. A run with successful and failed images is `PARTIAL` and the command returns nonzero. Reports can use its verified successful measurements, explicitly preserve the failure table and warn about the partial source. RUNNING, CANCELLED and FAILED runs are not report inputs. Existing persistent FIA processing exclusions are applied before analysis and when reporting older results. An analysis-specific I/O failure does not permanently prohibit that original from unrelated workflows or a later retry.
 
-`fia_pfak_report --runs latest` selects the latest valid run for each distinct channel, effective threshold interval, nucleus run and border-normalization policy. Different profiles are never pooled or silently replaced by another threshold. `--runs all` reports every valid run; `ask` enables manual selection. Each report is written to a new `FIA_pFAK_Report_<timestamp>` folder, with `4_pfak_report.log` as its current experiment journal.
+`fia_field_signal_report --runs latest` selects the latest valid run for each distinct marker/routing scope, effective threshold interval, nucleus run and border-normalization policy. Different profiles are never pooled or silently replaced by another threshold. `--runs all` reports every valid run; `ask` enables manual selection. Each report is written to a new `FIA_Field_Signal_Report_<timestamp>` folder, with `4_field_signal_report.log` as its current experiment journal.
 
 Reports work from checksum-verified measurement tables without re-opening raw images or starting ImageJ. They preserve image/object tables, per-image/per-well values, condition summaries, planned comparisons, plate design and order, exclusions/failures, plot data/style and archived input tables. Source file/mask/ID hashes, output image hashes and table hashes are recorded. Missing Excel layouts produce explicit diagnostics with the required action.
 

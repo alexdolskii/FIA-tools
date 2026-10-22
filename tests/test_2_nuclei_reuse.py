@@ -329,3 +329,6 @@ class TestStarDistReuse(unittest.TestCase):
              patch.object(mod, "process_nuclei") as process:
             mod.main("unused.json", 0)
         process.assert_called_once_with([str(run)], 0)
+
+# Isolate the numerical/progress boundary; current-format integration is tested separately.
+from segmentation_unit import scheme_boundary

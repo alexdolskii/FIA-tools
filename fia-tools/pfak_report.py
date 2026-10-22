@@ -1,11 +1,12 @@
-"""Direct pFAK reporting from verified analysis tables; each profile stays separate."""
+"""Direct FieldSignal reporting from verified analysis tables; each profile stays separate."""
 
 if __name__ == '__main__':
     from runtime_worker import launch_direct
-    raise SystemExit(launch_direct('fia_pfak_report'))
+    raise SystemExit(launch_direct('fia_field_signal_report'))
 
 import hashlib
 import json
+import plate_design as scheme
 import logging
 from pathlib import Path
 
@@ -23,9 +24,9 @@ from marker_report_statistics import STAT_COLUMNS, calculate_statistics
 from pfak_plots import render_object_areas
 from table_workflow import TableJournal, TableProgress
 
-JOURNAL = '4_pfak_report.log'
-PREFIX = 'FIA_pFAK_Report_'
-WORKBOOK = 'FIA_pFAK_Report.xlsx'
+JOURNAL = '4_field_signal_report.log'
+PREFIX = 'FIA_Field_Signal_Report_'
+WORKBOOK = 'FIA_Field_Signal_Report.xlsx'
 
 
 def as_table(rows, columns=()):
@@ -37,16 +38,17 @@ def discover_runs(root, mode, audit, progress):
     candidates = sorted((p for p in assay.iterdir() if p.name.startswith(io.PREFIX)
                          and p.is_dir() and not p.is_symlink()), key=lambda p: p.name, reverse=True)
     valid = []
-    progress.phase('Checking pFAK result tables', len(candidates))
+    progress.phase('Checking FieldSignal result tables', len(candidates))
     for path in candidates:
         try:
             data = io.load_run(path)
+            scheme.validate_snapshot(path, scheme.load_design(root), 'Field signal', data['metadata']['Marker_ID'])
             valid.append({'root': root, 'path': path, 'profile': io.profile_key(data['metadata']),
                           'started': data['metadata']['Started_UTC']})
-            audit.event(root, 'PFAK_RUN_VALIDATED | %s | status=%s | images=%s',
+            audit.event(root, 'FIELD_SIGNAL_RUN_VALIDATED | %s | status=%s | images=%s',
                         path, data['metadata']['Status'], len(data['images']))
         except (OSError, ValueError, KeyError) as error:
-            audit.event(root, 'PFAK_RUN_REJECTED | %s | %s', path, error, level=logging.WARNING)
+            audit.event(root, 'FIELD_SIGNAL_RUN_REJECTED | %s | %s', path, error, level=logging.WARNING)
         progress.advance(path.name)
     ordered = sorted(valid, key=lambda row: (row['started'], row['path'].name), reverse=True)
     if mode != 'latest':
@@ -111,14 +113,17 @@ def create_report(source, root, template=None, sheet=None, stats_unit=None, min_
     output = create_output(root / ASSAY_DIR, PREFIX)
     stage = 'input validation'
     try:
-        with audit.stage(root, 'pFAK report', progress) as logger:
+        with audit.stage(root, 'FieldSignal report', progress) as logger:
             write_status(output, 'RUNNING', Source=str(source), Report_kind='pfak')
             data = io.load_run(source)
             if data['metadata']['Status'] == 'PARTIAL':
                 data['notes'].append(f'PARTIAL source: {len(data["failures"])} failed images are listed separately and excluded, not represented as zeros.')
             data['notes'].extend(data['metadata'].get('Warnings', []))
             stage = 'plate-map validation'
-            plate = shared.select_template(root / ASSAY_DIR, template, sheet, location_label='fia_assay folder')
+            plate = shared.select_template(root, template, sheet, location_label='raw-image folder')
+            design = scheme.read_design(plate)
+            scheme.validate_snapshot(source, design, 'Field signal', data['metadata']['Marker_ID'])
+            scheme.save_snapshot(output, design)
             measurements.prepare(data, plate, stats_unit, sheet, min_nuclei)
             data['notes'].extend(data['plot_style']['warnings'])
             for note in data['notes']:
@@ -147,9 +152,9 @@ def create_report(source, root, template=None, sheet=None, stats_unit=None, min_
             collect.verify_workbook(output / WORKBOOK, {}, exported)
             for path, content in data['files'].items():
                 if path.is_symlink() or path.read_bytes() != content:
-                    raise ValueError(f'Input changed during pFAK report: {path}')
+                    raise ValueError(f'Input changed during FieldSignal report: {path}')
             if exclusions.load_exclusions(source) != data['processing_exclusions']:
-                raise ValueError('Processing exclusions changed during pFAK report; rerun the report.')
+                raise ValueError('Processing exclusions changed during FieldSignal report; rerun the report.')
             write_status(output, 'SUCCESS', Source=str(source), Source_status=data['metadata']['Status'],
                          Report_kind='pfak', Images=len(data['images']), Objects=len(data['objects']),
                          Source_failed_images=len(data['failures']), Min_nuclei=min_nuclei,
@@ -181,29 +186,35 @@ def create_report(source, root, template=None, sheet=None, stats_unit=None, min_
 
 
 def main(argv=None):
-    args = parse_arguments('fia_pfak_report', argv)
+    args = parse_arguments('fia_field_signal_report', argv)
     audit = TableJournal(JOURNAL, args.input)
     result = 1
     try:
         skipped = []
-        roots = collect.discover_sources(args.input, audit, skipped)
+        designs = scheme.preflight(args.input, args.template, command='fia_field_signal_report')
+        roots = [root for root in collect.discover_sources(args.input, audit, skipped)
+                 if designs[root].markers('Field signal')]
+        if not roots:
+            print('No Field signal assignments; no field reports requested by the schemes.')
+            audit.status = 'COMPLETE'
+            return 0
         selected, missing = [], []
         with TableProgress() as progress:
             for index, root in enumerate(roots, 1):
                 progress.group(f'Scan {index}/{len(roots)} | {root.name}')
-                with audit.stage(root, 'pFAK source discovery', progress):
+                with audit.stage(root, 'FieldSignal source discovery', progress):
                     runs = discover_runs(root, args.runs, audit, progress)
                 selected.extend(runs)
                 if not runs:
                     missing.append(root)
-                    audit.incomplete(root, 'No valid pFAK analysis results. Run quantify_pfak first.')
+                    audit.incomplete(root, 'No valid FieldSignal analysis results. Run quantify_field_signal first.')
         if not selected:
-            raise ValueError('No valid pFAK analysis results found.')
+            raise ValueError('No valid FieldSignal analysis results found.')
         for index, item in enumerate(selected, 1):
             print(f'{index}. {item["path"]}')
         if args.runs == 'ask':
-            selected = [selected[i] for i in choose_indices('Select pFAK runs (numbers, all, or q): ', len(selected))]
-        print(f'Selected {len(selected)} separate pFAK reports. Statistics: {args.stats_unit or "disabled"}.')
+            selected = [selected[i] for i in choose_indices('Select FieldSignal runs (numbers, all, or q): ', len(selected))]
+        print(f'Selected {len(selected)} separate FieldSignal reports. Statistics: {args.stats_unit or "disabled"}.')
         failures = len(skipped) + len(missing)
         with TableProgress() as progress:
             for index, item in enumerate(selected, 1):
@@ -215,11 +226,11 @@ def main(argv=None):
         result = 1 if failures else 0
     except CANCELLATION_EXCEPTIONS:
         audit.status = 'CANCELLED'
-        audit.event(None, 'CANCELLED | pFAK report')
+        audit.event(None, 'CANCELLED | FieldSignal report')
         result = 130
     except Exception:  # noqa: BLE001 - the CLI records unexpected failures and closes its journal
         audit.status = 'FAILED'
-        audit.event(None, 'RUN_ABORTED | pFAK report', level=logging.ERROR, exc_info=True)
+        audit.event(None, 'RUN_ABORTED | FieldSignal report', level=logging.ERROR, exc_info=True)
     finally:
         saved = audit.finish()
     return result if saved or result else 1

@@ -5,6 +5,7 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('fia_nuclei_report'))
 
 import csv
+import plate_design as plate
 import logging
 from datetime import datetime
 
@@ -32,6 +33,7 @@ def discover_runs(root, mode, audit, progress):
     for path in candidates:
         try:
             datetime.strptime(collect.NUCLEI_PATTERN.fullmatch(path.name)[1], '%Y%m%d_%H%M%S')
+            plate.validate_snapshot(path, plate.load_design(root))
             bundle = collect.load_morphology(path, allow_empty=True)
             selected.append({'root': root, 'run': path, 'particle_size': bundle['particle_size']})
             audit.event(root, 'SOURCE_VALIDATED | %s | images=%s | non_border_nuclei=%s',
@@ -60,6 +62,7 @@ def main(argv=None):
 def _main(args, audit):
     skipped = []
     try:
+        plate.preflight(args.input, args.template, command='fia_nuclei_report')
         roots = collect.discover_sources(args.input, audit, skipped)
         if not roots:
             raise collect.ValidationError('No existing experiment folders')

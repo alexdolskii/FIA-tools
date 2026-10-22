@@ -296,21 +296,17 @@ class TestFilterFoci:
 # main_filter_foci
 # ─────────────────────────────────────────────────────────────────────────────
 class TestMainFilterFoci:
-    """Tests for main_filter_foci() in 3_foci_mask_generation.py."""
+    def test_invalid_threshold_fails_without_imagej(self, test_input_json):
+        with patch.object(mod, 'initialize_imagej') as engine:
+            assert mod.main_filter_foci(test_input_json, foci_threshold=150.5) == 1
+        engine.assert_not_called()
 
-    def test_raises_when_foci_threshold_is_not_int(self, test_input_json):
-        # PRECONDITION: threshold is passed as a float instead of int.
-        # STEP / RESULT: ValueError about integer threshold.
-        with pytest.raises(ValueError, match="integer"):
-            mod.main_filter_foci(test_input_json, foci_threshold=150.5)
-
-    def test_cancels_when_user_confirms_no(self, test_input_json):
-        # PRECONDITION: valid JSON; user chooses "1" for subfolder then "no".
-        with patch("builtins.input", side_effect=["1", "no"]):
-            assert mod.main_filter_foci(test_input_json, foci_threshold=150) == 130
-
-    def test_invalid_subfolder_choice_allows_retry_or_cancellation(self, test_input_json):
-        # PRECONDITION: valid JSON; user enters "999" which is out of range.
-        with patch("builtins.input", side_effect=["999", "q"]) as prompt:
-            assert mod.main_filter_foci(test_input_json, foci_threshold=150) == 130
-        assert prompt.call_count == 2
+    def test_no_foci_assignments_require_no_questions(self, tmp_path):
+        from plate_helpers import design
+        root = tmp_path/'experiment'
+        design(root)
+        config = tmp_path/'input.json'
+        config.write_text(json.dumps({'paths_to_files':[str(root)]}))
+        with patch('builtins.input', side_effect=AssertionError('No prompt')), patch.object(mod, 'filter_foci') as process:
+            assert mod.main_filter_foci(str(config), 150) == 0
+        process.assert_not_called()

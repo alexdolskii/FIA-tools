@@ -1,4 +1,4 @@
-"""Original-channel SUM projection and lossless pFAK diagnostic exports."""
+"""Original-channel SUM projection and lossless FieldSignal diagnostic exports."""
 
 from pathlib import Path
 
@@ -50,10 +50,10 @@ def save_tiff(path, pixels, calibration, imagej=True):
 
 def save_images(folder, projection, mask, labels, nuclei_ids, calibration, objects):
     folder.mkdir(parents=True, exist_ok=False)
-    save_tiff(folder / 'pFAK_SUM32.tif', projection, calibration)
-    save_tiff(folder / 'pFAK_mask.tif', mask, calibration)
+    save_tiff(folder / 'FieldSignal_SUM32.tif', projection, calibration)
+    save_tiff(folder / 'FieldSignal_mask.tif', mask, calibration)
     # uint32 preserves object IDs even when a field has more than 65535 objects.
-    save_tiff(folder / 'pFAK_objects.tif', labels, calibration, imagej=False)
+    save_tiff(folder / 'FieldSignal_objects.tif', labels, calibration, imagej=False)
     save_tiff(folder / 'nuclei_ids.tif', nuclei_ids.astype(np.uint16), calibration)
     low, high = np.percentile(projection, (1, 99.8))
     display = np.clip((projection.astype(np.float64) - low) / (high - low or 1), 0, 1)

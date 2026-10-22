@@ -335,3 +335,6 @@ def test_native_nonbinary_mask_is_rejected(imagej_classes):
             morphology.measure_final_mask(mask)
     finally:
         mask.close()
+
+# Isolate the numerical/progress boundary; current-format integration is tested separately.
+from segmentation_unit import scheme_boundary

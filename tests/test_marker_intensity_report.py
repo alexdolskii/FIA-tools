@@ -1,6 +1,7 @@
 """Report contracts: provenance, plate design, observation units and literal exports."""
 
 import csv
+from plate_helpers import workbook, M1, M2
 import json
 import os
 import shutil
@@ -27,25 +28,12 @@ from test_collect_marker_intensity_results import (
     sheet_rows,
 )
 
-MARKER = 'Foci_1_Channel_2'
+MARKER = 'NuclearIntensity_Marker_1_783c3a1993a9'
 RAW = MARKER + '_Marker_RawIntDen'
 
 
 def plate(path, groups=None):
-    groups = groups or {'A02': ('Control', True), 'A03': ('Treatment', False)}
-    book = Workbook()
-    sheet = book.active
-    sheet.title = 'Plate Map'
-    for number in range(1, 13):
-        sheet.cell(1, number + 1, number)
-    for number, letter in enumerate('ABCDEFGH', 2):
-        sheet.cell(number, 1, letter)
-    for well, (group, control) in groups.items():
-        cell = sheet.cell(ord(well[0]) - ord('A') + 2, int(well[1:]) + 1, group)
-        cell.fill = PatternFill('solid', fgColor='ABCDEF')
-        cell.font = Font(bold=control)
-    book.save(path)
-    return path
+    return workbook(path, groups)
 
 
 def collection(tmp_path, empty=False, legacy=False, missing=False):
@@ -54,11 +42,12 @@ def collection(tmp_path, empty=False, legacy=False, missing=False):
     markers = [MARKER]
     if legacy:
         create_intensity(morph, stamp='20260924_110000', legacy=True)
-        markers.append('Channel_2')
+        # Channel-only legacy measurements are deliberately not imported.
     if missing:
-        markers.append('Foci_2_Channel_3')
+        markers.append('NuclearIntensity_Marker_2_0696330b24ce')
     ok, path = collect(morph, markers)
     assert ok
+    plate(path.parent.parent / 'FIA_scheme.xlsx')
     plate(path / 'arbitrary layout.xlsx')
     return path
 
@@ -94,14 +83,14 @@ def test_archive_validation_and_legacy_selection(tmp_path):
     path = collection(tmp_path, legacy=True)
     data = data_tools.load_collection(path)
     markers, notes = data_tools.marker_catalog(data)
-    assert markers == [MARKER] and 'Channel_2 excluded' in notes[0]
-    data_tools.annotate(data, data_tools.find_template(path), markers, 'nucleus')
+    assert markers == [MARKER] and notes == []
+    data_tools.annotate(data, data_tools.find_template(path.parent.parent), markers, 'nucleus')
     data_tools.aggregate(data)
     assert len(data['nuclei']) == 2 and data['images'][0][data_tools.COUNT] == 2
     assert all(row['Touches_border'] is False for row in data['nuclei'])
     assert data['nuclei'][0]['Well'] == 'A02'
     assert not any(key.startswith('Channel_2_') for key in data['nuclei'][0])
-    assert len(plot_rows(data)) == 3
+    assert len(plot_rows(data)) == 2
     # Archived sources suffice even after the original raw image is removed.
     (path.parent.parent / 'field, WellA2.nd2').unlink()
     assert len(data_tools.load_collection(path)['nuclei']) == 2
@@ -130,16 +119,16 @@ def test_plate_discovery_ignores_hidden_lock_and_analytical_workbooks(tmp_path):
     for name in ('._hidden.xlsx', '~$locked.xlsx'):
         plate(path / name)
     (path / 'bad.xlsx').write_text('not a workbook')
-    assert data_tools.find_template(path).name == 'arbitrary layout.xlsx'
-    plate(path / 'second layout.xlsx')
+    assert data_tools.find_template(path.parent.parent).name == 'FIA_scheme.xlsx'
+    plate(path.parent.parent / 'FIA_second.xlsx')
     with pytest.raises(data_tools.ValidationError, match='found 2'):
-        data_tools.find_template(path)
+        data_tools.find_template(path.parent.parent)
 
 
 @pytest.mark.parametrize('groups,reason', [
     ({'A03': ('Treatment', False)}, 'Unannotated imaged well'),
     ({'A02': ('Control', False), 'A03': ('Treatment', False)}, 'one control'),
-    ({'A02': ('Control', True), 'A03': ('Control', False)}, 'Inconsistent'),
+    ({'A02': ('Control', True), 'A03': ('Control', False)}, 'inconsistent'),
 ])
 def test_invalid_plate_design_rejected(tmp_path, groups, reason):
     path = collection(tmp_path)
@@ -148,18 +137,13 @@ def test_invalid_plate_design_rejected(tmp_path, groups, reason):
         data_tools.annotate(data_tools.load_collection(path), mapping, [MARKER], 'nucleus')
 
 
-def test_descriptive_template_needs_no_color_or_control(tmp_path):
+def test_descriptive_template_can_omit_control_but_keeps_blocks(tmp_path):
     path = collection(tmp_path)
-    template = path / 'arbitrary layout.xlsx'
-    book = load_workbook(template)
-    for cell in (book.active['C2'], book.active['D2']):
-        cell.fill = PatternFill()
-        cell.font = Font()
-    book.save(template)
+    template = plate(path / 'arbitrary layout.xlsx', {'A02': ('Control', False), 'A03': ('Treatment', False)})
     data = data_tools.annotate(data_tools.load_collection(path), template, [MARKER], None)
     calculate_statistics(data)
     assert data['statistics'] == []
-    with pytest.raises(data_tools.ValidationError, match='solid fill'):
+    with pytest.raises(data_tools.ValidationError, match='one control'):
         data_tools.annotate(data_tools.load_collection(path), template, [MARKER], 'well')
 
 
@@ -169,10 +153,10 @@ def test_well_filename_consistency_and_marker_identity(tmp_path):
     path = collection(tmp_path, legacy=True)
     data = data_tools.load_collection(path)
     with pytest.raises(data_tools.ValidationError, match='catalog'):
-        data_tools.annotate(data, data_tools.find_template(path), ['Channel_2'], None)
+        data_tools.annotate(data, data_tools.find_template(path.parent.parent), ['Channel_2'], None)
     data['markers'].append('Foci_2_Channel_2')
-    with pytest.raises(data_tools.ValidationError, match='same channel'):
-        data_tools.annotate(data, data_tools.find_template(path), [MARKER, 'Foci_2_Channel_2'], None)
+    with pytest.raises(data_tools.ValidationError, match='not assigned'):
+        data_tools.annotate(data, data_tools.find_template(path.parent.parent), [MARKER, 'Foci_2_Channel_2'], None)
 
 
 def test_hierarchical_well_means_and_nucleus_plot_population():
@@ -206,7 +190,7 @@ def test_welch_direction_interval_family_and_count_exception(unit):
     assert row['CI95_low'] == pytest.approx(interval.low)
     assert row['CI95_high'] == pytest.approx(interval.high)
     assert row['Difference_treatment_minus_control'] > 0
-    assert row['Family_size_planned'] == 19
+    assert row['Family_size_planned'] == 6
     assert row['N_control'] == (103 if unit == 'nucleus' else 2)
     count = data['statistics'][0]
     assert count['Effective_unit'] == ('image' if unit == 'nucleus' else 'well')
@@ -222,20 +206,20 @@ def test_holm_uses_planned_family_including_unavailable_tests():
     assert len(data['statistics']) == 38
     missing = [r for r in data['statistics'] if r['Treatment'] == 'No observations']
     assert all(r['N_treatment'] == 0 and r['P_raw'] is None and r['P_Holm'] is None for r in missing)
-    assert all(r['Family_size_planned'] == 38 for r in data['statistics'])
+    assert all(r['Family_size_planned'] == (12 if r['Marker'] else 26) for r in data['statistics'])
 
 
 def test_one_well_no_test_and_missing_marker_never_zero(tmp_path):
     path = collection(tmp_path, missing=True)
-    data = data_tools.annotate(data_tools.load_collection(path), data_tools.find_template(path),
-                              [MARKER, 'Foci_2_Channel_3'], 'well')
+    data = data_tools.annotate(data_tools.load_collection(path), data_tools.find_template(path.parent.parent),
+                              [MARKER, 'NuclearIntensity_Marker_2_0696330b24ce'], 'well')
     data_tools.aggregate(data)
     calculate_statistics(data)
-    assert len(data['statistics']) == 25
+    assert len(data['statistics']) == 12
     assert all(r['Status'] == 'NOT_TESTED' and r['P_raw'] is None for r in data['statistics'])
-    missing = [r for r in data['well_values'] if r['Marker'] == 'Foci_2_Channel_3']
+    missing = [r for r in data['well_values'] if r['Marker'] == 'NuclearIntensity_Marker_2_0696330b24ce']
     assert missing and all(r['Value'] is None for r in missing)
-    assert len(plot_rows(data)) == 3
+    assert len(plot_rows(data)) == 2
 
 
 def test_zero_variance_not_tested_and_mean_reconciliation():
@@ -258,26 +242,17 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path, plot_form
     assert ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'SUCCESS' and status['Non_border_nuclei'] == 2
-    assert status['Planned_comparisons'] == 19
+    assert status['Planned_comparisons'] == 6
     assert len(sheet_rows(output / report.WORKBOOK, 'Nuclei')) == 2
     assert sheet_rows(output / report.WORKBOOK, 'Excluded_Images') == []
     assert (output / 'Excluded_Images.csv').is_file()
     assert status['Images_before_filter'] == status['Images'] == 1 and status['Images_excluded'] == 0
-    assert len(sheet_rows(output / report.WORKBOOK, 'Statistics')) == 19
-    by_condition = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
-    comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
-    assert len(by_condition) == 12 and len(comparisons) == 12
-    assert {r['Metric'] for r in by_condition} == set(collector.MORPH_METRICS)
-    assert by_condition == sheet_rows(output / report.WORKBOOK, report.MORPHOLOGY_SHEETS[0])
-    assert comparisons == sheet_rows(output / report.WORKBOOK, report.MORPHOLOGY_SHEETS[1])
-    for title in report.MORPHOLOGY_SHEETS:
-        assert (output / (title + '.csv')).is_file()
-    with ZipFile(output / report.MORPHOLOGY_WORKBOOK) as archive:
-        assert not any(name.startswith('xl/media/') for name in archive.namelist())
+    assert len(sheet_rows(output / report.WORKBOOK, 'Statistics')) == 6
+    assert not (output / report.MORPHOLOGY_WORKBOOK).exists()
     selected_format = plot_format or 'pdf'
     suffixes = {'.pdf', '.png'} if selected_format == 'both' else {'.' + selected_format}
     assert {p.suffix for p in (output / 'Plots').iterdir()} == suffixes
-    assert len(list((output / 'Plots').iterdir())) == 2 * len(suffixes)
+    assert len(list((output / 'Plots').iterdir())) == len(suffixes)
     assert status['Plot_format'] == selected_format
     style = json.loads((output / 'plot_style.json').read_text())
     assert status['Plot_style_version'] == style['Style_version'] == 1
@@ -291,7 +266,7 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path, plot_form
     journal = (output.parent / '5_marker_intensity_report.log').read_text()
     assert 'plot_format=' + selected_format in journal
     saved = [line for line in journal.splitlines() if 'PLOT_SAVED |' in line]
-    assert len(saved) == 2 * len(suffixes)
+    assert len(saved) == len(suffixes)
     assert {Path(line.split('PLOT_SAVED | ')[1]).suffix for line in saved} == suffixes
     for plot in sheet_rows(output / report.WORKBOOK, 'Plot_Info'):
         assert (output / plot['File']).is_file()
@@ -300,9 +275,9 @@ def test_complete_report_keeps_inputs_and_has_embedded_plots(tmp_path, plot_form
                 assert (output / plot[column]).is_file()
             else:
                 assert plot[column] is None
-    assert [r['Points'] for r in sheet_rows(output / report.WORKBOOK, 'Plot_Info')] == [1, 2]
+    assert [r['Points'] for r in sheet_rows(output / report.WORKBOOK, 'Plot_Info')] == [2]
     with ZipFile(output / report.WORKBOOK) as archive:
-        assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 2
+        assert len([name for name in archive.namelist() if name.startswith('xl/media/')]) == 1
     assert all(p.read_bytes() == content for p, content in before.items())
     assert report.create_output(path.parent) != output
     assert (output / 'Inputs' / 'Collection' / 'Nuclei_Morphology.csv').read_bytes() == before[path / 'Nuclei_Morphology.csv']
@@ -317,16 +292,13 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     create_intensity(morph)
     ok, path = collect(morph, [MARKER])
     assert ok
+    plate(path.parent.parent / 'FIA_scheme.xlsx')
     plate(path / 'arbitrary layout.xlsx')
     before = {p: p.read_bytes() for p in path.iterdir() if p.is_file()}
     ok, output = report.create_report(path, path.parent.parent, markers='all', stats_unit=unit, min_nuclei=1)
     assert ok
     assert sheet_rows(output / report.WORKBOOK, 'Nuclei') == []
-    summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
-    assert len(summary) == 12
-    assert all(r['Control: N'] == 0 and r['Control: Mean'] is None and r['Control: SD'] is None for r in summary)
-    comparisons = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1])
-    assert all(r['Status'] == 'NOT_TESTED' and r['P_Holm'] is None for r in comparisons)
+    assert not (output / report.MORPHOLOGY_WORKBOOK).exists()
     for table in ('Nuclei', 'Images', 'Image_Values'):
         assert sheet_rows(output / report.WORKBOOK, table) == []
         with (output / (table + '.csv')).open(encoding='utf-8-sig') as handle:
@@ -352,13 +324,10 @@ def test_empty_images_are_excluded_and_audited_even_with_border_nuclei(tmp_path,
     assert all(row['N'] == 0 and row['Mean'] is None
                for row in sheet_rows(output / report.WORKBOOK, 'Summary'))
     plot_info = sheet_rows(output / report.WORKBOOK, 'Plot_Info')
-    assert next(row for row in plot_info if row['Plot'] == 'Nuclei_count_all')['Points'] == 1
+    assert all(not row['Plot'].startswith('Nuclei_count') for row in plot_info)
     assert all(row['Points'] == 0 for row in plot_info if row['Plot'] != 'Nuclei_count_all')
     diagnostic = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
-    assert len(diagnostic) == 1 and diagnostic[0]['Plot'] == 'Nuclei_count_all'
-    assert diagnostic[0]['Below_min_nuclei'] is True
-    assert diagnostic[0]['Used_for_analysis'] is False
-    assert diagnostic[0]['Point_edgecolor'] == '#D62728'
+    assert diagnostic == []
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Images_before_filter'] == status['Images_excluded'] == 1 and status['Images'] == 0
     assert all(p.read_bytes() == content for p, content in before.items())
@@ -393,7 +362,7 @@ def test_filter_precedes_all_aggregation_and_preserves_real_zero_intensity(unit)
     count_summary = next(r for r in data['summary'] if r['Metric'] == data_tools.COUNT and r['Group'] == 'Control')
     assert count_summary['N'] == 2 and count_summary['Mean'] == 2
     if unit is not None:
-        assert all(r['Family_size_planned'] == 38 for r in data['statistics'])
+        assert all(r['Family_size_planned'] == (12 if r['Marker'] else 26) for r in data['statistics'])
         missing = [r for r in data['statistics'] if r['Treatment'] == 'Excluded condition']
         assert all(r['N_treatment'] == 0 and r['Status'] == 'NOT_TESTED' for r in missing)
         raw_test = next(r for r in data['statistics'] if r['Metric'] == RAW and r['Treatment'] == 'Treatment')
@@ -430,9 +399,9 @@ def test_default_and_zero_threshold_keep_empty_images(tmp_path, options):
     images = sheet_rows(output / report.WORKBOOK, 'Images')
     assert len(images) == 1 and images[0][data_tools.COUNT] == 0
     points = sheet_rows(output / report.WORKBOOK, 'Plot_Data')
-    assert len(points) == 1 and points[0]['Value'] == 0 and points[0]['Observation'] == 'image'
+    assert points == []  # Nuclear counts remain QC table values, not marker plots.
     wells = sheet_rows(output / report.WORKBOOK, 'Well_Values')
-    assert next(r for r in wells if r['Well'] == 'A02' and r['Metric'] == data_tools.COUNT)['Value'] == 0
+    assert not any(r['Metric'] == data_tools.COUNT for r in wells)
     assert all(r['Value'] is None for r in wells if r['Metric'] != data_tools.COUNT)
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Min_nuclei'] == status['Images_excluded'] == 0
@@ -443,7 +412,7 @@ def test_default_and_zero_threshold_keep_empty_images(tmp_path, options):
 @pytest.mark.parametrize('unit', ['nucleus', 'well', None])
 def test_threshold_boundary_removes_nuclei_from_all_markers_and_morphology(unit):
     data = annotated([('A02', [5]), ('A03', [0, 2]), ('A04', [6]), ('A05', [4, 5, 8])])
-    second = 'Foci_2_Channel_3'
+    second = 'NuclearIntensity_Marker_2_0696330b24ce'
     data['markers'].append(second)
     for row in data['images'] + data['nuclei']:
         for key, value in list(row.items()):
@@ -464,7 +433,7 @@ def test_threshold_boundary_removes_nuclei_from_all_markers_and_morphology(unit)
         assert summary['Mean'] == (3 if metric.startswith(second) else 1)
     assert data['nuclei'][0][RAW] == data['nuclei'][0][second + '_Marker_RawIntDen'] == 0
     if unit is not None:
-        assert all(row['Family_size_planned'] == 25 for row in data['statistics'])
+        assert all(row['Family_size_planned'] == (6 if row['Marker'] else 13) for row in data['statistics'])
 
 
 @pytest.mark.parametrize('value', [-1, 1.5, True, '20', None])
@@ -482,12 +451,13 @@ def test_cli_rejects_invalid_min_nuclei_before_accessing_input(argument):
 
 def test_formula_like_group_is_literal_in_workbook(tmp_path):
     path = collection(tmp_path)
-    template = path / 'arbitrary layout.xlsx'
+    template = path.parent.parent / 'FIA_scheme.xlsx'
     book = load_workbook(template)
-    book.active['C2'].value = '=Control'
-    book.active['C2'].data_type = 's'
+    for coordinate in ('C2', 'B15'):
+        book.active[coordinate].value = '=Control'
+        book.active[coordinate].data_type = 's'
     book.save(template)
-    ok, output = report.create_report(path, path.parent.parent, markers='none')
+    ok, output = report.create_report(path, path.parent.parent, markers='all')
     assert ok
     book = load_workbook(output / report.WORKBOOK, read_only=True, data_only=False)
     try:
@@ -495,9 +465,6 @@ def test_formula_like_group_is_literal_in_workbook(tmp_path):
         assert '=Control' in [r['Group'] for r in sheet_rows(output / report.WORKBOOK, 'Nuclei')]
     finally:
         book.close()
-    assert sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[1]) == []
-    summary = sheet_rows(output / report.MORPHOLOGY_WORKBOOK, report.MORPHOLOGY_SHEETS[0])
-    assert summary[0]['=Control: N'] == 2
 
 
 def test_cli_noninteractive_and_no_imaging_imports(tmp_path):
@@ -556,42 +523,32 @@ def test_short_cli_uses_all_experiments_and_latest_collections_without_prompts(t
         assert str(path) in result.stdout
 
 
-def test_batch_choice_happens_once_before_reports_and_records_absent_markers(tmp_path, monkeypatch):
+def test_batch_uses_assignments_and_creates_separate_marker_reports(tmp_path, monkeypatch):
     first = collection(tmp_path / 'first', missing=True)
     second = collection(tmp_path / 'second')
     manifest = tmp_path / 'input_paths.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(first.parent.parent), str(second.parent.parent)]}))
-    prompts, outputs = [], []
+    outputs = []
     original = report.create_report
-
-    def answer(prompt):
-        assert not outputs
-        prompts.append(prompt)
-        return 'all'
-
     def create(*args, **kwargs):
-        assert len(prompts) == 1
         result = original(*args, **kwargs)
         outputs.append(result)
         return result
-
-    monkeypatch.setattr('builtins.input', answer)
+    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('No channel or marker prompt'))
     monkeypatch.setattr(report, 'create_report', create)
     assert report.main(['-i', str(manifest), '--stats-unit', 'nucleus']) == 0
-    assert len(prompts) == 1 and len(outputs) == 2 and all(ok for ok, _ in outputs)
-    first_status, second_status = [json.loads((path / 'report_status.json').read_text()) for _, path in outputs]
-    assert first_status['Markers'] == [MARKER, 'Foci_2_Channel_3']
-    assert second_status['Markers'] == [MARKER]
-    first_tests = sheet_rows(outputs[0][1] / report.WORKBOOK, 'Statistics')
-    assert {row['Family_size_planned'] for row in first_tests} == {25}
-    for (_, path), expected in zip(outputs, ('MISSING', 'not present')):
-        notes = sheet_rows(path / report.WORKBOOK, 'Overview')
-        assert any(row['Item'] == 'Selection note' and expected in row['Description'] for row in notes)
-        assert expected in (path.parent / '5_marker_intensity_report.log').read_text()
+    assert len(outputs) == 3 and all(ok for ok, _ in outputs)
+    for _, output in outputs:
+        status = json.loads((output / 'report_status.json').read_text())
+        assert len(status['Markers']) == 1
+        assert {row['Family_size_planned'] for row in sheet_rows(output / report.WORKBOOK, 'Statistics')} == {6}
 
 
 def marker_preview_folder(path, markers):
     path.mkdir()
+    from plate_helpers import design
+    import plate_design
+    plate_design.save_snapshot(path, design(path.parent))
     collector.write_csv(path / 'FIA_Marker_Intensity_Images.csv',
                         ['Mask_name', *[marker + '_Availability' for marker in markers]],
                         [{'Mask_name': 'image.tif', **{marker + '_Availability': state
@@ -599,29 +556,16 @@ def marker_preview_folder(path, markers):
     return path
 
 
-def test_batch_exact_names_morphology_only_and_legacy_aliases(tmp_path, monkeypatch):
-    first = marker_preview_folder(tmp_path / 'first', {MARKER: 'AVAILABLE', 'Channel_2': 'AVAILABLE'})
-    second = marker_preview_folder(tmp_path / 'second', {'Channel_2': 'AVAILABLE'})
-    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('Explicit selection must not prompt'))
-    assert report.preview_markers(first) == {MARKER: 'AVAILABLE'}
-    plans = report.choose_batch_markers([first, second], MARKER)
+def test_batch_exact_names_and_absent_markers(tmp_path, monkeypatch):
+    first = marker_preview_folder(tmp_path / 'first', {MARKER: 'AVAILABLE', M2: 'MISSING'})
+    second = marker_preview_folder(tmp_path / 'second', {M2: 'AVAILABLE'})
+    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('No prompt expected'))
+    plans = report.choose_batch_markers([first, second], 'Marker 1')
     assert plans[first] == ([MARKER], [])
     assert plans[second][0] == [] and 'without substitution' in plans[second][1][0]
-    assert report.choose_batch_markers([first, second], 'none') == {first: ([], []), second: ([], [])}
-    assert report.choose_batch_markers([first, second], 'all') == {
-        first: ([MARKER], ['Channel_2: not present in this collection; skipped without substitution.']),
-        second: (['Channel_2'], [f'{MARKER}: not present in this collection; skipped without substitution.'])}
-
-
-def test_batch_conflict_resolved_before_processing_and_explicit_errors(tmp_path, monkeypatch):
-    other = 'Foci_2_Channel_2'
-    path = marker_preview_folder(tmp_path / 'collection', {MARKER: 'AVAILABLE', other: 'AVAILABLE'})
-    answers = iter(['all', '2'])
-    monkeypatch.setattr('builtins.input', lambda _: next(answers))
-    assert report.choose_batch_markers([path], None) == {path: ([other], [])}
-    for selection in ('all', f'{MARKER},{MARKER}', 'Foci_3_Channel_4'):
+    for selection in ('none', f'{MARKER},{MARKER}', 'unknown'):
         with pytest.raises(data_tools.ValidationError):
-            report.choose_batch_markers([path], selection)
+            report.choose_batch_markers([first, second], selection)
 
 
 @pytest.mark.parametrize('answer', ['2', 'all', 'latest', 'manual'])
@@ -641,7 +585,7 @@ def test_cancel_common_selection_creates_no_reports(tmp_path, monkeypatch):
     manifest = tmp_path / 'input_paths.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(path.parent.parent)]}))
     monkeypatch.setattr('builtins.input', lambda _: 'q')
-    assert report.main(['-i', str(manifest)]) == 130
+    assert report.main(['-i', str(manifest), '--collections', 'ask']) == 130
     assert not list(path.parent.glob('FIA_Marker_Intensity_Report_*'))
 
 
@@ -686,7 +630,7 @@ def test_morphology_summary_matches_analysis_unit_and_preserves_statistics(unit)
     expected_tests = [r for r in data['statistics'] if r['Category'] == 'Morphology']
     assert comparisons == [{key: row[key] for key in comparison_columns} for row in expected_tests]
     if unit is not None:
-        assert all(row['Family_size_planned'] == 19 for row in comparisons)
+        assert all(row['Family_size_planned'] == 13 for row in comparisons)
     assert data == original and plot_rows(data) == plots
 
 
@@ -708,16 +652,17 @@ def test_morphology_summary_keeps_unobserved_groups_and_metric_specific_missing_
     assert all(row['No observations: N'] == 0 and row['No observations: Mean'] is None for row in rows)
 
 
-def test_missing_morphology_workbook_prevents_success(tmp_path, monkeypatch):
-    path = collection(tmp_path)
+def test_missing_primary_workbook_prevents_success(tmp_path, monkeypatch):
+    morph = create_morphology(tmp_path/'experiment')
+    path = morph[0]
     original = report.write_workbook
 
     def skip_morphology(output, tables, plots, filename=report.WORKBOOK, **kwargs):
-        if filename != report.MORPHOLOGY_WORKBOOK:
+        if filename != report.REPORT_PROFILES['nuclei']['workbook']:
             original(output, tables, plots, filename, **kwargs)
 
     monkeypatch.setattr(report, 'write_workbook', skip_morphology)
-    ok, output = report.create_report(path, path.parent.parent, markers='all')
+    ok, output = report.create_report(path, path.parent.parent, report_kind='nuclei')
     assert not ok
     status = json.loads((output / 'report_status.json').read_text())
     assert status['Status'] == 'FAILED' and status['Stage'] == 'final verification'
@@ -750,7 +695,7 @@ def test_morphology_plot_selection_follows_statistics_unit_without_changing_tabl
     assert len(plot_specs(data)) == 6
     assert {spec[1] for spec in plot_specs(data)[2:]} == {'Area_px2', 'Aspect_ratio', 'Circularity', 'Solidity'}
     assert {r['Metric'] for r in data['statistics'] if r['Category'] == 'Morphology'} == set(collector.MORPH_METRICS)
-    assert all(r['Family_size_planned'] == 19 for r in data['statistics'])
+    assert all(r['Family_size_planned'] == (6 if r['Marker'] else 13) for r in data['statistics'])
     assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
     assert data['statistics'] == before
     data['stats_unit'] = 'well'
@@ -758,7 +703,7 @@ def test_morphology_plot_selection_follows_statistics_unit_without_changing_tabl
     assert all(r['Status'] == 'NOT_TESTED' for r in data['statistics'])
     assert len(plot_specs(data)) == 2
     assert len(report.morphology_tables(data)[report.MORPHOLOGY_SHEETS[0]][1]) == 12
-    assert all(r['Family_size_planned'] == 19 for r in data['statistics'])
+    assert all(r['Family_size_planned'] == (6 if r['Marker'] else 13) for r in data['statistics'])
 
 
 def test_significant_omitted_morphology_does_not_trigger_other_plots_or_change_tables():

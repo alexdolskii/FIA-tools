@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import plot_palette as palette
 from marker_report_plots import (
     PNG_DPI,
+    panel_grid,
+    assigned_group,
     draw_distribution,
     draw_image_points,
     p_label,
@@ -19,7 +21,7 @@ def render_object_areas(data, folder, plot_format, progress=None):
     image_styles = {palette.image_identity(row): row for row in data['plot_style']['images']}
     panels = data['plot_style']['panels']
     for field, unit, ylabel in data['object_area_metrics']:
-        name = 'pFAK_Object_area_' + unit
+        name = 'FieldSignal_Object_area_' + unit
         points = [{**row, 'Value': row[field], **image_styles[palette.image_identity(row)]}
                   for row in data['images'] if row.get(field) is not None]
         objects = [row for row in data['objects'] if row['Area_unit'] == unit]
@@ -33,15 +35,19 @@ def render_object_areas(data, folder, plot_format, progress=None):
         labels = {p['id']: {g: wrap_label(p['labels'][g], (panel_width - 1.3) * 72 / len(p['groups']), 12)
                             for g in p['groups']} for p in panels}
         label_lines = max(s.count('\n') + 1 for values in labels.values() for s in values.values())
-        height = 2 + len(panels) * (5.2 + .22 * label_lines + .3 * levels)
+        grid_rows, grid_columns, positions, widths = panel_grid(panels)
+        height = 2 + grid_rows * (5.2 + .22 * label_lines + .3 * levels)
+        figure_width = 2 * panel_width * sum(widths) / min(sum(widths[a:b]) for _, a, b in positions)
         with plt.rc_context({'font.family': plot_font(), 'font.size': 12, 'pdf.fonttype': 42,
                              'figure.facecolor': 'white', 'axes.facecolor': 'white'}):
-            fig, axes = plt.subplots(len(panels), 2, figsize=(2 * panel_width, height), squeeze=False,
-                                     layout='constrained')
+            fig = plt.figure(figsize=(figure_width, height), layout='constrained')
+            grid = fig.add_gridspec(grid_rows, grid_columns, width_ratios=widths)
             try:
                 for index, panel in enumerate(panels):
+                    row, start, end = positions[index]
+                    pair = grid[row, start:end].subgridspec(1, 2)
                     for column, observation in enumerate(('image', 'object')):
-                        ax = axes[index, column]
+                        ax = fig.add_subplot(pair[0, column])
                         for position, group in enumerate(panel['groups'], 1):
                             records = [row for row in (points if observation == 'image' else objects) if row['Group'] == group]
                             values = [row['Value' if observation == 'image' else 'Area'] for row in records]
@@ -53,6 +59,8 @@ def render_object_areas(data, folder, plot_format, progress=None):
                             well_count = len({r['Well'] for r in records})
                             label = (f'n={len(values)} images; {well_count} wells' if observation == 'image' else
                                      f'n={len(values)} objects\n{image_count} images; {well_count} wells')
+                            if not assigned_group(data, field, group):
+                                label = 'Not assigned'
                             ax.annotate(label, (position, 0), xycoords=ax.get_xaxis_transform(),
                                         xytext=(0, -(16 + 15 * label_lines)), textcoords='offset points',
                                         ha='center', va='top', fontsize=10, annotation_clip=False)
@@ -80,7 +88,7 @@ def render_object_areas(data, folder, plot_format, progress=None):
                         'Left: one grey point per image; well shapes. Right: pooled objects; no object-level tests. '
                         'Images with more objects contribute more to the pooled distribution. '
                         'Zero objects: image median undefined, not zero.')
-                fig.suptitle('pFAK-positive object area\n' + wrap_label(note, (2 * panel_width - 1) * 72, 11), fontsize=11)
+                fig.suptitle(data['metadata']['Marker_name'] + '-positive object area\n' + wrap_label(note, (2 * panel_width - 1) * 72, 11), fontsize=11)
                 path = folder / name
                 if plot_format in ('pdf', 'both'):
                     fig.savefig(path.with_suffix('.pdf'))
