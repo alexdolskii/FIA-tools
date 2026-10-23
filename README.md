@@ -2,9 +2,11 @@
 
 FIA-tools analyzes nuclei and independently assigned markers in multichannel confocal images. The Excel-based workflow uses **one FIA Excel scheme beside each experiment's raw images**. The scheme defines the condition, comparison block, control, per-well channel assignments, requested Foci intersections and plot layout.
 
-**Version for these instructions:** [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), branch `feat/plate-scheme-routing`, targeting `tech_dev`. Until that PR is merged, updating only `tech_dev` does not install this workflow. Use the PR branch as shown below; after the merge, use `tech_dev` instead.
+**Version for these instructions:** `tech_dev`, including the Excel-based workflow introduced in [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4). Install or update `tech_dev` using the commands below.
 
 This development version extends the [original protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1), associated with `main`. Record the exact commit (`git rev-parse HEAD`), environment and analysis parameters.
+
+[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Plate-scheme skill](#plate-scheme-review-and-preparation-skill) · [Run](#run-the-analysis) · [Parameters](#command-line-parameters) · [Results](#results-and-documentation)
 
 ## Changes from the original version
 
@@ -29,8 +31,8 @@ macOS and Linux environment builds are configured in CI; this is not a guarantee
 Run in a terminal with Conda available:
 
 ```bash
-git clone --branch feat/plate-scheme-routing --single-branch https://github.com/alexdolskii/FIA-tools.git FIA-tools-plate-scheme
-cd FIA-tools-plate-scheme
+git clone --branch tech_dev --single-branch https://github.com/alexdolskii/FIA-tools.git FIA-tools-tech_dev
+cd FIA-tools-tech_dev
 conda env create -f environment.yaml
 conda activate fia_tools
 python -m pip install .
@@ -52,15 +54,15 @@ Run these commands inside your existing FIA-tools checkout. Use the environment 
 
 ```bash
 conda activate fia_tools
-git fetch origin feat/plate-scheme-routing:refs/remotes/origin/feat/plate-scheme-routing
-git switch feat/plate-scheme-routing
-git pull --ff-only origin feat/plate-scheme-routing
+git fetch origin tech_dev:refs/remotes/origin/tech_dev
+git switch tech_dev
+git pull --ff-only origin tech_dev
 python -m pip install --no-deps .
 git log -1 --oneline
 quantify_field_signal --help
 ```
 
-This also works after testing a detached commit: it switches back to the named PR branch. `--help` confirms that the installed command exists; `git log` identifies the checked-out revision. The package must be reinstalled after updating the checkout.
+This also works after testing the PR branch or a detached commit: it switches to `tech_dev`. `--help` confirms that the installed command exists; `git log` identifies the checked-out revision. The package must be reinstalled after updating the checkout.
 
 ### Subsequent updates
 
@@ -101,6 +103,34 @@ On **Channels**, the four cells for a well are original C1–C4. Each existing c
 For example, a three-channel well could contain `Nuclei: DAPI`, `Ignore`, `Field signal: pFAK-Y397`, then a blank C4. Another well in the same condition may have different staining and channel assignments. The method text before the colon selects the analysis route; the name after it is the exact marker name used by `--marker`. Do not renumber channels when ignoring one.
 
 In **Requested intersections**, enter only the desired Foci combinations, for example `C2+C4; C2+C3+C4`. `+` means the shared mask intersection. A triple does not implicitly request its pairs. Every participating channel must be assigned `Foci` in that well.
+
+## Plate-scheme review and preparation skill
+
+[`check-plate-schemes`](skills/check-plate-schemes/SKILL.md) is a reusable ChatGPT/Codex skill for **96-well experiments**. The repository includes its complete instructions, reference rules, blank Excel template and read-only validator in [`skills/check-plate-schemes/`](skills/check-plate-schemes/).
+
+It accepts Excel, screenshots, photographs, PDFs, handwritten schemes and text descriptions, using only the materials needed for the task. It supports three modes:
+
+- **Check a completed scheme**, including one that may already be correct. Review all 96 positions, conditions, blocks, controls, C1–C4 assignments, marker methods, explicit Foci intersections and plot layout. Report errors and uncertainties separately; if no errors are found, leave the file unchanged and say so.
+- **Correct or convert an existing scheme**, discussing every proposed change before applying it.
+- **Create a scheme from a description**, clarifying missing information and producing one agreed `.xlsx` per experiment.
+
+Unreadable or missing information is queried rather than guessed. An image-only review cannot verify the internal structure of an Excel workbook. Structure, software compatibility and agreement with raw images are separate checks.
+
+**Format compatibility:** the bundled template and validator use the **Plate Map / Channels / PLOT LAYOUT** contract from [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), originally verified at commit `ff10a8d3c2c8985c05580544389bff82b53a39ca` and included in `tech_dev`. The common format is also intended for future UMA support, which must be verified in the intended UMA version. Older Order / Group templates use a different format and require an agreed conversion.
+
+If the personal skill is installed, select it in ChatGPT/Codex and attach the scheme, for example:
+
+> Use $check-plate-schemes. Check this completed scheme for correctness. Do not change it; list any errors and questions first.
+
+When working from this repository, ask Codex to read `skills/check-plate-schemes/SKILL.md` and its referenced resources. Keep the entire skill directory together. `pip install .` installs FIA; it does not install this personal skill in ChatGPT.
+
+For a local structural check of a **completed new-format workbook**, run from the repository root with `openpyxl` available (included in the FIA environment):
+
+```bash
+python skills/check-plate-schemes/scripts/validate_scheme.py /path/to/FIA_experiment.xlsx
+```
+
+Add `--require-controls` when checking a scheme intended for statistical comparisons. The validator reads without modifying the workbook, prints JSON diagnostics and exits with code 2 on validation failure. It checks the recorded schema, not the validity of the biological experiment or compatibility with an unverified installed consumer. The bundled blank template must be completed before it can pass this check.
 
 ## Run the analysis
 

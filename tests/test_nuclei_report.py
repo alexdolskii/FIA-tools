@@ -207,8 +207,13 @@ def test_missing_plate_map_stops_batch_before_reports(tmp_path, table_only_repor
 
 def test_nuclei_report_import_and_help_need_no_imaging_runtime(tmp_path):
     env = dict(os.environ, FIA_RUNTIME_HOME=str(tmp_path / 'runtime'))
+    env.pop('PYTHONPATH', None)
     command = 'import nuclei_report, sys; assert not any(x in sys.modules for x in ("imagej", "scyjava", "stardist", "tensorflow")); nuclei_report.main(["--help"])'
-    result = subprocess.run([sys.executable, '-c', command], env=env, capture_output=True, text=True)
+    result = subprocess.run(
+        [sys.executable, '-c', command],
+        cwd=Path(__file__).resolve().parents[1] / 'fia-tools',
+        env=env, capture_output=True, text=True, check=False,
+    )
     assert result.returncode == 0, result.stderr
     assert '--nuclei-runs' in result.stdout and '--markers' not in result.stdout
     assert not (tmp_path / 'runtime').exists()

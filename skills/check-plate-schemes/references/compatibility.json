@@ -1,0 +1,23 @@
+{
+  "schema": "96-well Plate Map / Channels / PLOT LAYOUT",
+  "fia": {
+    "repository": "alexdolskii/FIA-tools",
+    "verified_commit": "ff10a8d3c2c8985c05580544389bff82b53a39ca",
+    "source_path": "fia-tools/plate_design.py",
+    "source_git_blob": "a99ea67ff92f9ded25431fa5adb61e8d43b89b76",
+    "source_sha256": "cf8bb5e915c4f01560668edfaedf998e97df1f349ffccab707607a22635cc01b",
+    "pull_request": 4,
+    "target_branch": "tech_dev",
+    "verified_branch": "feat/plate-scheme-routing",
+    "pr_state_when_verified": "open, not merged",
+    "checked_on": "2026-10-22",
+    "template": "assets/96_well_universal_template.xlsx",
+    "snapshot_scope": "Exact read_design/PlateDesign validation and required helpers only; no runtime or image processing",
+    "template_sha256": "0804f757e01b4551298302e4e2f06336c7cf1cc118af72341dbe570327c32479"
+  },
+  "uma": {
+    "shared_schema_support": "UNVERIFIED; user plans to implement it",
+    "action": "Check requested consumer commit before claiming compatibility. Do not export a legacy UMA schema as a substitute.",
+    "repository_hint": "alexdolskii/UMA-tools-V2"
+  }
+}

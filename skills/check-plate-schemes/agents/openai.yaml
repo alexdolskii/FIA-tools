@@ -1,0 +1,14 @@
+interface:
+  display_name: Схемы экспериментов — 96 лунок
+  short_description: Проверка и подготовка согласованных схем FIA и UMA
+  default_prompt: 'Используй $check-plate-schemes: проверь схему на 96 лунок, уточни
+    все неоднозначности и согласуй изменения до создания Excel.'
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
