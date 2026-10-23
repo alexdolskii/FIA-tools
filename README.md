@@ -4,7 +4,7 @@ FIA-tools processes multichannel confocal images to measure nuclear morphology, 
 
 **This README describes `tech_dev`, the development version for an updated protocol.** The published [protocol version 1](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1) accompanies the [`main` branch](https://github.com/alexdolskii/FIA-tools/tree/main). The updated protocol is in preparation. Record the exact Git commit, environment and analysis parameters; a branch name can change over time.
 
-[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Run](#run-the-analysis) · [Nuclei-only workflow](#nuclei-only-analysis) · [pFAK workflow](#route-c-whole-field-pfak) · [Parameters](#command-line-parameters) · [Results and help](#results-documentation-and-help)
+[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Plate-scheme skill](#plate-scheme-review-and-preparation-skill) · [Run](#run-the-analysis) · [Nuclei-only workflow](#nuclei-only-analysis) · [pFAK workflow](#route-c-whole-field-pfak) · [Parameters](#command-line-parameters) · [Results and help](#results-documentation-and-help)
 
 ## Changes from the original version
 
@@ -89,6 +89,34 @@ Create `input_paths.json` with the folders containing **original images**, not r
 The plate grid has column numbers **1–12 in B1:M1**, row letters **A–H in A2:A9**, and condition names in **B2:M9**. For statistics, direct solid fill colors define comparison blocks and exactly one condition per color is **bold** to mark the control. Both reports require the layout even when statistics are disabled. An explicit `--template` applies to every selected experiment/run; otherwise each report discovers the layout in its designated folder.
 
 Start with the blank [FIA 96-well template](templates/FIA_96_well_plate_template.xlsx), which includes condition drop-downs, input checks and an `Instructions` sheet. The optional **Order / Group** table sets the order of conditions on every plot and in condition summaries. List every condition exactly once with a unique positive integer rank; `Groups` is also accepted as a header. An absent or entirely empty table keeps plate-grid order. Colors and bold control roles are read from the grid. See [ordering rules](docs/REFERENCE.md#plate-map-convention).
+
+## Plate-scheme review and preparation skill
+
+[`check-plate-schemes`](skills/check-plate-schemes/SKILL.md) is a reusable ChatGPT/Codex skill for **96-well experiments**. The repository includes its complete instructions, reference rules, blank Excel template and read-only validator in [`skills/check-plate-schemes/`](skills/check-plate-schemes/).
+
+It accepts Excel, screenshots, photographs, PDFs, handwritten schemes and text descriptions, using only the materials needed for the task. It supports three modes:
+
+- **Check a completed scheme**, including one that may already be correct. Review all 96 positions, conditions, blocks, controls, C1–C4 assignments, marker methods, explicit Foci intersections and plot layout. Report errors and uncertainties separately; if no errors are found, leave the file unchanged and say so.
+- **Correct or convert an existing scheme**, discussing every proposed change before applying it.
+- **Create a scheme from a description**, clarifying missing information and producing one agreed `.xlsx` per experiment.
+
+Unreadable or missing information is queried rather than guessed. An image-only review cannot verify the internal structure of an Excel workbook. Structure, software compatibility and agreement with raw images are separate checks.
+
+**Format compatibility:** the bundled template and validator use the new **Plate Map / Channels / PLOT LAYOUT** contract from [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), verified at commit `ff10a8d3c2c8985c05580544389bff82b53a39ca`. At the time of this addition, that PR is not merged into `tech_dev`; adding the skill does not enable the new analysis workflow. Use a FIA revision containing that implementation before analyzing its workbooks. The common format is also intended for future UMA support, which must be verified in the intended UMA version. The older Order / Group template described above is a different format.
+
+If the personal skill is installed, select it in ChatGPT/Codex and attach the scheme, for example:
+
+> Use $check-plate-schemes. Check this completed scheme for correctness. Do not change it; list any errors and questions first.
+
+When working from this repository, ask Codex to read `skills/check-plate-schemes/SKILL.md` and its referenced resources. Keep the entire skill directory together. `pip install .` installs FIA; it does not install this personal skill in ChatGPT.
+
+For a local structural check of a **completed new-format workbook**, run from the repository root with `openpyxl` available (included in the FIA environment):
+
+```bash
+python skills/check-plate-schemes/scripts/validate_scheme.py /path/to/FIA_experiment.xlsx
+```
+
+Add `--require-controls` when checking a scheme intended for statistical comparisons. The validator reads without modifying the workbook, prints JSON diagnostics and exits with code 2 on validation failure. It checks the recorded schema, not the validity of the biological experiment or compatibility with an unverified installed consumer. The bundled blank template must be completed before it can pass this check.
 
 ## Run the analysis
 
