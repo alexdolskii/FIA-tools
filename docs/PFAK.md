@@ -73,7 +73,7 @@ With one area-unit cohort there are 12 overview files; common nuclear count grap
 
 Statistics are optional. `image` compares image endpoints; `well` compares equal-image-weight means within each well. The object-size endpoint is the per-image median, not individual objects. Tests are two-sided Welch comparisons against the designated control; Holm correction includes planned image endpoints and applicable treatments within each marker/comparison block, including both requested intensity representations. Planned tests with insufficient retained observations remain in the family. Conditions without this staining are NOT_APPLICABLE and do not create tests. Images and technical wells are not automatically independent biological replicates.
 
-PDF is the default standalone format; `--plot-format png` or `both` changes it. Excel embeds every plot, including the paired object-area plots. PDF-only reports do not create standalone PNG plot previews. Image-analysis QC PNGs are separate diagnostic outputs.
+PDF is the default standalone format; `--plot-format png` or `both` changes it. Excel embeds every plot, including the paired object-area plots. PDF-only reports do not create standalone PNG plot previews.
 
 ## Runs, exclusions and provenance
 
@@ -81,7 +81,18 @@ Analysis directories are named `fia_assay/FIA_Field_Signal_Results_<marker-id>_t
 
 - `Images.csv`, `Objects.csv`, `Failed_Images.csv`, `Run_Info.csv` and `Field_Signal_Measurements.xlsx`;
 - `field_signal_run.json`, `run_parameters.json` and processing-exclusion snapshots;
-- per-image `FieldSignal_SUM32.tif`, `FieldSignal_mask.tif`, `FieldSignal_objects.tif`, `nuclei_ids.tif` and `objects_QC.png` under numbered `Images` subfolders.
+- four TIFF folders under `Images`, grouped by artifact type rather than by source image:
+
+| Folder | Contents | Images table path column |
+| --- | --- | --- |
+| `Images/FieldSignal_SUM32` | Original-value float32 SUM projection | `SUM32_file` |
+| `Images/FieldSignal_mask` | uint8 inclusive threshold mask | `Mask_file` |
+| `Images/FieldSignal_objects` | uint32 connected-component IDs | `Objects_file` |
+| `Images/nuclei_ids` | uint16 final nucleus IDs | `Nuclei_IDs_file` |
+
+Each filename is `<original stem>.tif` (for example, `WellB10_Point0001.nd2` becomes `WellB10_Point0001.tif`). Ambiguous source stems are rejected during image matching. `Image_folder` identifies the shared `Images` directory; the four path columns identify individual artifacts relative to the analysis run. `Image_artifact_SHA256` records those same relative paths and checksums. The `objects_QC.png` preview is no longer created. Object tables, label maps, calibration, thresholds and measured values are unchanged. A failed TIFF save removes only that source's newly written files, preserving other images in the shared folders.
+
+New exports use Field signal schema 3. The report reader also accepts schema 2 tables from earlier runs; image-free report generation does not require reorganizing old TIFF folders.
 
 The current analysis journal is `fia_assay/3_field_signal.log`. Prior invocations are archived in `fia_assay/logs`. Logs record stages, inputs, image parameters, saves, elapsed times, warnings and errors. Temporary resources use the existing FIA supervisor and diagnostics.
 

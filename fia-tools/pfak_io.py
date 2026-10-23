@@ -14,10 +14,11 @@ from run_resources import temporary_path
 
 PREFIX = 'FIA_Field_Signal_Results_'
 WORKBOOK = 'Field_Signal_Measurements.xlsx'
+IMAGE_PATH_COLUMNS = ['SUM32_file', 'Mask_file', 'Objects_file', 'Nuclei_IDs_file']
 IMAGE_IDENTIFIERS = ['Run_ID', 'Dataset_path', 'Image_name', 'Mask_name', 'Well', 'Source_file',
                      'Marker_ID', 'Marker_name', 'Method', 'Source_SHA256', 'Nuclei_run_ID', 'Mask_SHA256', 'ID_map_SHA256', 'Channel',
                      'Z_planes', 'Z_step_um', 'Width_px', 'Height_px', 'Pixel_type', 'Projection',
-                     'Threshold_lower', 'Threshold_upper', 'Particle_size_px2', 'Image_folder']
+                     'Threshold_lower', 'Threshold_upper', 'Particle_size_px2', 'Image_folder'] + IMAGE_PATH_COLUMNS
 IMAGE_METRICS = [
     'Nuclei_count_total', 'Border_nuclei_count', 'Non_border_nuclei_count',
     'Normalization_nuclei_count', 'Nuclear_area_total_px2', 'Normalization_nuclear_area_px2',
@@ -90,7 +91,7 @@ def load_run(path):
     path = Path(path)
     files = {}
     metadata = collect.json_snapshot(path / 'field_signal_run.json', files)
-    if (metadata.get('Schema_version') != 2 or metadata.get('Run_ID') != path.name
+    if (metadata.get('Schema_version') not in (2, 3) or metadata.get('Run_ID') != path.name
             or metadata.get('Status') not in ('SUCCESS', 'PARTIAL')):
         raise ValueError('Not a completed FieldSignal run with usable results.')
     required = {'Images.csv', 'Objects.csv', 'Failed_Images.csv', 'Run_Info.csv', WORKBOOK}
@@ -100,7 +101,8 @@ def load_run(path):
         content = collect.snapshot(path / name, files)
         if hashlib.sha256(content).hexdigest() != digest:
             raise ValueError(f'FieldSignal input changed after analysis: {name}')
-    images = typed_rows(collect.csv_snapshot(path / 'Images.csv', files, IMAGE_COLUMNS)[1])
+    columns = [c for c in IMAGE_COLUMNS if metadata['Schema_version'] == 3 or c not in IMAGE_PATH_COLUMNS]
+    images = typed_rows(collect.csv_snapshot(path / 'Images.csv', files, columns)[1])
     objects = typed_rows(collect.csv_snapshot(path / 'Objects.csv', files, OBJECT_COLUMNS)[1])
     failures = collect.csv_snapshot(path / 'Failed_Images.csv', files, FAILURE_COLUMNS)[1]
     if len(images) != metadata['Images_measured'] or len(failures) != metadata['Images_failed']:

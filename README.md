@@ -177,19 +177,26 @@ Create masks for **every Foci marker assigned in the selected experiments before
 
 `-f` is a threshold on the prepared 8-bit Foci projection (0–255). The values above are examples. `-j 4` uses four parallel workers. Requested pair/triple intersections come only from Excel; leave the intersection cell blank when none is needed. This route saves measurement tables and requested intersection masks under `fia_assay/foci_analysis`; it does not introduce a new Foci statistical plotting command. `--min-nuclei` is a report option, not an option to `quantify_foci`.
 
-### 3B. Nuclear intensity: measure, collect, report
+### 3B. Nuclear intensity: measure and report
 
 Use this route only for wells assigned `Nuclear intensity: ...`:
 
 ```bash
 quantify_nuclear_intensity -i input_paths.json
-fia_collect_marker_intensity_results -i input_paths.json
 fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
 ```
 
-The first command rereads the assigned **original channel** and measures MAX-projection values inside existing nucleus IDs; it has no intensity threshold. The collector combines compatible measurements and nuclear QC tables. The report then creates separate results for each marker and collection. `--stats-unit nucleus` reproduces the nucleus-level analysis; use `well` if that is the chosen statistical unit, or omit the option for descriptive results.
+The first command rereads the assigned **original channel** and measures MAX-projection values inside existing nucleus IDs; it has no intensity threshold. It then **automatically collects the current measurements and nuclear QC tables**, without another selection prompt. Each experiment/nucleus run gets a separate `FIA_Marker_Intensity_Combined_Results_<timestamp>` folder. The report creates separate results for each marker and collection. `--stats-unit nucleus` reproduces the nucleus-level analysis; use `well` if that is the chosen statistical unit, or omit the option for descriptive results.
 
-The default is all assigned Nuclear intensity markers. To measure only one, add `--marker "pSMAD2"` to `quantify_nuclear_intensity`; to select it in the report, use the distinct plural option `--markers "pSMAD2"`. Use the exact name in your scheme. Other assigned but unmeasured markers are missing measurements, not zeros. For a known TIFF input type, add `--input-type tiff-stack` or `--input-type tiff-2d` to the measurement command.
+The default is all assigned Nuclear intensity markers. To measure only one, add `--marker "pSMAD2"` to `quantify_nuclear_intensity`; the automatic collection contains only the markers selected in that invocation. To select it in the report, use the distinct plural option `--markers "pSMAD2"`. Use the exact name in your scheme. Other markers are not substituted with historical measurements or zeros. For a known TIFF input type, add `--input-type tiff-stack` or `--input-type tiff-2d` to the measurement command.
+
+Measurement and collection retain separate logs: `3_nuclei_intensity.log` and `4_collect_marker_intensity.log`. If a requested marker fails, collection for that nucleus run is blocked; other complete combinations continue. If collection fails, completed measurement files remain available and the command returns nonzero. `batch.json` records both stages and the collection paths. To rebuild tables from existing measurements without rereading images, the optional command remains available:
+
+```bash
+fia_collect_marker_intensity_results -i input_paths.json
+```
+
+This standalone command selects nucleus runs and the latest compatible saved intensity for each assigned marker; it is not required after a successful measurement command.
 
 ### 3C. Field signal: thresholded SUM measurements and report
 
@@ -232,7 +239,7 @@ All analysis commands require `-i/--input`. `-I` is not an alias. Use `COMMAND -
 | `generate_foci_mask` | `-f/--foci_threshold`: 0–255, default 150. `--marker NAME`: optional repeatable restriction; default all Foci markers. |
 | `quantify_foci` | `-j/--jobs`: parallel workers, default 4. Intersections come from Excel. |
 | `quantify_nuclear_intensity` | `--marker NAME`; `--input-type nd2\|tiff-stack\|tiff-2d`. Mask-run selection remains independent of channel assignment. |
-| `fia_collect_marker_intensity_results` | Nucleus-run selection when several valid runs exist; latest compatible intensity for each assigned marker. |
+| `fia_collect_marker_intensity_results` | Optional rebuild from existing measurements; nucleus-run selection when several valid runs exist; latest compatible intensity for each assigned marker. Automatic collection after measurement uses only that invocation's outputs. |
 | `fia_nuclei_report` | `--nuclei-runs latest\|all\|ask`, default latest. Shared report options below. |
 | `fia_marker_intensity_report` | `--collections latest\|all\|ask`, default latest; `--markers` comma-separated exact names/IDs or `all`, default all. |
 | `quantify_field_signal` | Required `-t/--threshold LOWER [UPPER]`; optional `--marker NAME`; `--include-border-nuclei`; `--nuclei-runs latest\|all\|ask`, default latest. |
@@ -266,6 +273,8 @@ All generated analyses remain under each experiment's `fia_assay`. Timestamped m
 | Field signal reports | `FIA_Field_Signal_Report_<timestamp>` |
 
 The terminal prints the output and log paths for each experiment. Check its final status and journal before treating a folder as a completed analysis.
+
+Field signal TIFFs are grouped by type under each measurement run: `Images/FieldSignal_SUM32`, `Images/FieldSignal_mask`, `Images/FieldSignal_objects` and `Images/nuclei_ids`. Each file uses the original image stem, with a `.tif` extension. The Images table records the relative paths and the run manifest records their checksums. The numbered `objects_QC.png` preview is no longer produced; numeric object-ID TIFFs and all object measurements are retained.
 
 - [Scheme and code navigation](docs/PLATE_SCHEME.md)
 - [Technical reference](docs/REFERENCE.md)

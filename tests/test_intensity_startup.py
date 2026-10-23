@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 from intensity_run_log import IntensityJournal
 from terminal_progress import CompactProgress
-from test_nuclear_intensity import make_experiment
+from test_nuclear_intensity import make_experiment, save_morphology_tables
 
 
 @pytest.fixture
@@ -29,9 +29,11 @@ def setup_batch(tmp_path, monkeypatch):
             raw.rename(raw.with_suffix('.nd2'))
             roots.append(raw.parent)
             old_runs.append(run)
+            save_morphology_tables(run, np.zeros_like(labels))
             if multiple:
                 newer = run.with_name('Final_Nuclei_Mask_20260923_130000')
                 shutil.copytree(run, newer)
+                save_morphology_tables(newer, np.zeros_like(labels))
                 new_runs.append(newer)
         manifest = tmp_path / 'batch.json'
         manifest.write_text(json.dumps({'paths_to_files': [str(root) for root in roots]}))

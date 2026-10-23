@@ -145,6 +145,10 @@ The measurement tables retain mean, median, standard deviation, minimum, maximum
 
 The collector combines morphology with each marker's exact assigned subset. It verifies nucleus IDs, image populations, areas, calibration, run identity, completion and CSV/workbook agreement. Archives preserve the source table bytes. Missing assigned measurements are MISSING; unassigned wells are NOT_APPLICABLE with blank values. Neither is converted to zero.
 
+`quantify_nuclear_intensity` automatically calls this collection stage using the exact completed outputs selected in its invocation. There is no second mask-run prompt or scan for newer/older intensity results. Each experiment/nucleus-run combination is collected independently, using only its selected markers. An incomplete requested marker blocks that combination; an invalid table fails its collection. Other combinations continue. Successful measurement exports remain intact if collection fails, and the overall command returns nonzero. `batch.json` separately records `measurement_status`, `collection_status` and `collections` (source mask run, markers, exact measurement inputs, status and output path). The measurement journal remains `3_nuclei_intensity.log`; the collection journal remains `4_collect_marker_intensity.log`, archived once per invocation.
+
+The standalone `fia_collect_marker_intensity_results -i input_paths.json` is an optional table rebuild/recovery command. It retains interactive nucleus-run selection and latest-compatible intensity selection for all assigned markers, with explicit missing values when a marker has no usable result. The report remains a separate command so plot, filtering and statistics settings can be changed without repeating image measurements.
+
 A separate marker report is created for each collection/marker. Common nuclear graphs and nuclear statistics are produced only by `fia_nuclei_report`. Images and Nuclei tables in marker reports retain nuclear QC. Thresholds/settings from different Field signal profiles are never pooled.
 
 ### Foci

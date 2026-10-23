@@ -11,12 +11,14 @@ import plate_design
 import pytest
 from openpyxl import load_workbook
 from plate_helpers import design
+from test_nuclear_intensity import save_morphology_tables
 from test_nuclear_intensity import two_marker_experiment as make_experiment
 
 
 @pytest.fixture
 def batch_setup(tmp_path, monkeypatch):
     manifest, _, run, _, labels = make_experiment(tmp_path)
+    save_morphology_tables(run, np.zeros_like(labels))
     second = run.parent / 'markers' / 'Foci_2_Channel_1'
     second.mkdir()
     (second / 'prepared.tif').touch()
@@ -37,6 +39,44 @@ def batch_setup(tmp_path, monkeypatch):
 
 def result_journals(run):
     return sorted(run.parent.glob('Nuclear_Intensity_*/batch.json'))
+
+
+@pytest.mark.parametrize('failure, exit_code, collection_status', [
+    (OSError('collection disk unavailable'), 1, 'failed'),
+    (KeyboardInterrupt(), 130, 'canceled'),
+])
+def test_collection_failure_preserves_complete_measurements(batch_setup, monkeypatch, failure, exit_code, collection_status):
+    manifest, run, _, _ = batch_setup
+    def fail(*_args, **_kwargs):
+        raise failure
+    monkeypatch.setattr(app.collection, 'collect_one', fail)
+    assert app.main(manifest, mode='tiff-stack') == exit_code
+    paths = result_journals(run)
+    assert len(paths) == 2 and paths[0].read_bytes() == paths[1].read_bytes()
+    for path in paths:
+        journal = json.loads(path.read_text())
+        assert journal['measurement_status'] == 'complete'
+        assert journal['collection_status'] == ('incomplete' if collection_status == 'failed' else 'canceled')
+        assert journal['collections'][0]['status'] == collection_status
+        assert all(r['status'] == 'complete' for r in journal['runs'])
+        assert json.loads((path.parent / 'intensity_run.json').read_text())['Status'] == 'complete'
+    text = (run.parent / '4_collect_marker_intensity.log').read_text()
+    assert 'status=COMPLETE' not in text.split('RUN_FINISHED |')[1]
+    assert 'status=COMPLETE' not in (run.parent / '3_nuclei_intensity.log').read_text().split('RUN_FINISHED |')[1]
+
+
+def test_collection_log_failure_sets_nonzero_exit_and_keeps_results(batch_setup, monkeypatch):
+    manifest, run, _, _ = batch_setup
+    original = app.collection.TableJournal.finish
+    def fail_log(audit):
+        original(audit)
+        return False
+    monkeypatch.setattr(app.collection.TableJournal, 'finish', fail_log)
+    assert app.main(manifest, mode='tiff-stack') == 1
+    journal = json.loads(result_journals(run)[0].read_text())
+    assert journal['measurement_status'] == 'complete' and journal['collection_status'] == 'incomplete'
+    assert journal['collections'][0]['status'] == 'complete'
+    assert Path(journal['collections'][0]['output']).is_dir()
 
 
 def test_success_keeps_identical_journals_and_valid_metadata_in_each_result(batch_setup):

@@ -6,8 +6,6 @@ import numpy as np
 import spatial_calibration as spatial
 import tifffile
 from nuclear_intensity_imagej import ImageJEngine as NuclearEngine
-from PIL import Image, ImageDraw
-from scipy import ndimage
 
 
 class ImageJEngine(NuclearEngine):
@@ -48,22 +46,31 @@ def save_tiff(path, pixels, calibration, imagej=True):
             raise OSError(f'Saved TIFF calibration differs: {path}')
 
 
-def save_images(folder, projection, mask, labels, nuclei_ids, calibration, objects):
-    folder.mkdir(parents=True, exist_ok=False)
-    save_tiff(folder / 'FieldSignal_SUM32.tif', projection, calibration)
-    save_tiff(folder / 'FieldSignal_mask.tif', mask, calibration)
-    # uint32 preserves object IDs even when a field has more than 65535 objects.
-    save_tiff(folder / 'FieldSignal_objects.tif', labels, calibration, imagej=False)
-    save_tiff(folder / 'nuclei_ids.tif', nuclei_ids.astype(np.uint16), calibration)
-    low, high = np.percentile(projection, (1, 99.8))
-    display = np.clip((projection.astype(np.float64) - low) / (high - low or 1), 0, 1)
-    rgb = np.repeat((display * 255).astype(np.uint8)[..., None], 3, axis=2)
-    edge = (labels > 0) & (ndimage.minimum_filter(labels, size=3, mode='constant') != labels)
-    rgb[edge] = (255, 80, 40)
-    preview = Image.fromarray(rgb)
-    draw = ImageDraw.Draw(preview)
-    for row in objects:
-        draw.text((round(row['Centroid_X_px']), round(row['Centroid_Y_px'])),
-                  str(row['Object_ID']), fill='yellow', stroke_width=1, stroke_fill='black')
-    preview.save(folder / 'objects_QC.png')
-    return {p.name: spatial.digest(p) for p in sorted(folder.iterdir())}
+def image_paths(folder, source_name):
+    """Paths for one unambiguously matched source, grouped by artifact type."""
+    filename = Path(source_name).stem + '.tif'
+    return {field: Path(folder) / kind / filename for field, kind in (
+        ('SUM32_file', 'FieldSignal_SUM32'), ('Mask_file', 'FieldSignal_mask'),
+        ('Objects_file', 'FieldSignal_objects'), ('Nuclei_IDs_file', 'nuclei_ids'))}
+
+
+def save_images(folder, source_name, projection, mask, labels, nuclei_ids, calibration):
+    paths = image_paths(folder, source_name)
+    for path in paths.values():
+        if path.exists() or path.is_symlink():
+            raise FileExistsError(f'Image artifact already exists: {path}')
+    created = []
+    try:
+        for field, pixels in (('SUM32_file', projection), ('Mask_file', mask),
+                              ('Objects_file', labels), ('Nuclei_IDs_file', nuclei_ids.astype(np.uint16))):
+            path = paths[field]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            created.append(path)
+            # uint32 preserves object IDs even when a field has more than 65535 objects.
+            save_tiff(path, pixels, calibration, imagej=field != 'Objects_file')
+        return {path.relative_to(folder).as_posix(): spatial.digest(path) for path in created}
+    except BaseException:
+        # Shared folders also contain successful images: remove only this image's files.
+        for path in created:
+            path.unlink(missing_ok=True)
+        raise

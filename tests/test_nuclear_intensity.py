@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 
 import nuclear_intensity as app
 import nuclear_intensity_imagej as backend
+import nuclei_morphology as morphology
 import numpy as np
 import plate_design
 import pytest
@@ -76,7 +77,34 @@ def make_experiment(tmp_path, shape=(37, 1031)):
     manifest = tmp_path / 'input_paths.json'
     manifest.write_text(json.dumps({'paths_to_files': [str(root)]}))
     plate_design.save_snapshot(run, scheme)
+    save_morphology_tables(run, labels)
     return manifest, raw, run, pixels, labels
+
+
+def save_morphology_tables(run, labels):
+    """Export matching morphology for real collection, including empty-image fixtures."""
+    metadata = json.loads((run / 'nuclei_run.json').read_text())
+    source_name = metadata['processed_files'][0]
+    mask = Path(source_name).stem + '_processed.tif'
+    export = morphology.NucleiMorphologyExport(run, run.parent / 'StarDist_original', 2, 'test')
+    identifiers = export.identifiers(source_name, mask)
+    all_ids = set(np.unique(labels)) - {0}
+    border = set(np.unique(np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]]))) - {0}
+    for nucleus_id in sorted(all_ids - border):
+        values = {metric: .5 for metric in morphology.METRICS}
+        values['Area_px2'] = int(np.count_nonzero(labels == nucleus_id))
+        export.nuclei.append({**identifiers, **values, 'Nucleus_ID': int(nucleus_id),
+                              'Touches_border': False})
+    summary = {**identifiers, 'Status': 'complete', 'Error': '', 'Nuclei_count_total': len(all_ids),
+               'Border_nuclei_count': len(border), 'Non_border_nuclei_count': len(all_ids - border)}
+    for metric in morphology.METRICS:
+        values = [row[metric] for row in export.nuclei]
+        for stat, value in (('Mean', float(np.mean(values)) if values else None),
+                            ('Median', float(np.median(values)) if values else None),
+                            ('IQR', float(np.percentile(values, 75) - np.percentile(values, 25)) if values else None)):
+            summary[f'{metric}_{stat}'] = value
+    export.images.append(summary)
+    assert export.save() == 'complete'
 
 
 def marker_for(run, name='NuclearIntensity_Marker_1_783c3a1993a9'):
@@ -461,9 +489,10 @@ def test_native_marker_selection_reads_matching_original_channels(
 
 def test_native_all_markers_and_all_mask_runs_remain_separate(tmp_path, engine, monkeypatch):
     import shutil
-    manifest, _, run, _, _ = two_marker_experiment(tmp_path)
+    manifest, _, run, _, labels = two_marker_experiment(tmp_path)
     newer = run.with_name('Final_Nuclei_Mask_20260923_130000')
     shutil.copytree(run, newer)
+    save_morphology_tables(newer, labels)
     monkeypatch.setattr('builtins.input', lambda _: '2')
     monkeypatch.setattr(app, 'ImageJEngine', lambda: engine)
     assert app.main(manifest, mode='tiff-stack') == 0

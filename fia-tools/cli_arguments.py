@@ -5,8 +5,8 @@ import argparse
 
 def parse_arguments(command, argv=None):
     descriptions = {
-        'quantify_nuclear_intensity': 'Read Nuclear intensity assignments from Excel and measure original intensities in existing nucleus IDs.',
-        'fia_collect_marker_intensity_results': 'Collect nuclear morphology and marker-intensity spreadsheets; no image analysis.',
+        'quantify_nuclear_intensity': 'Read Nuclear intensity assignments from Excel, measure original intensities in existing nucleus IDs and automatically collect the current results.',
+        'fia_collect_marker_intensity_results': 'Optionally rebuild collected nuclear morphology and marker-intensity spreadsheets from saved measurements; no image analysis.',
         'fia_marker_intensity_report': 'Report nuclear marker intensity on the assigned wells; no image processing.',
         'fia_nuclei_report': 'Report nucleus counts and morphology directly from completed nuclei runs.',
         'quantify_field_signal': 'Measure whole-field field signal SUM intensity, area and objects using existing final nucleus IDs.',

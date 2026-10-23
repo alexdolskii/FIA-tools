@@ -117,7 +117,9 @@ def choose_collections(roots, mode, audit=None):
             audit.incomplete(root, 'No completed collections')
     candidates = [item for values in contexts.values() for item in values]
     if not candidates:
-        raise inputs.ValidationError('Run fia_collect_marker_intensity_results first: no completed collections found')
+        raise inputs.ValidationError('No completed collections found. Run quantify_nuclear_intensity '
+                                     '(includes automatic collection), or rebuild saved measurements with '
+                                     'fia_collect_marker_intensity_results.')
     if mode == 'ask':
         for index, (path, run) in enumerate(candidates, 1):
             print(f'{index}. {path} | {run}')

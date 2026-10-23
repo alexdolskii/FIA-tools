@@ -90,7 +90,7 @@ def validate_nuclei(ids, image, bundle, info):
 
 
 def analyze_run(bundle, marker, limits, include_border, engine, audit, progress):
-    from pfak_imagej import save_images
+    from pfak_imagej import image_paths, save_images
     root, run = bundle['root'], bundle['run']
     design = bundle['design']
     plate.validate_snapshot(run, design)
@@ -99,7 +99,8 @@ def analyze_run(bundle, marker, limits, include_border, engine, audit, progress)
         label += f'_to_{limits["requested_upper"]:g}'
     output = create_output(root / ASSAY_DIR, io.PREFIX + label + '_')
     parameters = {
-        'Schema_version': 2, 'Run_ID': output.name, 'Method': 'Field signal',
+        'Schema_version': 3, 'Run_ID': output.name, 'Method': 'Field signal',
+        'Image_layout': 'Images/<artifact type>/<original stem>.tif',
         'Marker_ID': marker['id'], 'Marker_name': marker['name'],
         'Channels_by_well': {w: design.channel(w, 'Field signal', marker['id'])
                              for w in design.wells if design.assigned(w, 'Field signal', marker['id'])},
@@ -133,11 +134,13 @@ def analyze_run(bundle, marker, limits, include_border, engine, audit, progress)
                 logger.warning('PROCESSING_EXCLUSION | %s | %s', row['Image_key'], row['Reason'])
             tasks = image_tasks(root, bundle, marker)
             progress.phase('Measuring FieldSignal images', len(tasks))
-            for index, task in enumerate(tasks, 1):
+            for task in tasks:
                 source, mask_name = task['source'], task['Mask_name']
                 progress.image = task['Image_name']
                 stage = 'matching original and final masks'
                 before = time.monotonic()
+                saved = {}
+                folder = output / 'Images'
                 try:
                     if task['error']:
                         raise ValueError(task['error'])
@@ -160,8 +163,7 @@ def analyze_run(bundle, marker, limits, include_border, engine, audit, progress)
                     measured, items, binary, object_ids = measure_projection(
                         projection, ids, limits, info, include_border)
                     stage = 'saving and verifying images'
-                    folder = output / 'Images' / f'{index:06d}'
-                    saved = save_images(folder, projection, binary, object_ids, ids, info, items)
+                    saved = save_images(folder, source.name, projection, binary, object_ids, ids, info)
                     if any(spatial.digest(p) != digest for p, digest in hashes.items()):
                         raise ValueError('Original image or nucleus mask changed during measurement.')
                     matches = WELL_PATTERN.findall(source.name)
@@ -174,15 +176,19 @@ def analyze_run(bundle, marker, limits, include_border, engine, audit, progress)
                            'Method': 'Field signal', 'Projection': 'SUM', 'Particle_size_px2': bundle['particle_size'],
                            'Threshold_lower': limits['lower'],
                            'Threshold_upper': None if limits['upper_unbounded'] else limits['upper'],
-                           'Image_folder': str(folder.relative_to(output)),
+                           'Image_folder': folder.relative_to(output).as_posix(),
+                           **{key: path.relative_to(output).as_posix()
+                              for key, path in image_paths(folder, source.name).items()},
                            **{key: info.get(key) for key in ('Z_planes', 'Z_step_um', 'Width_px', 'Height_px', 'Pixel_type')}}
                     images.append(row)
                     objects.extend({**identity, **item} for item in items)
-                    artifacts.update({str((folder / name).relative_to(output)): digest for name, digest in saved.items()})
+                    artifacts.update({(folder / name).relative_to(output).as_posix(): digest for name, digest in saved.items()})
                     logger.info('IMAGE_SAVED | %s | objects=%s | area=%s %s | RawIntDen=%.9g | IntDen=%.9g | elapsed=%.3fs',
                                 source.name, len(items), row['FieldSignal_Area'], row['Area_unit'],
                                 row['FieldSignal_RawIntDen'], row['FieldSignal_IntDen'], time.monotonic() - before)
                 except Exception as error:  # A failed field must not stop the remaining images.
+                    for name in saved:
+                        (folder / name).unlink(missing_ok=True)
                     failures.append({key: task[key] for key in ('Image_name', 'Mask_name')} | {'Stage': stage, 'Error': str(error)})
                     logger.exception('IMAGE_FAILED | %s | %s', task['Image_name'], stage)
                 progress.advance(task['Image_name'])

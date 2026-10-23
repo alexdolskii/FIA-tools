@@ -511,7 +511,8 @@ def latest_intensity(context, morphology, marker, checks, progress=None):
         # Never search for older matching data after a cross-analysis conflict.
         validate_compatibility(morphology, bundle)
         checks.append(info_row('Intensity selection', marker, 'SELECTED', bundle['run'],
-                               'Latest valid intensity table for the selected nucleus run'))
+                               'Exact output of the current measurement batch' if context.get('exact_batch')
+                               else 'Latest valid intensity table for the selected nucleus run'))
         return bundle
     checks.append(info_row('Intensity selection', marker, 'MISSING', details=
                            'No completed valid intensity table for the selected nucleus run'))
@@ -727,6 +728,8 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
             progress.phase('Validating marker tables', len(markers))
         for marker in markers:
             bundle = latest_intensity(context, morphology, marker, checks, progress)
+            if bundle is None and context.get('exact_batch'):
+                raise ValidationError(f'Current measurement batch has no valid completed result for {marker}')
             if bundle:
                 selected[marker] = bundle
                 snapshots.update(bundle['files'])
@@ -808,6 +811,84 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
         logger.info('DIAGNOSTICS_SAVED | %s', output / 'Collection_Report.xlsx')
         (progress.message if progress else print)(f'{status}: {error}. Report: {output}')
         return False, output
+
+
+def collect_measurement_batch(input_path, runs, results):
+    """Collect exact outputs of one measurement invocation, without discovery or prompts.
+
+    Mutate ``results`` as each nucleus run completes so cancellation still leaves a
+    usable batch journal. A failed requested marker blocks only its nucleus run.
+    """
+    audit = TableJournal('4_collect_marker_intensity.log', input_path)
+    groups = {}
+    for item in runs:
+        source = Path(item['source']).resolve()
+        groups.setdefault(source, []).append(item)
+    try:
+        for source, items in groups.items():
+            root = source.parent.parent
+            audit.register(root)
+            audit.plan(root, source)
+            results.append({'source': str(source), 'dataset': str(root),
+                            'markers': [item['marker'] for item in items],
+                            'inputs': [item['output'] for item in items],
+                            'status': 'pending', 'output': None})
+        for index, (source, items) in enumerate(groups.items(), 1):
+            result = results[index - 1]
+            root = Path(result['dataset'])
+            try:
+                if any(item['status'] != 'complete' or not item['output'] for item in items):
+                    result.update(status='blocked', error='A requested marker measurement did not complete.')
+                    audit.incomplete(root, f'{source.name}: {result["error"]}')
+                    audit.result(root, source, 'BLOCKED')
+                    continue
+                result['status'] = 'running'
+                with TableProgress() as progress:
+                    progress.group(f'Auto collection {index}/{len(groups)} | {root.name} | {source.name}')
+                    with audit.stage(root, 'Validating current measurement batch', progress):
+                        progress.phase('Validating nuclear morphology')
+                        design = plate.load_design(root)
+                        plate.validate_snapshot(source, design)
+                        morphology = load_morphology(source)
+                        morphology.update(root=root, design=design)
+                        context = {'root': root, 'design': design, 'intensity': [],
+                                   'markers': set(result['markers']), 'checks': [], 'exact_batch': True}
+                        if len(context['markers']) != len(items):
+                            raise ValidationError('Duplicate marker in the measurement batch')
+                        progress.phase('Checking exact intensity outputs', len(items))
+                        for item in items:
+                            path = Path(item['output']).resolve()
+                            if path.parent != source.parent:
+                                raise ValidationError('Intensity output belongs to a different experiment')
+                            candidate = intensity_candidate(path)
+                            if candidate['marker'] != item['marker']:
+                                raise ValidationError('Intensity output belongs to a different marker')
+                            plate.validate_snapshot(path, design, 'Nuclear intensity', item['marker'])
+                            expected = {w: design.channel(w, 'Nuclear intensity', item['marker'])
+                                        for w in design.wells if design.assigned(w, 'Nuclear intensity', item['marker'])}
+                            if candidate['metadata'].get('Channels_by_well') != expected:
+                                raise ValidationError('Intensity routing differs from the current workbook')
+                            context['intensity'].append(candidate)
+                            audit.event(root, 'EXACT_BATCH_INPUT | %s', path)
+                            progress.advance(path.name)
+                    success, output = collect_one(morphology, context, result['markers'], input_path, audit, progress)
+                result.update(status='complete' if success else 'failed', output=str(output))
+            except (Cancelled, KeyboardInterrupt, EOFError):
+                result['status'] = 'canceled'
+                audit.result(root, source, 'CANCELLED')
+                raise
+            except Exception as error:
+                result.update(status='failed', error=str(error))
+                logger = audit.logger(root)
+                logger.exception('COLLECTION_FAILED | %s', source)
+                audit.result(root, source, 'FAILED')
+        audit.status = 'COMPLETE' if all(r['status'] == 'complete' for r in results) else 'INCOMPLETE'
+    except (Cancelled, KeyboardInterrupt, EOFError):
+        audit.status = 'CANCELLED'
+        raise
+    finally:
+        saved = audit.finish()
+    return saved
 
 
 def main(input_path):

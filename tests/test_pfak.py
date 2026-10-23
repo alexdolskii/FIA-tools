@@ -12,6 +12,7 @@ import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
 import numpy as np
 import pfak_analysis as analysis
+import pfak_imagej as image_export
 import pfak_io as io
 import pfak_report as report
 import pfak_report_data as report_data
@@ -115,14 +116,43 @@ def test_lossless_saved_projection_mask_ids_and_calibration(tmp_path):
     projection, nuclei = sample()
     projection[1, 1] = 120000
     calibration = spatial.normalize(.4, .7, 'um')
-    _, objects, mask, ids = measure_projection(projection, nuclei, threshold_settings([5]), calibration)
+    _, _, mask, ids = measure_projection(projection, nuclei, threshold_settings([5]), calibration)
+    ids[ids == ids.max()] = 70000
     folder = tmp_path / 'image'
-    saved = save_images(folder, projection, mask, ids, nuclei, calibration, objects)
-    assert len(saved) == 5
-    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_SUM32.tif'), projection)
-    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_mask.tif'), mask)
-    assert np.array_equal(tifffile.imread(folder / 'FieldSignal_objects.tif'), ids)
-    assert spatial.compatible(spatial.tiff_calibration(folder / 'FieldSignal_SUM32.tif')[0], calibration)
+    saved = save_images(folder, 'WellB10.nd2', projection, mask, ids, nuclei, calibration)
+    assert len(saved) == 4 and not list(folder.rglob('*.png'))
+    for kind, expected in [('FieldSignal_SUM32', projection), ('FieldSignal_mask', mask),
+                            ('FieldSignal_objects', ids), ('nuclei_ids', nuclei)]:
+        path = folder / kind / 'WellB10.tif'
+        actual = tifffile.imread(path)
+        assert actual.dtype == expected.dtype and np.array_equal(actual, expected)
+        assert saved[path.relative_to(folder).as_posix()] == spatial.digest(path)
+    assert spatial.compatible(spatial.tiff_calibration(folder / 'FieldSignal_SUM32' / 'WellB10.tif')[0], calibration)
+
+
+def test_shared_type_folders_preserve_other_images_on_failure_and_reject_overwrite(tmp_path, monkeypatch):
+    projection, nuclei = sample()
+    calibration = spatial.uncalibrated()
+    _, _, mask, ids = measure_projection(projection, nuclei, threshold_settings([5]), calibration)
+    first = save_images(tmp_path, 'WellB10.nd2', projection, mask, ids, nuclei, calibration)
+    original = image_export.save_tiff
+    def fail_objects(path, *args, **kwargs):
+        if path.parent.name == 'FieldSignal_objects':
+            path.write_bytes(b'partial TIFF')
+            raise OSError('simulated interrupted write')
+        original(path, *args, **kwargs)
+    monkeypatch.setattr(image_export, 'save_tiff', fail_objects)
+    with pytest.raises(OSError, match='interrupted write'):
+        save_images(tmp_path, 'WellB11.nd2', projection, mask, ids, nuclei, calibration)
+    assert not list(tmp_path.rglob('WellB11.tif'))
+    assert all(spatial.digest(tmp_path / path) == digest for path, digest in first.items())
+    with pytest.raises(FileExistsError):
+        save_images(tmp_path, 'WellB10.nd2', projection, mask, ids, nuclei, calibration)
+    assert all(spatial.digest(tmp_path / path) == digest for path, digest in first.items())
+    monkeypatch.setattr(image_export, 'save_tiff', original)
+    save_images(tmp_path, 'WellB11.nd2', projection, mask, ids, nuclei, calibration)
+    assert len(list(tmp_path.iterdir())) == 4
+    assert all(len(list(folder.glob('*.tif'))) == 2 for folder in tmp_path.iterdir())
 
 
 class FakeEngine:
@@ -181,7 +211,7 @@ def pfak_run(tmp_path):
 
 
 def test_analysis_preserves_provenance_and_both_intensity_metrics(pfak_run):
-    output, run, _raw, _ = pfak_run
+    output, run, raw, _ = pfak_run
     data = io.load_run(output)
     assert data['metadata']['Status'] == 'SUCCESS'
     row = data['images'][0]
@@ -193,10 +223,45 @@ def test_analysis_preserves_provenance_and_both_intensity_metrics(pfak_run):
     assert row['Channel'] == 3 and row['Projection'] == 'SUM'
     assert (run.parent / analysis.JOURNAL).exists()
     assert data['metadata']['Include_border_nuclei'] is False
+    assert data['metadata']['Schema_version'] == 3 and row['Image_folder'] == 'Images'
+    assert {Path(row[key]).parent.name for key in io.IMAGE_PATH_COLUMNS} == {
+        'FieldSignal_SUM32', 'FieldSignal_mask', 'FieldSignal_objects', 'nuclei_ids'}
+    assert {Path(row[key]).name for key in io.IMAGE_PATH_COLUMNS} == {raw.stem + '.tif'}
+    assert set(data['metadata']['Image_artifact_SHA256']) == {row[key] for key in io.IMAGE_PATH_COLUMNS}
+    assert all(spatial.digest(output / path) == digest
+               for path, digest in data['metadata']['Image_artifact_SHA256'].items())
+    assert not list((output / 'Images').rglob('*.png'))
     with (output / 'Images.csv').open('a') as handle:
         handle.write('\n')
     with pytest.raises(ValueError, match='changed after analysis'):
         io.load_run(output)
+
+
+def test_schema2_tables_without_new_path_columns_remain_readable(pfak_run):
+    output, _, _, _ = pfak_run
+    tables = {}
+    for title in ('Images', 'Objects', 'Failed_Images', 'Run_Info'):
+        columns, rows = collect.csv_snapshot(output / f'{title}.csv', {}, [])
+        if title == 'Images':
+            columns = [c for c in columns if c not in io.IMAGE_PATH_COLUMNS]
+            rows = [{c: row[c] for c in columns} for row in rows]
+            rows[0]['Image_folder'] = 'Images/000001'
+        if title == 'Run_Info':
+            rows = [row for row in rows if row['Parameter'] != 'Image_layout']
+            next(row for row in rows if row['Parameter'] == 'Schema_version')['Value'] = '2'
+        collect.write_csv(output / f'{title}.csv', columns, rows)
+        tables[title] = (columns, rows)
+    io.write_workbook(output, tables, [], io.WORKBOOK)
+    metadata = json.loads((output / 'field_signal_run.json').read_text())
+    metadata['Schema_version'] = 2
+    metadata.pop('Image_layout')
+    metadata['Table_SHA256'] = {name: spatial.digest(output / name) for name in metadata['Table_SHA256']}
+    io.write_json(output / 'field_signal_run.json', metadata)
+    import shutil
+    shutil.rmtree(output / 'Images')  # Report inputs are the verified tables, not image artifacts.
+    data = io.load_run(output)
+    assert data['images'][0]['FieldSignal_RawIntDen'] == 720000
+    assert not set(io.IMAGE_PATH_COLUMNS) & data['images'][0].keys()
 
 
 def test_failed_missing_mask_is_not_a_zero_measurement_and_other_images_continue(tmp_path):

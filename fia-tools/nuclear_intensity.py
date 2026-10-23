@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import collect_marker_intensity_results as collection
 import image_exclusions as exclusions
 import numpy as np
 import plate_design as plate
@@ -678,6 +679,7 @@ def _main(input_path, mode, audit, requested_markers=None):
                   f"| channels from Excel")
         audit.plan(runs)
         journal = {'status': 'running', 'run_id': audit.run_id,
+                   'measurement_status': 'running', 'collection_status': 'not_started', 'collections': [],
                    'input_manifest': str(Path(input_path).resolve()),
                    'started_utc': datetime.now(timezone.utc).isoformat(),
                    'input_type': mode, 'mask_selection_policy': policy,
@@ -728,6 +730,23 @@ def _main(input_path, mode, audit, requested_markers=None):
         engine.progress = None
         status = ('complete' if not skipped and not skipped_experiments
                   and all(r['status'] == 'complete' for r in journal['runs']) else 'incomplete')
+        journal['measurement_status'] = status
+        journal['collection_status'] = 'running'
+        save_batch_journal(journal)
+        print('Collecting current nuclear-intensity measurements...')
+        collection_saved = collection.collect_measurement_batch(input_path, journal['runs'], journal['collections'])
+        journal['collection_status'] = ('complete' if collection_saved
+                                        and all(r['status'] == 'complete' for r in journal['collections'])
+                                        else 'incomplete')
+        for result in journal['collections']:
+            root = Path(result['dataset'])
+            audit.event(root, 'AUTO_COLLECTION | source=%s | status=%s | output=%s',
+                        result['source'], result['status'], result['output'])
+            if result['status'] != 'complete' or not collection_saved:
+                audit.folders[root]['incomplete'] = True
+        if journal['collection_status'] != 'complete':
+            status = 'incomplete'
+            print('Automatic collection incomplete. Completed measurements are preserved; see 4_collect_marker_intensity.log.')
         saved = finish_batch_journal(journal, status)
         audit.status = status
         if not saved:
@@ -741,13 +760,28 @@ def _main(input_path, mode, audit, requested_markers=None):
     except (Cancelled, KeyboardInterrupt, EOFError):
         audit.status = 'canceled'
         if journal is not None:
+            if journal['measurement_status'] == 'running':
+                journal['measurement_status'] = 'canceled'
+            if journal['collection_status'] == 'running':
+                journal['collection_status'] = 'canceled'
+                completed = {Path(result['source']) for result in journal['collections']
+                             if result['status'] == 'complete'}
+                for record in runs:
+                    if record['path'] not in completed:
+                        audit.folders[record['dataset']]['incomplete'] = True
             finish_batch_journal(journal, 'canceled')
         audit.event(None, 'CANCELLED | analysis canceled by user')
-        print('Canceled. Any interrupted output remains marked running; it is not a completed result.')
+        print('Canceled. Completed measurements are preserved; interrupted results are not completed results.')
         return 130
     except Exception as error:  # noqa: BLE001 - isolate Java/image I/O failures
         audit.status = 'failed'
         if journal is not None:
+            if journal['measurement_status'] == 'running':
+                journal['measurement_status'] = 'failed'
+            if journal['collection_status'] == 'running':
+                journal['collection_status'] = 'failed'
+                for record in runs:
+                    audit.folders[record['dataset']]['incomplete'] = True
             finish_batch_journal(journal, 'failed', error)
         audit.event(None, 'RUN_ABORTED | %s', error, level=logging.ERROR)
         return 1
