@@ -15,6 +15,7 @@ import fiji_config
 import image_exclusions as exclusions
 import imagej
 import numpy as np
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR
 from csbdeep.utils import normalize
@@ -69,6 +70,8 @@ def file_digest(path):
 
 def nuclei_source_files(nuclei_folder):
     """Use the same visible .tif inputs as the StarDist processing loop."""
+    if Path(nuclei_folder).name == 'Nuclei':
+        return plate.preparation_files(nuclei_folder)
     return [f for f in os.listdir(nuclei_folder)
             if not f.startswith('.') and f.endswith('.tif')
             and (Path(nuclei_folder) / f).is_file()]
@@ -92,6 +95,7 @@ def inspect_stardist_folder(folder, nuclei_folder, sources, progress=None):
     candidate = {"path": str(folder), "count": 0, "legacy": False,
                  "reason": "", "usable": False}
     try:
+        plate.validate_snapshot(folder, plate.load_design(Path(nuclei_folder).parent.parent))
         masks = {p.name for p in Path(folder).iterdir()
                  if not p.name.startswith('.') and p.is_file()
                  and p.suffix.lower() in (".tif", ".tiff")}
@@ -338,6 +342,7 @@ def find_nuclei(nuclei_folders: list) -> list:
                     "sources": source_fingerprints(nuclei_folder, progress),
                     "masks": {}, "excluded_files": [],
                 }
+                plate.save_snapshot(output_folder, plate.load_design(Path(nuclei_folder).parent.parent))
                 write_run_metadata(output_folder, STARDIST_METADATA, run_metadata)
                 exclusions.write_snapshot(output_folder, excluded)
                 run.saved(Path(output_folder) / STARDIST_METADATA)
@@ -463,12 +468,15 @@ def process_nuclei(valid_folders: list, particle_size: int) -> bool:
                 "skipped_files": [],
                 "excluded_images": list(excluded),
             }
+            design = plate.load_design(Path(input_folder).parent.parent)
+            plate.validate_snapshot(input_folder, design)
+            plate.save_snapshot(processed_folder, design)
             write_run_metadata(processed_folder, "nuclei_run.json", run_metadata)
             run.saved(Path(processed_folder) / 'nuclei_run.json')
             ignored = 0
             for filename in entries:
                 if filename.startswith('.') or filename in (
-                        STARDIST_METADATA, spatial.MANIFEST, exclusions.MANIFEST, exclusions.TABLE, '2_log.log'):
+                        STARDIST_METADATA, spatial.MANIFEST, exclusions.MANIFEST, exclusions.TABLE, '2_log.log', plate.SNAPSHOT, 'plate_design.xlsx'):
                     logger.info('IGNORED | file=%s | hidden or auxiliary file', filename)
                     ignored += 1
                     continue
@@ -566,6 +574,7 @@ def main(input_json_path: str,
     """
     Main function to analyze and process nuclei.
     """
+    plate.preflight(input_json_path, command='generate_nuclei_mask')
     with NucleiLogSession(input_json_path, particle_size, require_imagej=True):
         started = time.monotonic()
         # Step 1: Reuse validated masks or analyze nuclei using StarDist.

@@ -257,7 +257,7 @@ def test_native_calibration_survives_nuclei_intensity_and_collection(tmp_path, e
     experiment = intensity.discover(manifest)[0]
     record = intensity.inspect_run(experiment, run, 'tiff-stack', marker_for(run), engine, {})
     assert record['eligible'], record['errors']
-    output = run.parent / 'Nuclear_Intensity_Foci_1_Channel_2_20260930_180000'
+    output = run.parent / f'Nuclear_Intensity_{MARKER}_20260930_180000'
     output.mkdir()
     assert intensity.analyze_run(record, output, 'tiff-stack', engine, output / 'batch.json') == 'complete'
     context = collector.scan_source(raw.parent)
@@ -271,9 +271,10 @@ def test_native_calibration_survives_nuclei_intensity_and_collection(tmp_path, e
         assert row['Area_um2'] == pytest.approx(row['Area_px2'] * 0.125)
         assert row['Pixel_size_X_um'] == 0.25
         assert row['Pixel_size_Y_um'] == 0.5
-    reports.annotate(data, plate(collection / 'plate.xlsx'), [MARKER], 'nucleus')
-    reports.aggregate(data)
-    assert observations(data, 'Area_um2', 'Control')[0] == [1.5, 2.5]
+    nuclear_data = reports.load_nuclei_run(run)
+    reports.annotate(nuclear_data, plate(collection / 'plate.xlsx'), [], 'nucleus')
+    reports.aggregate(nuclear_data)
+    assert observations(nuclear_data, 'Area_um2', 'Control')[0] == [1.5, 2.5]
 
 
 def test_legacy_nd2_metadata_is_deferred_until_imagej_initialization(tmp_path, monkeypatch):

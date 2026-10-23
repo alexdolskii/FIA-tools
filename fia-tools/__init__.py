@@ -51,7 +51,7 @@ def generate_nuclei_mask():
 @_managed
 def generate_foci_mask():
     args = _arguments("generate_foci_mask")
-    return _load_script("3_foci_mask_generation").main_filter_foci(args.input, args.foci_threshold)
+    return _load_script("3_foci_mask_generation").main_filter_foci(args.input, args.foci_threshold, markers=args.marker)
 
 
 @_managed
@@ -64,7 +64,7 @@ def quantify_foci():
 def quantify_nuclear_intensity():
     args = _arguments("quantify_nuclear_intensity")
     return _load_script("nuclear_intensity").main(
-        args.input, mode=args.input_type)
+        args.input, mode=args.input_type, markers=args.marker)
 
 
 @_managed
@@ -84,12 +84,12 @@ def fia_nuclei_report():
 
 
 @_managed
-def quantify_pfak():
+def quantify_field_signal():
     return _load_script('pfak_analysis').main()
 
 
 @_managed
-def fia_pfak_report():
+def fia_field_signal_report():
     return _load_script('pfak_report').main()
 
 

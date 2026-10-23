@@ -1,7 +1,7 @@
 [project]
 name = "fia-tools"
 version = "0.1.0"
-description = "Nuclear morphology, foci, nuclear marker intensity and whole-field pFAK analysis in confocal images."
+description = "Nuclear morphology, foci, nuclear marker intensity and whole-field signal analysis in confocal images."
 readme = "README.md"
 requires-python = ">=3.10,<3.11"
 dependencies = [
@@ -35,6 +35,6 @@ quantify_nuclear_intensity = "fia_tools:quantify_nuclear_intensity"
 fia_collect_marker_intensity_results = "fia_tools:fia_collect_marker_intensity_results"
 fia_marker_intensity_report = "fia_tools:fia_marker_intensity_report"
 fia_nuclei_report = "fia_tools:fia_nuclei_report"
-quantify_pfak = "fia_tools:quantify_pfak"
-fia_pfak_report = "fia_tools:fia_pfak_report"
+quantify_field_signal = "fia_tools:quantify_field_signal"
+fia_field_signal_report = "fia_tools:fia_field_signal_report"
 fia_diagnostics = "fia_tools:fia_diagnostics"

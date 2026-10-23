@@ -7,16 +7,15 @@ import shutil
 import warnings
 from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
 
-import pytest
 import collect_marker_intensity_results as collect
 import marker_intensity_report as report
 import marker_report_data as inputs
 import marker_report_plots as plots
+import pytest
 from table_workflow import TableJournal, TableProgress
-from test_collect_marker_intensity_results import create_morphology, create_intensity
-from test_marker_intensity_report import collection, annotated
+from test_collect_marker_intensity_results import create_intensity, create_morphology
+from test_marker_intensity_report import annotated, collection
 
 
 def manifest(tmp_path, roots):
@@ -77,7 +76,7 @@ def test_collect_all_json_roots_rotates_once_for_multiple_runs(tmp_path, monkeyp
             assert len(list(assay.glob(collect.OUTPUT_PREFIX + '*'))) == 2 * (invocation + 1)
             assert not list(root.glob(collect.OUTPUT_PREFIX + '*'))
             assert (assay / 'logs' / '1_log_previous.log').read_text() == 'keep'
-    assert len(prompts) == 4 and not any('experiments' in p for p in prompts)
+    assert len(prompts) == 2 and not any('experiments' in p for p in prompts)
     output = capsys.readouterr().out
     assert 'Combining images' in output and '\033' not in output
 
@@ -99,7 +98,8 @@ def test_early_cancel_archives_current_log_without_overwriting_collision(tmp_pat
     config = manifest(tmp_path, [root])
     monkeypatch.setattr('builtins.input', lambda _: 'q')
     if command == 'collect':
-        assert collect.main(config) == 130  # Single morphology auto-selects; marker prompt remains.
+        create_morphology(root, stamp='20260924_130000')
+        assert collect.main(config) == 130
     else:
         assert report.main(['-i', str(config), '--collections', 'ask']) == 130
     assert 'status=CANCELLED' in current.read_text()
@@ -139,24 +139,14 @@ def test_report_discovers_only_assay_collections_and_writes_inside_assay(
         assert token in log
 
 
-def test_reports_all_collections_share_one_journal_and_keep_partial_batch_status(
-        tmp_path, monkeypatch, table_only_report):
+def test_missing_batch_folder_stops_reports_before_writing(tmp_path, monkeypatch, table_only_report):
     path = collection(tmp_path)
     root, assay = path.parent.parent, path.parent
-    second = assay / (collect.OUTPUT_PREFIX + '20990101_000000')
-    shutil.copytree(path, second)
-    missing = tmp_path / 'unavailable'
+    missing = tmp_path/'unavailable'
     config = manifest(tmp_path, [root, missing])
-    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('No selection prompt expected'))
-    assert report.main(['-i', str(config), '--collections', 'all']) == 1
-    assert len(list(assay.glob(report.OUTPUT_PREFIX + '*'))) == 2
-    assert all(json.loads(p.read_text())['Status'] == 'SUCCESS'
-               for p in assay.glob(report.OUTPUT_PREFIX + '*/report_status.json'))
-    text = (assay / '5_marker_intensity_report.log').read_text()
-    assert text.count('RUN_STARTED |') == text.count('RUN_FINISHED |') == 1
-    assert text.count('RESULT |') == 2 and 'SKIPPED_EXPERIMENT' in text
-    assert not missing.exists()
-    assert not list((assay / 'logs').glob('5_marker_intensity_report_*.log'))
+    monkeypatch.setattr('builtins.input', lambda _: pytest.fail('No prompt'))
+    assert report.main(['-i',str(config),'--collections','all']) == 1
+    assert not list(assay.glob(report.OUTPUT_PREFIX+'*')) and not missing.exists()
 
 
 def test_report_failure_stays_in_own_journal_and_next_experiment_finishes(

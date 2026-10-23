@@ -1,4 +1,4 @@
-"""Versioned, verified pFAK tables shared by analysis and image-free reports."""
+"""Versioned, verified FieldSignal tables shared by analysis and image-free reports."""
 
 import hashlib
 import json
@@ -7,26 +7,27 @@ from pathlib import Path
 
 import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
+import plate_design as plate
 import spatial_calibration as spatial
 from marker_intensity_report import write_workbook
 from run_resources import temporary_path
 
-PREFIX = 'FIA_pFAK_Results_'
-WORKBOOK = 'pFAK_Measurements.xlsx'
+PREFIX = 'FIA_Field_Signal_Results_'
+WORKBOOK = 'Field_Signal_Measurements.xlsx'
 IMAGE_IDENTIFIERS = ['Run_ID', 'Dataset_path', 'Image_name', 'Mask_name', 'Well', 'Source_file',
-                     'Source_SHA256', 'Nuclei_run_ID', 'Mask_SHA256', 'ID_map_SHA256', 'Channel',
+                     'Marker_ID', 'Marker_name', 'Method', 'Source_SHA256', 'Nuclei_run_ID', 'Mask_SHA256', 'ID_map_SHA256', 'Channel',
                      'Z_planes', 'Z_step_um', 'Width_px', 'Height_px', 'Pixel_type', 'Projection',
                      'Threshold_lower', 'Threshold_upper', 'Particle_size_px2', 'Image_folder']
 IMAGE_METRICS = [
     'Nuclei_count_total', 'Border_nuclei_count', 'Non_border_nuclei_count',
     'Normalization_nuclei_count', 'Nuclear_area_total_px2', 'Normalization_nuclear_area_px2',
     'Normalization_nuclear_area', 'Normalization_mean_nuclear_area', 'Border_nuclei_fraction',
-    'Include_border_nuclei', 'Area_unit', 'pFAK_Positive_pixels', 'pFAK_Area',
-    'pFAK_Coverage_percent', 'pFAK_RawIntDen', 'pFAK_IntDen',
-    'pFAK_RawIntDen_per_nucleus', 'pFAK_IntDen_per_nucleus',
-    'pFAK_RawIntDen_per_nuclear_area', 'pFAK_IntDen_per_nuclear_area',
-    'pFAK_Area_per_nucleus', 'pFAK_Area_per_nuclear_area',
-    'pFAK_Object_count', 'pFAK_Border_object_count', 'pFAK_Median_object_area',
+    'Include_border_nuclei', 'Area_unit', 'FieldSignal_Positive_pixels', 'FieldSignal_Area',
+    'FieldSignal_Coverage_percent', 'FieldSignal_RawIntDen', 'FieldSignal_IntDen',
+    'FieldSignal_RawIntDen_per_nucleus', 'FieldSignal_IntDen_per_nucleus',
+    'FieldSignal_RawIntDen_per_nuclear_area', 'FieldSignal_IntDen_per_nuclear_area',
+    'FieldSignal_Area_per_nucleus', 'FieldSignal_Area_per_nuclear_area',
+    'FieldSignal_Object_count', 'FieldSignal_Border_object_count', 'FieldSignal_Median_object_area',
     'Projection_Min', 'Projection_Max',
 ]
 IMAGE_COLUMNS = IMAGE_IDENTIFIERS + spatial.CALIBRATION_COLUMNS + IMAGE_METRICS
@@ -78,7 +79,7 @@ def typed_rows(rows):
             else:
                 number = float(value)
                 if not math.isfinite(number):
-                    raise ValueError(f'Non-finite pFAK table value: {key}')
+                    raise ValueError(f'Non-finite FieldSignal table value: {key}')
                 parsed[key] = int(number) if number.is_integer() else number
         result.append(parsed)
     return result
@@ -88,43 +89,52 @@ def load_run(path):
     """Reports require validated tables, not the original drive or a JVM."""
     path = Path(path)
     files = {}
-    metadata = collect.json_snapshot(path / 'pfak_run.json', files)
-    if (metadata.get('Schema_version') != 1 or metadata.get('Run_ID') != path.name
+    metadata = collect.json_snapshot(path / 'field_signal_run.json', files)
+    if (metadata.get('Schema_version') != 2 or metadata.get('Run_ID') != path.name
             or metadata.get('Status') not in ('SUCCESS', 'PARTIAL')):
-        raise ValueError('Not a completed pFAK run with usable results.')
+        raise ValueError('Not a completed FieldSignal run with usable results.')
     required = {'Images.csv', 'Objects.csv', 'Failed_Images.csv', 'Run_Info.csv', WORKBOOK}
     if set(metadata.get('Table_SHA256', {})) != required:
-        raise ValueError('Missing pFAK table provenance.')
+        raise ValueError('Missing FieldSignal table provenance.')
     for name, digest in metadata['Table_SHA256'].items():
         content = collect.snapshot(path / name, files)
         if hashlib.sha256(content).hexdigest() != digest:
-            raise ValueError(f'pFAK input changed after analysis: {name}')
+            raise ValueError(f'FieldSignal input changed after analysis: {name}')
     images = typed_rows(collect.csv_snapshot(path / 'Images.csv', files, IMAGE_COLUMNS)[1])
     objects = typed_rows(collect.csv_snapshot(path / 'Objects.csv', files, OBJECT_COLUMNS)[1])
     failures = collect.csv_snapshot(path / 'Failed_Images.csv', files, FAILURE_COLUMNS)[1]
     if len(images) != metadata['Images_measured'] or len(failures) != metadata['Images_failed']:
-        raise ValueError('pFAK status and table counts disagree.')
+        raise ValueError('FieldSignal status and table counts disagree.')
+    design = plate.snapshot_design(path)
+    collect.snapshot(path / plate.SNAPSHOT, files)
+    collect.snapshot(path / 'plate_design.xlsx', files)
+    if metadata.get('Scope_SHA256') != design.scope_hash('Field signal', metadata['Marker_ID']):
+        raise ValueError('Field signal routing differs from its scheme snapshot')
     by_image = {}
     for row in images:
         key = row['Mask_name']
+        well = plate.well_from_name(row['Image_name'])
+        if (row['Marker_ID'] != metadata['Marker_ID'] or row['Well'] != well
+                or row['Channel'] != design.channel(well, 'Field signal', metadata['Marker_ID'])):
+            raise ValueError('Field signal row differs from its per-well marker assignment')
         if key in by_image or row['Run_ID'] != path.name:
-            raise ValueError('Duplicate pFAK image or mismatched run ID.')
+            raise ValueError('Duplicate FieldSignal image or mismatched run ID.')
         by_image[key] = []
     seen = set()
     for row in objects:
         key = row['Mask_name'], row['Object_ID']
         if key in seen or row['Mask_name'] not in by_image or row['Object_ID'] < 1:
-            raise ValueError('Duplicate or orphan pFAK object.')
+            raise ValueError('Duplicate or orphan FieldSignal object.')
         seen.add(key)
         by_image[row['Mask_name']].append(row)
     for row in images:
         items = by_image[row['Mask_name']]
-        if len(items) != row['pFAK_Object_count']:
-            raise ValueError('pFAK object count disagrees with image table.')
-        for total, field in [('pFAK_Positive_pixels', 'Area_px2'), ('pFAK_Area', 'Area'),
-                             ('pFAK_RawIntDen', 'RawIntDen'), ('pFAK_IntDen', 'IntDen')]:
+        if len(items) != row['FieldSignal_Object_count']:
+            raise ValueError('FieldSignal object count disagrees with image table.')
+        for total, field in [('FieldSignal_Positive_pixels', 'Area_px2'), ('FieldSignal_Area', 'Area'),
+                             ('FieldSignal_RawIntDen', 'RawIntDen'), ('FieldSignal_IntDen', 'IntDen')]:
             if not math.isclose(sum(item[field] for item in items), row[total], rel_tol=1e-9, abs_tol=1e-8):
-                raise ValueError(f'pFAK object/image totals disagree: {total}')
+                raise ValueError(f'FieldSignal object/image totals disagree: {total}')
     records = exclusions.load_exclusions(path, files)
     images = [row for row in images if exclusions.image_key(row['Image_name']) not in records]
     retained = {row['Mask_name'] for row in images}
@@ -137,5 +147,5 @@ def load_run(path):
 
 def profile_key(metadata):
     limits = metadata['Threshold']
-    return (metadata['Channel'], limits['lower'], limits['upper'], metadata['Nuclei_run_ID'],
+    return (metadata['Marker_ID'], metadata['Scope_SHA256'], limits['lower'], limits['upper'], metadata['Nuclei_run_ID'],
             metadata['Include_border_nuclei'])

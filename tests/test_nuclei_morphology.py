@@ -12,11 +12,10 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import nuclei_morphology as morphology
 import numpy as np
 import pytest
 from openpyxl import load_workbook
-
-import nuclei_morphology as morphology
 
 
 @pytest.fixture
@@ -335,3 +334,6 @@ def test_native_nonbinary_mask_is_rejected(imagej_classes):
             morphology.measure_final_mask(mask)
     finally:
         mask.close()
+
+# Isolate the numerical/progress boundary; current-format integration is tested separately.
+from segmentation_unit import scheme_boundary as scheme_boundary  # noqa: PLC0414 - pytest fixture re-export

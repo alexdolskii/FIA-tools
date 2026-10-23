@@ -1,26 +1,24 @@
 # FIA-tools
 
-FIA-tools processes multichannel confocal images to measure nuclear morphology, nuclear marker intensity, nuclear foci with optional colocalization, and **whole-field pFAK intensity, area and objects**. It uses Fiji/ImageJ and StarDist. An additional **nuclei-only analysis** workflow measures nucleus counts and morphology using the nuclei channel alone, including experiments where other marker channels are absent or are not needed for the analysis.
+FIA-tools analyzes nuclei and independently assigned markers in multichannel confocal images. The Excel-based workflow uses **one FIA Excel scheme beside each experiment's raw images**. The scheme defines the condition, comparison block, control, per-well channel assignments, requested Foci intersections and plot layout.
 
-**This README describes `tech_dev`, the development version for an updated protocol.** The published [protocol version 1](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1) accompanies the [`main` branch](https://github.com/alexdolskii/FIA-tools/tree/main). The updated protocol is in preparation. Record the exact Git commit, environment and analysis parameters; a branch name can change over time.
+**Version for these instructions:** `tech_dev`, including the Excel-based workflow introduced in [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4). Install or update `tech_dev` using the commands below.
 
-[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Plate-scheme skill](#plate-scheme-review-and-preparation-skill) · [Run](#run-the-analysis) · [Nuclei-only workflow](#nuclei-only-analysis) · [pFAK workflow](#route-c-whole-field-pfak) · [Parameters](#command-line-parameters) · [Results and help](#results-documentation-and-help)
+This development version extends the [original protocol](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1), associated with `main`. Record the exact commit (`git rev-parse HEAD`), environment and analysis parameters.
+
+[Changes](#changes-from-the-original-version) · [Installation](#installation-and-updating) · [Inputs](#prepare-the-inputs) · [Plate-scheme skill](#plate-scheme-review-and-preparation-skill) · [Run](#run-the-analysis) · [Parameters](#command-line-parameters) · [Results](#results-and-documentation)
 
 ## Changes from the original version
 
-Compared with the original implementation associated with protocol version 1:
+- Native image dimensions and physical calibration are preserved.
+- Nuclear segmentation exports counts, all 12 morphology measurements and numbered QC images. Compatible StarDist masks can be reused when changing the area filter.
+- `fia_nuclei_report` provides the common nuclear analysis for **all annotated wells**, irrespective of other staining.
+- Independent marker methods are **Foci**, **Nuclear intensity** and **Field signal**. A marker can use different original channels in different wells; a physical channel can contain different markers in different wells.
+- Channel roles come exclusively from Excel. The CLI no longer asks which channels are nuclei or markers, or whether all channel combinations should be intersected.
+- Reports use `PLOT LAYOUT` for panel positions and condition order. Statistics remain separate by experiment, method, marker, analysis profile and comparison block.
+- Results are stored in `fia_assay`; prepared marker images are in `fia_assay/markers`. Shared journals retain archived previous runs. Failed-image exclusions propagate to downstream analyses.
 
-- Ten analysis commands and `fia_diagnostics` are installed together in one Conda environment.
-- Native image width and height are preserved throughout preparation, masks and QC exports; the earlier 1024 × 1024 resizing is removed.
-- Nuclei generation exports morphology tables and numbered QC images. Validated StarDist masks can be reused when changing the minimum nucleus area.
-- Nuclear marker intensity can be measured directly from the original images within existing final nucleus IDs, independently of foci detection.
-- A collector and a 96-well report combine morphology and marker-intensity tables, produce overview plots, and optionally compare conditions using nucleus- or well-based statistics.
-- A nuclei-only route prepares one nuclei channel and reports counts and all 12 existing morphology metrics directly from final-nuclei tables, without preparing or measuring other channels.
-- A pFAK route reads an original marker channel, creates a SUM32 projection and one inclusive threshold mask, and reports RawIntDen, IntDen, area and connected objects. Both intensities and the positive area have separate nucleus-count and nucleus-area normalizations; watershed and background subtraction are disabled.
-- Available spatial calibration is retained for physical size measurements. Raw pixel measurements remain available, and calibrated and uncalibrated size populations remain separate in reports.
-- Shared outputs use `fia_assay`, prepared marker channels use `fia_assay/markers`, and the preparation/nuclei/intensity/collection/report commands have current journals with archived earlier runs and compact terminal progress.
-
-Start a fresh analysis for this directory layout. The programs do not search or migrate the former `foci_assay` and `Foci` directories. The [technical reference](docs/REFERENCE.md) describes implementation changes and detailed behavior.
+**Start a fresh analysis with the new scheme.** Old results without scheme provenance cannot be used as current runs. There is no automatic conversion of old plate maps, folder names or channel-based marker identities. Updating code does not update imaging dependencies or change the numerical segmentation/intensity algorithms.
 
 ## Installation and updating
 
@@ -50,9 +48,25 @@ conda activate fia_tools_tech_dev
 
 Then run `python -m pip install .` in that environment. The initial package installation resolves any additional requirements. First ImageJ initialization and StarDist model loading may require internet downloads; `--help` checks command availability, not full image-processing readiness.
 
-### Updating an existing installation
+### Switching an existing installation to the Excel workflow
 
-In your `tech_dev` checkout, with its environment active:
+Run these commands inside your existing FIA-tools checkout. Use the environment into which you previously installed FIA:
+
+```bash
+conda activate fia_tools
+git fetch origin tech_dev:refs/remotes/origin/tech_dev
+git switch tech_dev
+git pull --ff-only origin tech_dev
+python -m pip install --no-deps .
+git log -1 --oneline
+quantify_field_signal --help
+```
+
+This also works after testing the PR branch or a detached commit: it switches to `tech_dev`. `--help` confirms that the installed command exists; `git log` identifies the checked-out revision. The package must be reinstalled after updating the checkout.
+
+### Subsequent updates
+
+In the same checkout and branch, with its environment active:
 
 ```bash
 git pull --ff-only
@@ -65,8 +79,6 @@ When updating an existing environment to the version with managed temporary file
 
 ## Prepare the inputs
 
-Create `input_paths.json` with the folders containing **original images**, not result folders:
-
 ```json
 {
   "paths_to_files": [
@@ -76,19 +88,21 @@ Create `input_paths.json` with the folders containing **original images**, not r
 }
 ```
 
-- Use absolute paths and the same JSON for every step. Include only the experiments intended for this batch.
-- Supported inputs are `.nd2`, `.tif` and `.tiff`: multichannel Z-stacks or already projected 2D multichannel TIFFs. Keep channel order consistent across a batch; channel numbers start at **1**.
-- Run the examples from the checkout containing `input_paths.json`, or give `-i` an absolute path in quotes. In Windows JSON paths, use forward slashes or escaped backslashes. WSL uses paths such as `/mnt/c/Experiments/Plate_01`.
-- For the plate-based report, image names must contain recognizable well identifiers, for example `WellA02`. See [plate-map conventions](docs/REFERENCE.md#plate-map-convention).
+Save this as `input_paths.json`. Use absolute paths to raw-image folders and the same JSON for all commands. All valid experiment folders listed in it are used; no extra experiment selection is needed. Each image name must identify exactly one well, for example `WellA02`; a `PointA02` token, if present, must agree. Supported sources are ND2 and multichannel TIFF. Hidden/macOS sidecar files are ignored. ND2 input is detected automatically; TIFF stack/projection semantics may require a prompt. Only `quantify_nuclear_intensity` also accepts `--input-type`.
 
-**Before generating a report**, put one 96-well Excel layout (`.xlsx`, any filename) in the appropriate folder, or supply `--template`:
+Place exactly one **`FIA*.xlsx`** in each raw-image folder before starting, for example `/path/to/Experiment_01/FIA_Plate_01.xlsx`, beside its ND2/TIFF files, **not inside `fia_assay`**. Start from the blank template and fill it for the actual plate. Do not put both the example and template in an experiment. `UMA*.xlsx` files are independent and ignored. Every selected experiment is checked before the imaging engine starts.
 
-- Nuclei-only and pFAK reports: directly in each experiment's **`fia_assay/`**.
-- Marker-intensity report: inside each selected `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` folder created by the collector.
+- [Blank template](templates/FIA_96_well_Template.xlsx)
+- [Golden standard with worked examples](templates/FIA_96_well_Golden_Standard.xlsx)
+- [Exact scheme, validation and provenance contract](docs/PLATE_SCHEME.md)
 
-The plate grid has column numbers **1–12 in B1:M1**, row letters **A–H in A2:A9**, and condition names in **B2:M9**. For statistics, direct solid fill colors define comparison blocks and exactly one condition per color is **bold** to mark the control. Both reports require the layout even when statistics are disabled. An explicit `--template` applies to every selected experiment/run; otherwise each report discovers the layout in its designated folder.
+On **Plate Map**, annotate conditions in B2:M9. Direct solid fill defines a comparison block; bold defines its control, independent of the condition name. Draw each block as one horizontal strip in **PLOT LAYOUT**, B15:M21: arrange panels side by side, vertically or in a grid. Within a strip, conditions appear left to right. Use the same labels, fills and bold settings as above.
 
-Start with the blank [FIA 96-well template](templates/FIA_96_well_plate_template.xlsx), which includes condition drop-downs, input checks and an `Instructions` sheet. The optional **Order / Group** table sets the order of conditions on every plot and in condition summaries. List every condition exactly once with a unique positive integer rank; `Groups` is also accepted as a header. An absent or entirely empty table keeps plate-grid order. Colors and bold control roles are read from the grid. See [ordering rules](docs/REFERENCE.md#plate-map-convention).
+On **Channels**, the four cells for a well are original C1–C4. Each existing channel must contain `Method: marker name` or `Ignore`. Use exactly one `Nuclei` assignment per annotated well. A blank channel cell means an absent trailing channel; all cells are blank for an unused well. `Fiber` is recorded but excluded from FIA measurements. Marker names are freely editable after the colon.
+
+For example, a three-channel well could contain `Nuclei: DAPI`, `Ignore`, `Field signal: pFAK-Y397`, then a blank C4. Another well in the same condition may have different staining and channel assignments. The method text before the colon selects the analysis route; the name after it is the exact marker name used by `--marker`. Do not renumber channels when ignoring one.
+
+In **Requested intersections**, enter only the desired Foci combinations, for example `C2+C4; C2+C3+C4`. `+` means the shared mask intersection. A triple does not implicitly request its pairs. Every participating channel must be assigned `Foci` in that well.
 
 ## Plate-scheme review and preparation skill
 
@@ -102,7 +116,7 @@ It accepts Excel, screenshots, photographs, PDFs, handwritten schemes and text d
 
 Unreadable or missing information is queried rather than guessed. An image-only review cannot verify the internal structure of an Excel workbook. Structure, software compatibility and agreement with raw images are separate checks.
 
-**Format compatibility:** the bundled template and validator use the new **Plate Map / Channels / PLOT LAYOUT** contract from [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), verified at commit `ff10a8d3c2c8985c05580544389bff82b53a39ca`. At the time of this addition, that PR is not merged into `tech_dev`; adding the skill does not enable the new analysis workflow. Use a FIA revision containing that implementation before analyzing its workbooks. The common format is also intended for future UMA support, which must be verified in the intended UMA version. The older Order / Group template described above is a different format.
+**Format compatibility:** the bundled template and validator use the **Plate Map / Channels / PLOT LAYOUT** contract from [PR #4](https://github.com/alexdolskii/FIA-tools/pull/4), originally verified at commit `ff10a8d3c2c8985c05580544389bff82b53a39ca` and included in `tech_dev`. The common format is also intended for future UMA support, which must be verified in the intended UMA version. Older Order / Group templates use a different format and require an agreed conversion.
 
 If the personal skill is installed, select it in ChatGPT/Codex and attach the scheme, for example:
 
@@ -120,202 +134,141 @@ Add `--require-controls` when checking a scheme intended for statistical compari
 
 ## Run the analysis
 
-Wait for each command to finish and review its status before continuing. Choose the nuclei-only route below, or prepare nuclei and markers for intensity/foci analysis. Thresholds below are defaults or labeled examples; choose and record values appropriate to the experiment.
+Activate your installed environment in each new terminal with `conda activate fia_tools` (or your chosen environment name). Run the examples from the directory containing `input_paths.json`, or replace `input_paths.json` with its absolute path. The commands are installed executables; do not run the numbered Python source files directly. Use lowercase **`-i`**, not `-I`.
 
-### Nuclei-only analysis
-
-This additional FIA-tools workflow is intended for experiments with a usable nuclei-staining channel when the goal is nucleus counts and morphology. The input can be a multichannel ND2 or TIFF image: select the nuclei channel and ignore the remaining channels. It uses the existing nuclei segmentation and measurements, followed by the dedicated `fia_nuclei_report` command. Nuclear staining is still required; this is not a method for detecting unstained nuclei.
-
-```bash
-select_channels -i input_paths.json --nuclei-only
-generate_nuclei_mask -i input_paths.json -p 200
-fia_nuclei_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
-```
-
-Here `-p 200` and `--min-nuclei 20` are examples. The first command asks only for the image type and nuclei channel after folder confirmation. Other channels are not prepared or measured. Segmentation, bit-depth conversion, XY dimensions, calibration and morphology calculations retain their existing behavior. No collector or intensity command is needed.
-
-Place the Excel layout directly in each **`fia_assay`** before the report. The latest valid completed final-nuclei run is selected per experiment; `--nuclei-runs all` reports every valid run separately and `--nuclei-runs ask` enables selection.
-
-The report always includes **Area, Aspect ratio, Circularity and Solidity**, even without significant comparisons, plus `Nuclei_count`. All **12 morphology metrics** remain in the tables and, when enabled, the planned statistical family. A positive `--min-nuclei` adds the diagnostic `Nuclei_count_all` with red edges below the threshold: normally five plots without filtering and six with it. Mixed calibrated/uncalibrated data use separate physical/pixel Area plots. Failed processing images remain excluded and are never represented as zero nuclei.
-
-Plots default to PDF; use `--plot-format png` or `both` to change this. Excel always embeds the plots. Omit `--stats-unit` for descriptive results or choose `well` for tests on equal-image-weight well means. Existing palette, Order/Group, control and filtering rules apply. See [nuclei-only report details](docs/REFERENCE.md#nuclei-only-reports).
-
-For code navigation, start with [`fia-tools/nuclei_report.py`](fia-tools/nuclei_report.py), then `load_nuclei_run()` in [`marker_report_data.py`](fia-tools/marker_report_data.py) and the `report_kind='nuclei'` profile in [`marker_intensity_report.py`](fia-tools/marker_intensity_report.py). Shared plotting and statistics are reused by this profile. [`tests/test_nuclei_report.py`](tests/test_nuclei_report.py) covers the complete route. The marker-intensity and foci workflows remain available alongside it.
-
-### Shared preparation
+### 1. Prepare channels and nucleus masks once
 
 ```bash
 select_channels -i input_paths.json
-generate_nuclei_mask -i input_paths.json
+generate_nuclei_mask -i input_paths.json -p 200
 ```
 
-The first command asks for input type and nuclei/marker channels. The second uses a minimum nucleus area of **2500 px²** by default. For example, `generate_nuclei_mask -i input_paths.json -p 200` uses 200 px² instead. Repeating the second command can reuse validated StarDist masks and create a new final-mask run.
+The first command reads each well's assignments from Excel and prepares `Nuclei` and the supported marker channels in `fia_assay`. It no longer asks you to assign channel roles. The second command segments nuclei and creates a completed `Final_Nuclei_Mask_<timestamp>` run shared by the later routes. `-p 200` is an example minimum nucleus area in pixels squared; choose an appropriate value for your images. The default without `-p` is 2500 px².
 
-Images with unsafe normalization or failed StarDist inference are skipped and recorded in `fia_assay/logs/2_excluded_images.log`. A persistent `fia_assay/excluded_images.json` registry prevents their use in subsequent nuclei, intensity, foci, collection and report runs, including when older results are selected. Results carry a `Processing_Exclusions.csv` audit table. Failed images are never counted as zero-nucleus images; ordinary valid zero-nucleus images retain their existing meaning. See [processing exclusions](docs/REFERENCE.md#processing-exclusions).
+For a **nuclei-only analysis**, replace the first command with:
 
-Prepared channels are 8-bit images for segmentation. **Nuclear marker intensity is measured from originals**, using MAX projection for Z-stacks; it is not measured from the prepared standard-deviation marker projections. See [projection, pixel-type and measurement rules](docs/REFERENCE.md#nuclear-marker-intensity).
+```bash
+select_channels -i input_paths.json --nuclei-only
+```
 
-### Route A: nuclear marker intensity and reports
+Then run `generate_nuclei_mask` and the common report below. No marker measurement or collection command is needed for that route. For a mixed-staining workflow, use the default preparation once and then run whichever marker routes you need.
+
+### 2. Create the common nuclei report
+
+```bash
+fia_nuclei_report -i input_paths.json --stats-unit well --min-nuclei 20
+```
+
+This report uses **all annotated, successfully processed wells**, regardless of marker staining. It contains nucleus counts and four core morphology graphs (area, aspect ratio, circularity, solidity); all 12 morphology metrics remain in tables. `--min-nuclei 20` retains images with at least 20 non-border nuclei. It filters report observations, not the saved nucleus masks.
+
+The example requests statistics using wells as the statistical unit. Omit `--stats-unit well` for a descriptive report without hypothesis tests. Choose the statistical unit from the experimental design, not simply from the number of nuclei available. PDF is the default standalone graph format; add `--plot-format png` or `--plot-format both` if needed.
+
+### 3A. Foci: masks, measurements and explicit intersections
+
+Use this route only for wells assigned `Foci: ...`. Supply the exact marker name from Excel. For two markers needing different thresholds, for example:
+
+```bash
+generate_foci_mask -i input_paths.json --marker "Marker 1" -f 150
+generate_foci_mask -i input_paths.json --marker "Marker 2" -f 120
+quantify_foci -i input_paths.json -j 4
+```
+
+Create masks for **every Foci marker assigned in the selected experiments before running `quantify_foci`**. That command has no `--marker` option: it uses the latest compatible completed masks for all assigned Foci markers and the latest compatible completed nucleus run. If all Foci markers should share one threshold, omit `--marker` from `generate_foci_mask` instead.
+
+`-f` is a threshold on the prepared 8-bit Foci projection (0–255). The values above are examples. `-j 4` uses four parallel workers. Requested pair/triple intersections come only from Excel; leave the intersection cell blank when none is needed. This route saves measurement tables and requested intersection masks under `fia_assay/foci_analysis`; it does not introduce a new Foci statistical plotting command. `--min-nuclei` is a report option, not an option to `quantify_foci`.
+
+### 3B. Nuclear intensity: measure, collect, report
+
+Use this route only for wells assigned `Nuclear intensity: ...`:
 
 ```bash
 quantify_nuclear_intensity -i input_paths.json
 fia_collect_marker_intensity_results -i input_paths.json
-```
-
-These commands use all valid experiment folders in the JSON. They select markers and nucleus runs, retaining separate results for each selected experiment/run combination. Prepared marker folders such as `Foci_1_Channel_2` identify **original channel 2**; the first number is the preparation order.
-
-After collection, add the Excel layout described above. Example report with nucleus-based tests and exclusion of images containing fewer than 20 non-border nuclei:
-
-```bash
 fia_marker_intensity_report -i input_paths.json --stats-unit nucleus --min-nuclei 20
 ```
 
-The default report selects the latest completed collection per experiment. Use `--collections all` to report every completed collection, or `--collections ask` to choose. Use `--markers all` to select all available markers without the marker prompt, or `--markers none` for morphology only.
+The first command rereads the assigned **original channel** and measures MAX-projection values inside existing nucleus IDs; it has no intensity threshold. The collector combines compatible measurements and nuclear QC tables. The report then creates separate results for each marker and collection. `--stats-unit nucleus` reproduces the nucleus-level analysis; use `well` if that is the chosen statistical unit, or omit the option for descriptive results.
 
-Condition colors fill both violin bodies and boxplots; image points are grey, with shapes identifying technical wells within each condition. A positive `--min-nuclei` also adds `Nuclei_count_all`: red point edges identify images below the threshold before filtering. The ordinary count plot and all tests use retained images. Colors, shapes and image positions stay fixed; `plot_style.json` records their mapping. See the [plot styling rules](docs/REFERENCE.md#condition-colors-and-image-markers).
+The default is all assigned Nuclear intensity markers. To measure only one, add `--marker "pSMAD2"` to `quantify_nuclear_intensity`; to select it in the report, use the distinct plural option `--markers "pSMAD2"`. Use the exact name in your scheme. Other assigned but unmeasured markers are missing measurements, not zeros. For a known TIFF input type, add `--input-type tiff-stack` or `--input-type tiff-2d` to the measurement command.
 
-Plots are saved as **PDF only by default**. Add `--plot-format png` for PNG only or `--plot-format both` for both formats. Excel includes all plots in every mode; PDF-only runs create no standalone PNG previews.
+### 3C. Field signal: thresholded SUM measurements and report
 
-Omit `--stats-unit` for descriptive tables and plots without tests. Choose `--stats-unit well` for tests on equal-image-weight well means. Nucleus/image tests do not account for dependence within a well, and neither mode establishes independent biological replication. Tests use Welch comparisons with Holm correction; details are in the [statistics reference](docs/REFERENCE.md#plots-and-statistical-units).
-
-The collector and report read spreadsheets; they do not rerun image analysis. They handle nuclear morphology and marker intensity, not foci-count or colocalization tables.
-
-### Route B: foci and colocalization
+Use this route only for wells assigned `Field signal: ...`, for example `Field signal: pFAK-Y397`:
 
 ```bash
-generate_foci_mask -i input_paths.json
-quantify_foci -i input_paths.json
+quantify_field_signal -i input_paths.json --marker "pFAK-Y397" -t 100000 300000
+fia_field_signal_report -i input_paths.json --stats-unit well --min-nuclei 20
 ```
 
-Mask generation asks for one prepared marker channel and uses an intensity threshold of **150** on its 8-bit images by default. Set another threshold with `-f`, for example `generate_foci_mask -i input_paths.json -f 100`. **Repeat mask generation for each required foci channel before quantification.** Quantification asks whether to include colocalization and uses the latest matching mask folders. Details: [foci analysis](docs/REFERENCE.md#foci-analysis).
+`-t LOWER UPPER` is an inclusive interval in raw SUM32 units; `-t LOWER` has no upper limit. There is no default threshold. These example numbers must be replaced with values chosen for the marker and acquisition. They are not interchangeable with the 8-bit Foci threshold. Run `quantify_field_signal` separately with `--marker` for markers needing different thresholds. There is no collection command between Field signal measurement and its report.
 
-### Route C: whole-field pFAK
+By default, both nuclear normalization denominators exclude border nuclei. Add `--include-border-nuclei` to the measurement command to include their visible counts and areas. pFAK/other Field signal is measured over the whole field in either case. The report's `--min-nuclei` criterion still uses non-border nuclei. Different thresholds, nucleus runs and border policies remain separate analysis profiles; the report defaults to the latest completed result **per profile**, not one pooled result.
 
-Use the nuclei channel for segmentation and the original pFAK channel for whole-field measurements. Other channels, including fibronectin, are ignored. Existing valid final nucleus runs can be reused; prepared marker images are not required.
+Field signal generalizes the previously pFAK-specific commands. It retains SUM32, an inclusive threshold mask, RawIntDen, IntDen, positive area, connected-object counts and sizes, and separate normalizations by nucleus count and nuclear area. No watershed or background subtraction is added. See [field-signal measurement details](docs/PFAK.md).
 
-```bash
-select_channels -i input_paths.json --nuclei-only
-generate_nuclei_mask -i input_paths.json -p 200
-quantify_pfak -i input_paths.json --channel 3 -t 2000 50000
-fia_pfak_report -i input_paths.json --min-nuclei 20
-```
+**Routes 3A–3C are independent:** run any subset, in any order, after common preparation. You do not need to repeat `select_channels` or nucleus segmentation for each marker. Marker routes select wells by their method/name assignments, even when those wells share a condition with other staining. General nuclear graphs and statistics belong to `fia_nuclei_report`; nuclear QC measurements remain in marker tables. Missing staining is `NOT_APPLICABLE`, never a measured zero. Report filtering applies after assignment-based selection and existing processing exclusions.
 
-Channel 3, particle size 200 and thresholds 2000–50000 are **syntax examples, not validated pFAK settings**. Choose one threshold range for all compared conditions. `-t LOWER` leaves the upper bound unlimited. Add `--include-border-nuclei` to the analysis command to include border nuclei in both normalization denominators. By default, both use non-border nuclei. `--min-nuclei` always counts non-border nuclei and does not change the saved measurements.
+### Prompts and repeat runs
 
-Put the Excel layout directly in each `fia_assay` before reporting. The report reads validated pFAK tables directly; no collector is needed. It preserves Order/Group, condition colors, technical-well shapes, and the red low-nucleus-count diagnostic. Optional `--stats-unit image` or `well` enables the existing Welch/Holm approach for image endpoints; individual objects are never statistical replicates.
+Channel roles and Foci intersections no longer need terminal selection. Prompts may still ask to confirm processing/overwriting prepared channels, distinguish TIFF stacks from existing projections, reuse compatible StarDist results, or choose among compatible result runs. The commands below document run-selection options where available; use `ask` for manual selection.
 
-Both **RawIntDen** (sum of original SUM values inside the mask) and **IntDen** (RawIntDen × pixel area) are exported and plotted, each unnormalized, per nucleus and per nuclear area. The positive area also has both normalizations; field coverage and connected-object count are reported separately. A paired object-size figure shows image medians alongside the descriptive distribution of individual-object areas. Objects are 8-connected regions on the 2D projection; touching structures remain joined. No watershed, hole filling, denoising, intensity scaling or background subtraction is applied.
-
-Each analysis creates a new `fia_assay/FIA_pFAK_Results_*` folder containing SUM32 projections, binary masks, object-ID maps, nucleus-ID copies, numbered QC previews, CSV/Excel tables, parameters and provenance. Reports create separate `FIA_pFAK_Report_*` folders. Failed images are listed separately and never turned into zero measurements. Persistent FIA processing exclusions also apply to old pFAK results. `--runs latest` retains the latest result for **each** threshold/channel/nucleus-run/border-policy profile; it does not merge them.
-
-The current journals are `fia_assay/3_pfak_analysis.log` and `fia_assay/4_pfak_report.log`; previous journals move into `fia_assay/logs`. See [pFAK methods, outputs and interpretation](docs/PFAK.md) for calibration, SUM assumptions, normalization and code navigation.
-
-### Interactive choices
-
-| Command | Choices after launch |
+| What changed? | What to rerun |
 | --- | --- |
-| `select_channels` | Confirm processing and per-folder overwrite/skip; input type; nuclei channel; number and indices of marker channels. |
-| `fia_nuclei_report` | None by default; nuclei-run selection only with `--nuclei-runs ask`. `select_channels --nuclei-only` omits marker questions. |
-| `generate_nuclei_mask` | When reusable masks exist: choose a StarDist run, rerun segmentation, or reuse newest valid results for remaining folders. |
-| `quantify_nuclear_intensity` | Markers if several exist; input type if not supplied or auto-detected as ND2; latest compatible, all compatible or manually selected mask runs. A single candidate run per experiment/marker is selected automatically. |
-| `fia_collect_marker_intensity_results` | Nuclei runs when several exist; markers or morphology only (`none`). A single valid nuclei run per experiment is selected automatically; available markers are chosen at a prompt. |
-| `fia_marker_intensity_report` | Markers when needed unless `--markers` is supplied; collection selection only with `--collections ask`. |
-| `generate_foci_mask` | One marker-channel folder and confirmation. |
-| `quantify_foci` | Start confirmation and whether to calculate colocalization. |
-| `quantify_pfak` | Original pFAK channel if `--channel` is omitted; nuclei-run selection only with `--nuclei-runs ask`. All JSON experiments are used. |
-| `fia_pfak_report` | None by default; result selection with `--runs ask`. Distinct threshold/channel/nucleus-run/border-policy profiles remain separate. |
-
-Invalid interactive answers repeat the question. Enter accepts a default only when advertised. Use `q`, Ctrl+C or end-of-input to cancel; invalid command-line arguments instead produce an argument error. [Selection and cancellation details](docs/REFERENCE.md#interactive-input-and-terminal-progress).
+| `--min-nuclei`, graph format, statistical unit, condition labels or `PLOT LAYOUT` | The relevant report only, using compatible existing measurements. |
+| Foci threshold | `generate_foci_mask` for the affected marker, then `quantify_foci`. |
+| Requested Foci intersections | `quantify_foci`; no nucleus resegmentation is needed. |
+| Field signal threshold or border-nucleus normalization | `quantify_field_signal` for the affected marker, then `fia_field_signal_report`. |
+| Nucleus area filter (`-p`) | `generate_nuclei_mask` (compatible StarDist masks may be reused), then affected measurements, collection where applicable, and reports. |
+| Channel assignments or marker identity | Regenerate affected prepared inputs and dependent analyses; old measurements are not silently relabeled. |
 
 ## Command-line parameters
 
-This table covers the ten analysis commands and diagnostics. Options are case-sensitive; use `-i`, not `-I`. Each command also supports `--help`.
+All analysis commands require `-i/--input`. `-I` is not an alias. Use `COMMAND --help` for complete syntax.
 
-| Command | Option | Meaning and accepted values | Default when omitted |
-| --- | --- | --- | --- |
-| Analysis commands | `-i`, `--input` | Path to the JSON containing `paths_to_files`. | Required |
-| All commands | `-h`, `--help` | Show command usage and exit. | — |
-| `select_channels` | `--nuclei-only` | Prepare the nuclei channel only; no marker questions or outputs. | Prepare nuclei and selected markers |
-| `generate_nuclei_mask` | `-p`, `--particle_size` | Integer minimum nucleus area in **px²**; not a StarDist probability threshold. | `2500` |
-| `generate_foci_mask` | `-f`, `--foci_threshold` | Integer lower intensity threshold on prepared **8-bit** marker images; not a foci-area threshold. | `150` |
-| `quantify_foci` | `-j`, `--jobs` | Positive integer number of worker processes. | `4` |
-| `quantify_nuclear_intensity` | `--input-type` | `nd2`, `tiff-stack` or `tiff-2d`; one mode applies to the batch. | Automatic for all-ND2 inputs; otherwise prompted |
-| Nuclei and marker reports | `--stats-unit` | `nucleus` or `well`. Count tests use images in nucleus mode and wells in well mode. | Descriptive results, no tests |
-| All three reports | `--min-nuclei` | Nonnegative integer minimum **non-border nuclei per image**, inclusive. Images below it are excluded from all report metrics. `0` disables this filter. | `0` |
-| All three reports | `--plot-format` | `pdf`, `png` or `both` for standalone plots. Excel always includes plots. | `pdf` |
-| `fia_nuclei_report` | `--template` | Plate-map `.xlsx`; applies to all selected experiments/runs. | Discover one layout directly in each `fia_assay` |
-| `fia_nuclei_report` | `--nuclei-runs` | `latest`, `all` or `ask`. | `latest` valid completed per experiment |
-| `fia_marker_intensity_report` | `--template` | Path to the plate-map `.xlsx`; the same workbook applies to every selected collection. | Discover one layout inside each collection |
-| All three reports | `--sheet` | Name of the plate-map worksheet. | First worksheet |
-| `fia_marker_intensity_report` | `--collections` | `latest`, `all` or `ask`. | `latest` completed per experiment |
-| `fia_marker_intensity_report` | `--markers` | Exact folder names separated by commas, `all`, or `none`. Example: `Foci_1_Channel_2,Foci_2_Channel_3`. | One batch selection; automatic for one marker |
-| `fia_marker_intensity_report` | `--all-experiments` | Still accepted for compatibility; has no effect because all valid JSON experiment paths are always used. Unnecessary in new commands. | All valid JSON paths |
-| `quantify_pfak` | `--channel` | 1-based pFAK channel in original ND2/TIFF images. Prepared marker TIFFs are not measurement inputs. | Prompt once |
-| `quantify_pfak` | `-t`, `--threshold` | Required inclusive `LOWER [UPPER]` in original SUM32 intensity units. Omitted upper bound or `inf` is unbounded. | No default lower threshold |
-| `quantify_pfak` | `--include-border-nuclei` | Include border nucleus IDs and their visible areas in both normalization denominators. The full-field pFAK mask is unchanged. | Exclude border nuclei |
-| `quantify_pfak` | `--nuclei-runs` | `latest`, `all` or `ask`; each selected nucleus run gets separate pFAK results. | `latest` valid completed per experiment |
-| `fia_pfak_report` | `--runs` | `latest`, `all` or `ask`. Latest means latest valid result **per profile**, preserving different thresholds. | `latest` |
-| `fia_pfak_report` | `--stats-unit` | `image` or `well`; objects are never independent test observations. Well values are equal-image-weight means. | Descriptive, no tests |
-| `fia_pfak_report` | `--template`, `--sheet` | Optional explicit plate-map workbook and worksheet. | One valid layout in each `fia_assay`; first sheet |
-| `fia_diagnostics` | `-i`, `--input` | Also inspect the experiment folders and journals listed in this JSON. | Inspect managed runs, known temporary locations, caches and system resources |
-| `fia_diagnostics` | `--max-entries` | Positive integer limit on directory entries inspected per location; reaching it is reported as a partial scan. | `100000` |
-
-`fia_collect_marker_intensity_results` has no additional command-line parameters. Channel choices, StarDist reuse and colocalization are interactive, as listed above.
-
-### Temporary files and diagnostics
-
-Every analysis command creates a temporary directory for its run under `~/.fia-tools/tmp/`. The same mechanism applies to direct execution of the analysis scripts. Temporary files used to publish results safely stay on the result disk in owned `.fia_tmp_<run_id>` directories. After a successful process exit or normal cancellation, the supervisor cleans these directories once the observed worker processes have exited. Failures, uncertain process ownership or still-running descendants retain their resources for review. Image-processing settings and bit depths are unchanged.
-
-Inspect the computer and, optionally, the experiment folders:
-
-```bash
-fia_diagnostics
-fia_diagnostics -i input_paths.json
-```
-
-Diagnostics reports temporary resources, persistent caches, active managed processes, available RAM, swap and disk space. It deletes no files and stops no processes. The current journal is `~/.fia-tools/fia_diagnostics.log`; with `-i`, a copy is written to each existing `fia_assay/fia_diagnostics.log`. Previous journals move to the adjacent `logs` folder. Runtime records and cleanup outcomes are under `~/.fia-tools/runs/<run_id>/`.
-
-Set `FIA_RUNTIME_HOME` to an absolute writable directory to change the common runtime location; use the same setting for analysis and diagnostics. Permanent Fiji/StarDist caches keep their existing locations. See [resource ownership, cleanup and platform limitations](docs/REFERENCE.md#temporary-resources-and-system-diagnostics).
-
-## Results, documentation and help
-
-Paths below are relative to each original experiment folder. Results from different experiments remain separate.
-
-| Location | Main contents |
+| Command | Additional parameters |
 | --- | --- |
-| `fia_assay/Nuclei/`, `fia_assay/markers/` | Prepared nuclei and marker channels |
-| `fia_assay/Final_Nuclei_Mask_<timestamp>/` | Final masks, morphology Excel/CSV tables and numbered QC images |
-| `fia_assay/FIA_Nuclei_Report_<timestamp>/` | Nuclei-only workbook/CSV, count and morphology plots, source snapshots and completion metadata |
-| `fia_assay/Nuclear_Intensity_<marker>_<timestamp>/` | Nuclear-intensity tables, marker images, ROIs and QC |
-| `fia_assay/FIA_Marker_Intensity_Combined_Results_<timestamp>/` | Collected and combined spreadsheets; place the Excel layout here |
-| `fia_assay/FIA_Marker_Intensity_Report_<timestamp>/` | Report workbooks/CSV, overview plots (PDF by default; optional PNG or both) and completion metadata |
-| `fia_assay/FIA_pFAK_Results_*` | Whole-field pFAK measurements, SUM32 images, masks, object maps, QC and provenance |
-| `fia_assay/FIA_pFAK_Report_<timestamp>/` | Direct pFAK workbook/CSV, intensity/area/count and paired object-size overviews |
-| `fia_assay/Foci_Masks/` | Foci masks by channel and run |
-| `foci_analysis/Results_<timestamp>/` | Foci/colocalization results, including `all_results_with_coloc_universal.csv` |
+| `select_channels` | `--nuclei-only`: prepare only assigned nuclei; default: all supported assigned channels. |
+| `generate_nuclei_mask` | `-p/--particle_size`: minimum nucleus area, default 2500 px². Compatible StarDist results can be selected for reuse. |
+| `generate_foci_mask` | `-f/--foci_threshold`: 0–255, default 150. `--marker NAME`: optional repeatable restriction; default all Foci markers. |
+| `quantify_foci` | `-j/--jobs`: parallel workers, default 4. Intersections come from Excel. |
+| `quantify_nuclear_intensity` | `--marker NAME`; `--input-type nd2\|tiff-stack\|tiff-2d`. Mask-run selection remains independent of channel assignment. |
+| `fia_collect_marker_intensity_results` | Nucleus-run selection when several valid runs exist; latest compatible intensity for each assigned marker. |
+| `fia_nuclei_report` | `--nuclei-runs latest\|all\|ask`, default latest. Shared report options below. |
+| `fia_marker_intensity_report` | `--collections latest\|all\|ask`, default latest; `--markers` comma-separated exact names/IDs or `all`, default all. |
+| `quantify_field_signal` | Required `-t/--threshold LOWER [UPPER]`; optional `--marker NAME`; `--include-border-nuclei`; `--nuclei-runs latest\|all\|ask`, default latest. |
+| `fia_field_signal_report` | `--runs latest\|all\|ask`, default latest per analysis profile. Shared report options below. |
 
-The five preparation/nuclei/intensity/collection/report journals are `1_log.log`, `2_log.log`, `3_nuclei_intensity.log`, `4_collect_marker_intensity.log` and `5_marker_intensity_report.log` in `fia_assay`; earlier journals are archived in `fia_assay/logs/`. Foci-mask and foci-quantification logs have separate locations described in the [full output and journal reference](docs/REFERENCE.md#output-files-and-journals). Review completion status before using results; report success is recorded in `report_status.json`.
+Shared report options:
 
-The nuclei-only report uses **`fia_assay/3_nuclei_report.log`**, with previous runs archived in `fia_assay/logs/3_nuclei_report_<timestamp>.log`. It records source selection, parameters, exclusions, plotting, saving, elapsed time, warnings and errors.
+- `--stats-unit nucleus|well` for nuclei/nuclear intensity; `image|well` for Field signal. Omit for descriptive reports. Individual Field signal objects are never statistical replicates.
+- `--min-nuclei N`: inclusive minimum non-border nucleus count per image; default 0 disables this filter.
+- `--plot-format pdf|png|both`: default PDF; Excel always embeds raster previews. PDF-only runs do not create standalone PNG plot files.
+- `--template PATH`: explicit current-format scheme; otherwise one `FIA*.xlsx` is discovered beside raw images. An explicit path applies to every selected experiment, so omit it for different per-experiment schemes.
+- `--sheet`: only `Plate Map` is accepted by the current fixed-sheet format.
 
-- **Detailed software behavior:** [docs/REFERENCE.md](docs/REFERENCE.md) covers methods, formulas, calibration, tables, statistics, plots, repeat runs, dependencies and troubleshooting.
-- **Whole-field pFAK:** [docs/PFAK.md](docs/PFAK.md) covers the additional workflow, formulas, nuclear normalization, object analysis and implementation.
-- **Scientific protocol:** [published version 1](https://www.protocols.io/view/fibroblast-ecm-functional-units-a-medium-throughpu-e6nvwqyz7vmk/v1), for `main`. An updated protocol link will be added when published and associated with a specific code revision.
-- **Problems:** check [troubleshooting](docs/REFERENCE.md#troubleshooting), then open a [GitHub issue](https://github.com/alexdolskii/FIA-tools/issues) with the command, Git commit, operating system and relevant log entries.
-- **License:** [MIT](LICENSE). Fiji and StarDist licensing is linked in the [tool acknowledgments](docs/REFERENCE.md#underlying-tools).
+Statistics use two-sided Welch comparisons against the bold control and Holm correction within each method/marker/block. Comparisons absent by design are distinguished from planned comparisons with insufficient observations after filtering. Imaging settings and biological independence are not inferred from the scheme.
 
-FIA-tools is developed in the
-[Edna (Eti) Cukierman laboratory](https://www.foxchase.org/edna-cukierman)
-at Fox Chase Cancer Center for quantitative analysis of nuclear morphology,
-marker intensity and foci. Its scientific context includes the laboratory’s
-earlier work on [SMIA-CUKIE](https://github.com/cukie/SMIA), developed by
-Gil Cukierman and described by
-[Franco-Barraza et al. (2017), eLife](https://doi.org/10.7554/eLife.20600).
-SMIA-CUKIE measures marker intensity and positive area within combinations of
-image masks. FIA-tools continues this broader research direction through
-independently implemented analyses of individual nuclei and foci, with automated
-processing and reporting.
+## Temporary files and diagnostics
 
-FIA-tools complements [UMA-tools](https://github.com/alexdolskii/UMA-tools) and was developed as part of [Pulsed low-dose-rate radiation reduces the tumor-promotion induced by conventional chemoradiation in pancreatic cancer-associated fibroblasts](https://pubmed.ncbi.nlm.nih.gov/41884584/). For scientific use, cite the applicable protocol and study and record the code revision used.
+Each managed run uses `~/.fia-tools/runs/<run-id>`. `FIA_RUNTIME_HOME` sets another base directory; runs use its runs subdirectory. Successful runs clean their temporary working data; failed/interrupted runs retain diagnostics. Use `fia_diagnostics --help` to inspect runs and remaining resources. This does not scan or delete unrelated system caches.
 
-Contributors: [Aleksandr Dolskii](mailto:aleksandr.dolskii@fccc.edu) and [Ekaterina Shitik](mailto:shitik.ekaterina@gmail.com).
+## Results and documentation
+
+All generated analyses remain under each experiment's `fia_assay`. Timestamped measurement/report runs preserve earlier outputs; channel preparation can overwrite its prepared images after confirmation. `plate_design.json` and `plate_design.xlsx` record the scheme used; per-image tables record original channels separately from marker identity. Reordering plot panels allows report regeneration; changing channel assignments requires regeneration of affected measurements.
+
+| Result | Location inside `fia_assay` |
+| --- | --- |
+| Common nuclei report | `FIA_Nuclei_Report_<timestamp>` |
+| Foci measurements and intersections | `foci_analysis/Results_<timestamp>` |
+| Collected nuclear intensity tables | `FIA_Marker_Intensity_Combined_Results_<timestamp>` |
+| Nuclear intensity reports | `FIA_Marker_Intensity_Report_<timestamp>` |
+| Field signal measurements | Folders beginning `FIA_Field_Signal_Results_` |
+| Field signal reports | `FIA_Field_Signal_Report_<timestamp>` |
+
+The terminal prints the output and log paths for each experiment. Check its final status and journal before treating a folder as a completed analysis.
+
+- [Scheme and code navigation](docs/PLATE_SCHEME.md)
+- [Technical reference](docs/REFERENCE.md)
+- [Field signal / pFAK](docs/PFAK.md)
+
+The repository's annotated golden standard is a routing/layout test fixture, not experimental data. The Excel file is a required input for all analysis routes.

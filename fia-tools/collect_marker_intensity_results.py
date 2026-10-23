@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import image_exclusions as exclusions
+import plate_design as plate
 import spatial_calibration as spatial
-from assay_layout import ASSAY_DIR, MARKERS_DIR
+from assay_layout import ASSAY_DIR
 from interactive_input import Cancelled, ask_choice, choose_indices
 from openpyxl import Workbook, load_workbook
 from openpyxl.cell import WriteOnlyCell
@@ -28,8 +29,8 @@ from table_workflow import TableJournal, TableProgress
 OUTPUT_PREFIX = 'FIA_Marker_Intensity_Combined_Results_'
 COMBINED_NAME = 'FIA_Marker_Intensity_Combined.xlsx'
 NUCLEI_PATTERN = re.compile(r'^Final_Nuclei_Mask_(\d{8}_\d{6})$')
-INTENSITY_PATTERN = re.compile(r'^Nuclear_Intensity_(?:(Foci_[1-9][0-9]*_Channel_[1-9][0-9]*)_)?(\d{8}_\d{6})$')
-MARKER_PATTERN = re.compile(r'^Foci_[1-9][0-9]*_Channel_([1-9][0-9]*)$')
+INTENSITY_PATTERN = re.compile(r'^Nuclear_Intensity_(?:([A-Za-z0-9_]+)_)?(\d{8}_\d{6})$')
+MARKER_PATTERN = re.compile(r'^(?:Foci_[1-9][0-9]*_Channel_([1-9][0-9]*)|NuclearIntensity_[A-Za-z0-9_]+_[0-9a-f]{12})$')
 MASK_SUFFIX = '_nuclei_projection_StarDist_processed_processed'
 MORPH_METRICS = (
     'Area_px2', 'Perimeter_px', 'Circularity', 'Aspect_ratio', 'Solidity',
@@ -207,9 +208,11 @@ def validate_rows(bundle, kind):
             if kind == 'intensity':
                 if row['Intensity_run_ID'] != run.name:
                     raise ValidationError('Intensity run ID differs from its folder')
-                if number(row['Marker_channel'], 'Marker_channel', integer=True) != bundle['channel']:
+                expected_channel = (meta['Channels_by_well'].get(plate.well_from_name(row['Image_name']))
+                                    if meta.get('Schema_version') == 4 else bundle['channel'])
+                if number(row['Marker_channel'], 'Marker_channel', integer=True) != expected_channel:
                     raise ValidationError('Marker channel differs from metadata')
-                if meta.get('Schema_version') in (2, 3) and row.get('Marker_folder') != bundle['marker']:
+                if meta.get('Schema_version') in (2, 3, 4) and row.get('Marker_folder') != bundle['marker']:
                     raise ValidationError('Marker folder differs from metadata')
                 if parts(row['Mask_file'])[:-1] != parts(meta['Nuclei_run']):
                     raise ValidationError('Mask path differs from the recorded nucleus run')
@@ -308,10 +311,10 @@ def intensity_candidate(run):
         raise ValidationError('Unrecognized intensity folder name')
     datetime.strptime(match[2], '%Y%m%d_%H%M%S').replace(tzinfo=timezone.utc)
     meta = json_snapshot(run / 'intensity_run.json', files)
-    if meta.get('Schema_version') not in (1, 2, 3):
+    if meta.get('Schema_version') not in (1, 2, 3, 4):
         raise ValidationError('Unsupported intensity metadata schema')
-    channel = number(meta.get('Marker_channel'), 'Marker_channel', integer=True)
-    if channel < 1:
+    channel = None if meta['Schema_version'] == 4 else number(meta.get('Marker_channel'), 'Marker_channel', integer=True)
+    if channel is not None and channel < 1:
         raise ValidationError('Marker channel must be positive')
     marker = meta.get('Marker_folder')
     if marker is None and meta['Schema_version'] == 1 and match[1] is None:
@@ -341,10 +344,10 @@ def load_intensity(candidate):
     if (parts(meta['Nuclei_run']) != bundle['namespace'] + (ASSAY_DIR, basename(meta['Nuclei_run']))
             or parts(info.get('Nuclei_run', '')) != parts(meta['Nuclei_run'])
             or basename(info.get('Intensity_run', '')) != run.name
-            or number(info.get('Marker_channel'), 'Run_Info channel', integer=True) != bundle['channel']
+            or (meta['Schema_version'] != 4 and number(info.get('Marker_channel'), 'Run_Info channel', integer=True) != bundle['channel'])
             or number(info.get('Particle_size_px2'), 'Run_Info particle size') != bundle['particle_size']):
         raise ValidationError('Intensity Run_Info/dataset namespace differs from metadata')
-    if meta.get('Schema_version') in (2, 3) and info.get('Marker_folder') != bundle['marker']:
+    if meta.get('Schema_version') in (2, 3, 4) and info.get('Marker_folder') != bundle['marker']:
         raise ValidationError('Intensity Run_Info marker differs from metadata')
     return exclusions.filter_bundle(bundle, exclusions.load_exclusions(run, bundle['files']))
 
@@ -357,14 +360,19 @@ def validate_compatibility(morphology, intensity):
     excluded = {**intensity.get('processing_exclusions', {}), **morphology.get('processing_exclusions', {})}
     exclusions.filter_bundle(morphology, excluded)
     exclusions.filter_bundle(intensity, excluded)
-    if set(morphology['images']) != set(intensity['images']):
+    channels = intensity['metadata'].get('Channels_by_well')
+    expected_images = {key for key in morphology['images'] if channels is None or plate.well_from_name(key) in channels}
+    expected_nuclei = {key for key in morphology['nuclei'] if key[0] in expected_images}
+    if expected_images != set(intensity['images']):
         raise ValidationError('Image sets differ between morphology and intensity')
-    if set(morphology['nuclei']) != set(intensity['nuclei']):
+    if expected_nuclei != set(intensity['nuclei']):
         raise ValidationError('Nucleus ID sets differ between morphology and intensity')
-    for key, row in morphology['nuclei'].items():
+    for key in expected_nuclei:
+        row = morphology['nuclei'][key]
         if number(row['Area_px2'], 'area', integer=True) != number(intensity['nuclei'][key]['Area_px2'], 'area', integer=True):
             raise ValidationError(f'Nucleus area differs between morphology and intensity: {key}')
-    for mask, row in morphology['images'].items():
+    for mask in expected_images:
+        row = morphology['images'][mask]
         other = intensity['images'][mask]
         if not spatial.compatible(row, other):
             raise ValidationError(f'Morphology/intensity physical calibration differs: {mask}')
@@ -406,7 +414,9 @@ def discover_sources(input_path, audit=None, skipped=None):
 
 
 def scan_source(root, audit=None, progress=None):
-    context = {'root': root, 'morphology': [], 'intensity': [], 'markers': set(), 'checks': []}
+    design = plate.load_design(root)
+    context = {'root': root, 'design': design, 'morphology': [], 'intensity': [],
+               'markers': {m['id'] for m in design.markers('Nuclear intensity')}, 'checks': []}
     assay = root / ASSAY_DIR
     if not assay.is_dir() or assay.is_symlink():
         print(f'No regular fia_assay directory: {root}')
@@ -423,8 +433,9 @@ def scan_source(root, audit=None, progress=None):
             match = NUCLEI_PATTERN.fullmatch(run.name)
             if match:
                 datetime.strptime(match[1], '%Y%m%d_%H%M%S').replace(tzinfo=timezone.utc)
+                plate.validate_snapshot(run, design)
                 bundle = load_morphology(run)
-                bundle['root'] = root
+                bundle.update(root=root, design=design)
                 context['morphology'].append(bundle)
                 message = (f"Valid morphology: {run.name} | -p {bundle['particle_size']:g} "
                            f"| images {len(bundle['images'])} | non-border nuclei {len(bundle['nuclei'])}")
@@ -433,6 +444,11 @@ def scan_source(root, audit=None, progress=None):
                     audit.event(root, 'SOURCE_VALIDATED | %s | %s', run, message)
             elif run.name.startswith('Nuclear_Intensity_'):
                 candidate = intensity_candidate(run)
+                plate.validate_snapshot(run, design, 'Nuclear intensity', candidate['marker'])
+                expected = {well: design.channel(well, 'Nuclear intensity', candidate['marker'])
+                            for well in design.wells if design.assigned(well, 'Nuclear intensity', candidate['marker'])}
+                if candidate['metadata'].get('Channels_by_well') != expected:
+                    raise ValidationError('Intensity routing differs from the current workbook')
                 context['intensity'].append(candidate)
                 context['markers'].add(candidate['marker'])
                 if audit:
@@ -446,11 +462,6 @@ def scan_source(root, audit=None, progress=None):
                 print(f'Unavailable: {run}: {error}')
         if progress:
             progress.advance(run.name)
-    markers = assay / MARKERS_DIR
-    if markers.is_dir() and not markers.is_symlink():
-        for folder in markers.iterdir():
-            if folder.is_dir() and not folder.is_symlink() and MARKER_PATTERN.fullmatch(folder.name):
-                context['markers'].add(folder.name)
     return context
 
 
@@ -479,20 +490,7 @@ def select_morphologies(contexts):
 
 def select_markers(bundles, contexts):
     roots = {bundle['root'] for bundle in bundles}
-    names = sorted(set().union(*(context['markers'] for context in contexts if context['root'] in roots)))
-    if not names:
-        print('No marker results or marker folders found; collecting morphology only.')
-        return []
-    print('\nMarkers available for collection:')
-    for index, marker in enumerate(names, 1):
-        print(f'{index}. {marker}')
-        for bundle in bundles:
-            candidates = contexts_by_root(contexts)[bundle['root']]['intensity']
-            count = sum(c['marker'] == marker and c['metadata'].get('Status') == 'complete'
-                        and basename(c['metadata']['Nuclei_run']) == bundle['run'].name for c in candidates)
-            print(f"   {bundle['root']} / {bundle['run'].name}: {count} completed intensity runs")
-    return [names[index] for index in choose_indices(
-        'Select marker numbers, all, none (morphology only), or q: ', len(names), allow_none=True)]
+    return sorted(set().union(*(context['markers'] for context in contexts if context['root'] in roots)))
 
 
 def contexts_by_root(contexts):
@@ -537,6 +535,7 @@ def typed_morphology(row):
 
 def combine(morphology, selected, markers, checks, progress=None):
     """Join by mask/ID within one dataset and nucleus run, never by display image name."""
+    design = morphology.get('design')
     source_map = {}
     for marker, bundle in selected.items():
         for mask, row in bundle['images'].items():
@@ -571,7 +570,7 @@ def combine(morphology, selected, markers, checks, progress=None):
         if sheet == 'Images':
             metric_columns += ['Nuclei_measured_count', 'Failed_nuclei_count']
         for marker in markers:
-            columns += [f'{marker}_{field}' for field in ('Availability', 'Intensity_run_ID', *metric_columns)]
+            columns += [f'{marker}_{field}' for field in ('Availability', 'Intensity_run_ID', 'Source_channel', 'Marker_name', *metric_columns)]
         for key, row in source_rows.items():
             mask = key[0] if sheet == 'Nuclei' else key
             identity = source_map.get(mask)
@@ -580,9 +579,14 @@ def combine(morphology, selected, markers, checks, progress=None):
                           Image_name=identity[0][0] if identity else '', Source_file=identity[1] if identity else '')
             for marker in markers:
                 bundle = selected.get(marker)
-                record[f'{marker}_Availability'] = 'AVAILABLE' if bundle else 'MISSING'
-                record[f'{marker}_Intensity_run_ID'] = bundle['run'].name if bundle else ''
-                if bundle:
+                applicable = design is None or design.assigned(plate.well_from_name(mask), 'Nuclear intensity', marker)
+                record[f'{marker}_Availability'] = ('AVAILABLE' if bundle else 'MISSING') if applicable else 'NOT_APPLICABLE'
+                record[f'{marker}_Intensity_run_ID'] = bundle['run'].name if bundle and applicable else ''
+                record[f'{marker}_Source_channel'] = (design.channel(plate.well_from_name(mask), 'Nuclear intensity', marker)
+                                                     if design and applicable else None)
+                record[f'{marker}_Marker_name'] = (next(m['name'] for m in design.markers('Nuclear intensity') if m['id'] == marker)
+                                                  if design and applicable else '')
+                if bundle and applicable:
                     values = bundle['nuclei' if sheet == 'Nuclei' else 'images'][key]
                     for field in metric_columns:
                         record[f'{marker}_{field}'] = number(values[field], field, blank=True,
@@ -646,7 +650,7 @@ def publish_staging(staging, root, final_name, filenames):
     names = list(filenames)
     if (final_name not in names or len(set(names)) != len(names)
             or any(name.startswith('.') or Path(name).name != name
-                   or (Path(name).suffix not in ('.csv', '.xlsx') and name != exclusions.MANIFEST) for name in names)):
+                   or (Path(name).suffix not in ('.csv', '.xlsx') and name not in (exclusions.MANIFEST, plate.SNAPSHOT)) for name in names)):
         raise ValidationError('Invalid publication file list')
     paths = sorted((staging / name for name in names), key=lambda path: path.name == final_name)
     output = create_output(root)
@@ -700,6 +704,9 @@ def collect_one(morphology, context, markers, manifest, audit=None, progress=Non
 
 def _collect_one(morphology, context, markers, manifest, logger, progress=None):
     root = morphology['root']
+    design = context['design']
+    markers = [marker for marker in markers if marker in context['markers']]
+    morphology['design'] = design
     destination = root / ASSAY_DIR
     logger.info('PARAMETERS | nuclei_run=%s | particle_size_px2=%s | markers=%s | images=%s | non_border_nuclei=%s',
                 morphology['run'], morphology['particle_size'], markers,
@@ -753,6 +760,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
         tables['Collection_Info'] = (INFO_COLUMNS, checks)
         with temporary_directory(destination) as temporary:
             staging = Path(temporary)
+            plate.save_snapshot(staging, design)
             exclusions.write_snapshot(staging, excluded)
             checks.append(info_row('Processing exclusions', 'Manifest', 'SNAPSHOT',
                                    details=f'{len(excluded)} excluded images',
@@ -776,7 +784,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
                 if progress:
                     progress.advance(path.name)
             filenames = [target for _, target in copies] + [
-                exclusions.MANIFEST, exclusions.TABLE,
+                exclusions.MANIFEST, exclusions.TABLE, plate.SNAPSHOT, 'plate_design.xlsx',
                 'FIA_Marker_Intensity_Nuclei.csv', 'FIA_Marker_Intensity_Images.csv', COMBINED_NAME]
             if progress:
                 progress.phase('Publishing verified collection')
@@ -803,6 +811,7 @@ def _collect_one(morphology, context, markers, manifest, logger, progress=None):
 
 
 def main(input_path):
+    plate.preflight(input_path, command='fia_collect_marker_intensity_results')
     audit = TableJournal('4_collect_marker_intensity.log', input_path)
     result = _main(input_path, audit)
     saved = audit.finish()

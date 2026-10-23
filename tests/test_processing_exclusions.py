@@ -16,6 +16,7 @@ import nuclear_intensity as intensity
 import numpy as np
 import pytest
 import tifffile
+from segmentation_unit import isolate_scheme_boundary
 from stardist_worker import ImageInferenceError, IsolatedStarDist, checked_normalize
 from test_collect_marker_intensity_results import (
     create_intensity,
@@ -81,6 +82,7 @@ for line in sys.stdin:
 
 
 def test_skipped_image_is_durable_and_reuse_accepts_only_accounted_masks(tmp_path, monkeypatch):
+    isolate_scheme_boundary(monkeypatch)
     source = tmp_path / 'experiment' / 'fia_assay' / 'Nuclei'
     source.mkdir(parents=True)
     good = np.arange(256, dtype=np.uint8).reshape(16, 16)
@@ -108,6 +110,7 @@ def test_skipped_image_is_durable_and_reuse_accepts_only_accounted_masks(tmp_pat
 
 
 def test_inference_exception_continues_and_closes_model(tmp_path, monkeypatch):
+    isolate_scheme_boundary(monkeypatch)
     source = tmp_path / 'experiment' / 'fia_assay' / 'Nuclei'
     source.mkdir(parents=True)
     image = np.arange(256, dtype=np.uint8).reshape(16, 16)
@@ -124,6 +127,7 @@ def test_inference_exception_continues_and_closes_model(tmp_path, monkeypatch):
 
 
 def test_model_initialization_failure_never_blacklists_inputs(tmp_path, monkeypatch):
+    isolate_scheme_boundary(monkeypatch)
     source = tmp_path / 'experiment' / 'fia_assay' / 'Nuclei'
     source.mkdir(parents=True)
     tifffile.imwrite(source / 'good_nuclei_projection.tif', np.arange(256, dtype=np.uint8).reshape(16, 16))
@@ -136,6 +140,7 @@ def test_model_initialization_failure_never_blacklists_inputs(tmp_path, monkeypa
 
 
 def test_worker_io_failure_stops_without_excluding_image(tmp_path, monkeypatch):
+    isolate_scheme_boundary(monkeypatch)
     source = tmp_path / 'experiment' / 'fia_assay' / 'Nuclei'
     source.mkdir(parents=True)
     tifffile.imwrite(source / 'good_nuclei_projection.tif', np.arange(256, dtype=np.uint8).reshape(16, 16))
@@ -286,8 +291,8 @@ def test_foci_paths_exclude_old_nuclei_and_marker_masks(tmp_path, monkeypatch):
     raw.write_bytes(b'raw')
     exclusions.exclude_image(run.parent, raw, 'INFERENCE', 'failed')
     foci = sys.modules['foci_quantification']
-    monkeypatch.setattr(foci, 'get_nuclei_mask_folder', lambda path: str(run))
-    monkeypatch.setattr(foci, 'get_latest_foci_folders', lambda path: {'Foci_1_Channel_2': str(marker)})
+    monkeypatch.setattr(foci, 'get_nuclei_mask_folder', lambda path, design=None: str(run))
+    monkeypatch.setattr(foci, 'get_latest_foci_folders', lambda path, design=None: {'Foci_1_Channel_2': str(marker)})
     paths, channels = foci.gather_paths_and_channels(str(root))
     assert len(paths) == 1 and Path(paths[0]).name.startswith('good_')
     assert set(channels) == {'good'}

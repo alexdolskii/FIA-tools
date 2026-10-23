@@ -4,16 +4,17 @@ if __name__ == '__main__':
     from runtime_worker import launch_direct
     raise SystemExit(launch_direct('select_channels'))
 
-from assay_layout import ASSAY_DIR, MARKERS_DIR
-
 import hashlib
+import json
 import os
 from pathlib import Path
 from uuid import uuid4
 
 import fiji_config
 import imagej
+import plate_design as plate
 import spatial_calibration as spatial
+from assay_layout import ASSAY_DIR, MARKERS_DIR
 from bioformats_progress import bioformats_progress
 from channel_run_log import ChannelRunLog
 from interactive_input import Cancelled, ask_integer, ask_yes_no, cancelable
@@ -86,35 +87,18 @@ def validate_folders(input_json_path: str) -> list:
 
 
 def select_settings(nuclei_only=False):
-    """Request shared channel settings once for the batch."""
-    # Request file type
-    print("\nSelect input file type:")
-    print("1. ND2 files (multi-channel Z-stacks)")
-    print("2. Multi-channel TIFF files with Z-stacks")
-    print("3. 2D multi-channel TIFF files (already projections)")
-    file_type = ask_integer("Enter choice (1-3; q = cancel): ", 1, 3)
+    """Only ambiguous TIFF projection semantics need user input."""
+    print("TIFF input: 2 = multichannel Z-stack; 3 = already projected 2D image")
+    return ask_integer("Input type (2-3; q = cancel): ", 2, 3)
 
-    # Request the nuclei segmentation channel (1-based).
-    nuclei_channel = ask_integer("Enter the nuclei segmentation "
-                                 "channel number (1-12; q = cancel): ", 1, 12)
 
-    if nuclei_only:
-        print(f"Nuclei-only preparation: channel {nuclei_channel}.")
-        return file_type, nuclei_channel, []
-
-    # Marker channels serve either the foci or nuclear-intensity workflow.
-    print("Marker channels can be used for foci analysis or nuclear marker-intensity measurements.")
-    num_foci_channels = ask_integer("How many marker channels do you want to "
-                                    "process? (at least 1; q = cancel): ", 1)
-
-    # Request channel numbers for each marker (1-based).
-    foci_channels = []
-    for i in range(num_foci_channels):
-        channel = ask_integer(f"Enter the channel number for marker {i + 1} "
-                              "(1-12; q = cancel): ", 1, 12)
-        foci_channels.append(channel)
-
-    return file_type, nuclei_channel, foci_channels
+def preparation_manifest(folder, design, files, status, sources, input_type):
+    plate.save_snapshot(folder, design)
+    payload = {'Status': status, 'Input_type': input_type, 'Files': files, 'Sources': sources}
+    target = Path(folder) / plate.PREPARATION
+    temporary = target.with_suffix('.tmp')
+    temporary.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+    temporary.replace(target)
 
 
 def confirm_output_folders(valid_folders):
@@ -179,6 +163,8 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
 
     if not valid_folders:
         raise ValueError("No supported input images were found; analysis was not started.")
+    designs = {Path(folder).resolve(): plate.load_design(folder) for folder in valid_folders}
+    inventories = {root: plate.sources(root, design) for root, design in designs.items()}
     selection = confirm_output_folders(valid_folders)
     if selection is None:
         return []
@@ -186,14 +172,13 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
     if not selected_folders:
         print("No folders selected for processing.\nExisting results preserved. Nothing to do.")
         return []
-    settings = None
+    initialized = False
+    tiff_type = None
     run_id = uuid4().hex
     script_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     statuses = []
 
-    total = sum(1 for folder in selected_folders for path in Path(folder).iterdir()
-                if path.is_file() and not path.name.startswith('.')
-                and path.suffix.lower() in ('.nd2', '.tif', '.tiff'))
+    total = sum(len(inventories[Path(folder).resolve()][0]) for folder in selected_folders)
     print(f"\nReady: {len(selected_folders)} folder(s), {total} images. "
           f"Skipped: {len(skipped_folders)} folder(s).")
     with CompactProgress(total) as progress:
@@ -207,38 +192,41 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
 
             with ChannelRunLog(input_folder, input_json_path, run_id, script_digest, progress) as run:
                 run.inventory()
+                design = designs[Path(input_folder).resolve()]
+                included, unassigned = inventories[Path(input_folder).resolve()]
+                run.files = [path.name for path in included]
+                for path in unassigned:
+                    run.logger.info('SKIPPED_BY_DESIGN | file=%s | unannotated well', path.name)
+                run.logger.info('PLATE_SCHEME | file=%s | sha256=%s', design.path, design.workbook_sha256)
+                prepared = {}
+                source_hashes = {p.name: plate.file_digest(p) for p in included}
+                if tiff_type is None and any(p.suffix.lower() != '.nd2' for p in included):
+                    tiff_type = select_settings()
+
                 progress.logger = run.logger
-                if settings is None:
+                if not initialized:
                     run.logger.info("Initializing ImageJ...")
                     ij = initialize_imagej()
                     IJ = jimport('ij.IJ')
                     ZProjector = jimport('ij.plugin.ZProjector')
                     ChannelSplitter = jimport('ij.plugin.ChannelSplitter')
-                    settings = select_settings(nuclei_only=True) if nuclei_only else select_settings()
-                file_type, nuclei_channel, foci_channels = settings
+                    initialized = True
                 run.logger.info("RUNTIME | ImageJ=%s", ij.getVersion())
-                if nuclei_only:
-                    run.logger.info("SETTINGS | mode=nuclei-only | input_type=%s | nuclei_channel=%d",
-                                    {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type], nuclei_channel)
-                else:
-                    run.logger.info("SETTINGS | input_type=%s | nuclei_channel=%d | marker_channels=%s",
-                                    {1: 'ND2 Z-stack', 2: 'TIFF Z-stack', 3: '2D TIFF'}[file_type],
-                                    nuclei_channel, foci_channels)
                 with bioformats_progress(progress):
                     # Create subfolder for Nuclei
                     nuclei_folder = os.path.join(processed_folder, "Nuclei")
                     Path(nuclei_folder).mkdir(parents=True, exist_ok=True)
                     run.logger.info("Nuclei folder: %s", nuclei_folder)
 
-                    # Channel identifiers are shared by both analysis workflows.
-                    foci_folders = {}
-                    for i, channel in enumerate(foci_channels):
-                        folder_name = os.path.join(processed_folder,
-                                                   MARKERS_DIR,
-                                                   f"Foci_{i + 1}_Channel_{channel}")
-                        Path(folder_name).mkdir(parents=True, exist_ok=True)
-                        foci_folders[channel] = folder_name
-                        run.logger.info("Marker channel %d folder: %s", channel, folder_name)
+                    folders = {None: Path(nuclei_folder)}
+                    if not nuclei_only:
+                        for method in ('Foci', 'Nuclear intensity', 'Field signal'):
+                            for marker in design.markers(method):
+                                folders[marker['id']] = Path(processed_folder) / MARKERS_DIR / marker['id']
+                    for folder in folders.values():
+                        folder.mkdir(parents=True, exist_ok=True)
+                        prepared[folder] = {}
+                        preparation_manifest(folder, design, {}, 'RUNNING', source_hashes, tiff_type or 1)
 
                     # Record source metadata separately from the run journal
                     metadata_file_path = os.path.join(processed_folder,
@@ -252,6 +240,17 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
 
                         for filename in run.files:
                             file_ext = os.path.splitext(filename)[1].lower()
+                            file_type = 1 if file_ext == '.nd2' else tiff_type
+                            well = plate.well_from_name(filename)
+                            nuclei_channel = design.channel(well, 'Nuclei')
+                            assignments = {row['channel']: row for row in design.wells[well]['channels']
+                                           if row and row['method'] in ('Foci', 'Nuclear intensity', 'Field signal')
+                                           and not nuclei_only}
+                            foci_channels = list(assignments)
+                            foci_folders = {number: str(folders[row['id']]) for number, row in assignments.items()}
+                            run.logger.info('IMAGE_ROUTING | file=%s | well=%s | nuclei_C=%s | markers=%s',
+                                            filename, well, nuclei_channel, assignments)
+
                             run.start_image(filename)
                             file_path = os.path.join(input_folder, filename)
                             progress.phase("Opening source")
@@ -269,6 +268,12 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                             width, height, channels, slices, frames = imp.getDimensions()
                             run.logger.info("DIMENSIONS | file=%s | W=%d | H=%d | C=%d | Z=%d | T=%d",
                                             filename, width, height, channels, slices, frames)
+                            try:
+                                design.validate_channels(well, channels)
+                            except ValueError as error:
+                                run.fail_image(str(error))
+                                imp.close()
+                                continue
                             # ---------------------------------------------------
                             # WRITE METADATA TO THE TEXT FILE
                             # ---------------------------------------------------
@@ -314,8 +319,8 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                             if (file_ext == '.nd2' or (file_ext in ('.tif', '.tiff')
                                                        and file_type in (1, 2))):
                                 run.logger.info("PROCESSING | file=%s | nuclei_projection=MAX%s | "
-                                                "output_bit_depth=8 | resize=False", filename,
-                                                " | marker_projection=SD" if foci_channels else "")
+                                                "nuclei_output_bit_depth=8 | resize=False", filename,
+                                                " | marker_projection=per method" if foci_channels else "")
                                 # Check if channels exist
                                 if (nuclei_channel > channels
                                         or any(foci_channel > channels
@@ -348,25 +353,34 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                                 IJ.saveAs(nuclei_proj, "Tiff", nuclei_out)
                                 spatial.save_snapshot(nuclei_out, calibration, (height, width), file_path)
                                 run.saved(nuclei_out, (height, width))
+                                prepared[Path(nuclei_folder)][Path(nuclei_out).name] = hashlib.sha256(Path(nuclei_out).read_bytes()).hexdigest()
 
                                 nuclei_proj.close()
                                 imp_nuclei.close()
 
-                                # Prepare marker channels as SD Z-projections.
+                                # Prepare each supported marker using its method-specific projection.
                                 for foci_channel in foci_channels:
-                                    progress.phase(f"Marker C{foci_channel} SD projection")
+                                    method = assignments[foci_channel]['method']
+                                    projection_name = {'Foci': 'SD', 'Nuclear intensity': 'MAX', 'Field signal': 'SUM'}[method]
+                                    progress.phase(f"{method} C{foci_channel} {projection_name} projection")
+                                    run.logger.info("MARKER_PREPARATION | file=%s | marker=%s | original_channel=%s | method=%s | projection=%s | to_8bit=%s", filename, assignments[foci_channel]['name'], foci_channel, method, projection_name, method == 'Foci')
                                     imp.setC(foci_channel)
                                     IJ.run(imp, "Duplicate...",
                                            f"title=imp_foci duplicate channels={foci_channel}")
                                     imp_foci = IJ.getImage()
 
                                     zp_foci = ZProjector(imp_foci)
-                                    zp_foci.setMethod(ZProjector.SD_METHOD)
+                                    method = assignments[foci_channel]['method']
+                                    projection_method = {'Foci': ZProjector.SD_METHOD,
+                                                         'Nuclear intensity': ZProjector.MAX_METHOD,
+                                                         'Field signal': ZProjector.SUM_METHOD}[method]
+                                    zp_foci.setMethod(projection_method)
                                     zp_foci.doProjection()
                                     foci_proj = zp_foci.getProjection()
 
                                     # Preserve native XY dimensions; convert segmentation input to 8-bit.
-                                    IJ.run(foci_proj, "8-bit", "")
+                                    if method == 'Foci':
+                                        IJ.run(foci_proj, "8-bit", "")
 
                                     # Save to the corresponding marker folder.
                                     foci_out = os.path.join(foci_folders[foci_channel],
@@ -376,6 +390,7 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                                     IJ.saveAs(foci_proj, "Tiff", foci_out)
                                     spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                                     run.saved(foci_out, (height, width))
+                                    prepared[Path(foci_folders[foci_channel])][Path(foci_out).name] = hashlib.sha256(Path(foci_out).read_bytes()).hexdigest()
 
                                     foci_proj.close()
                                     imp_foci.close()
@@ -385,7 +400,7 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
 
                             else:
                                 run.logger.info("PROCESSING | file=%s | projection=none (2D channel extraction) | "
-                                                "output_bit_depth=8 | resize=False", filename)
+                                                "nuclei_output_bit_depth=8 | marker_bit_depth=per method | resize=False", filename)
                                 # For 2D multi-channel TIFF files (file type 3)
                                 progress.phase("Extracting 2D channels")
 
@@ -415,13 +430,15 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                                 IJ.saveAs(imp_nuclei, "Tiff", nuclei_out)
                                 spatial.save_snapshot(nuclei_out, calibration, (height, width), file_path)
                                 run.saved(nuclei_out, (height, width))
+                                prepared[Path(nuclei_folder)][Path(nuclei_out).name] = hashlib.sha256(Path(nuclei_out).read_bytes()).hexdigest()
                                 imp_nuclei.close()
 
                                 # ----- Prepare marker channels (2D TIFF) -----
                                 for foci_channel in foci_channels:
                                     progress.phase(f"Extracting marker C{foci_channel}")
                                     imp_foci = splitted_channels[foci_channel - 1]
-                                    IJ.run(imp_foci, "8-bit", "")
+                                    if assignments[foci_channel]['method'] == 'Foci':
+                                        IJ.run(imp_foci, "8-bit", "")
 
                                     # Save to the corresponding marker folder.
                                     foci_out = os.path.join(foci_folders[foci_channel],
@@ -431,6 +448,7 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                                     IJ.saveAs(imp_foci, "Tiff", foci_out)
                                     spatial.save_snapshot(foci_out, calibration, (height, width), file_path)
                                     run.saved(foci_out, (height, width))
+                                    prepared[Path(foci_folders[foci_channel])][Path(foci_out).name] = hashlib.sha256(Path(foci_out).read_bytes()).hexdigest()
                                     imp_foci.close()
 
                                 # Close the original image
@@ -440,6 +458,10 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
                             IJ.run("Close All")
 
                             run.finish_image()
+                for folder, files in prepared.items():
+                    preparation_manifest(folder, design, files,
+                                         'COMPLETE' if run.completed == len(run.files) and not run.failed else 'INCOMPLETE',
+                                         source_hashes, tiff_type or 1)
             statuses.append(run.status)
     return statuses
 
@@ -447,8 +469,8 @@ def process_image(valid_folders: list, input_json_path=None, nuclei_only=False) 
 @cancelable
 def select_channel_name(input_json_path: str, nuclei_only=False):
     """
-    Reads the JSON file to get valid folders, then prompts the user
-    for file type and channel numbers, and processes images accordingly.
+    Read the experiment folders, confirm preparation and use Excel channel roles.
+    TIFF projection semantics are requested when they cannot be inferred.
     """
     # Validate input directories from the JSON file
     valid_folders = validate_folders(input_json_path)

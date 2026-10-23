@@ -12,12 +12,15 @@ import collect_marker_intensity_results as collector
 import nuclear_intensity as intensity
 import nuclei_morphology as morphology
 import numpy as np
+import plate_design
 import pytest
 from openpyxl import load_workbook
+from plate_helpers import M1, M2, M3, design
 
 
 def create_morphology(root, stamp='20260924_090000', particle_size=2, empty=False):
     root.mkdir(parents=True, exist_ok=True)
+    scheme = design(root)
     raw = root / 'field, WellA2.nd2'
     raw.write_bytes(b'not an image: the collector must never read pixels')
     run = root / 'fia_assay' / f'Final_Nuclei_Mask_{stamp}'
@@ -47,13 +50,14 @@ def create_morphology(root, stamp='20260924_090000', particle_size=2, empty=Fals
     metadata = {'schema_version': 1, 'status': 'complete', 'morphology_status': 'complete',
                 'particle_size_pixels_squared': particle_size, 'processed_files': [source_name], 'skipped_files': []}
     (run / 'nuclei_run.json').write_text(json.dumps(metadata))
+    plate_design.save_snapshot(run, scheme)
     return run, export, raw
 
 
-def create_intensity(morph, marker='Foci_1_Channel_2', stamp='20260924_100000',
+def create_intensity(morph, marker='NuclearIntensity_Marker_1_783c3a1993a9', stamp='20260924_100000',
                      ids=None, areas=None, state='complete', legacy=False, fingerprints=None):
     run, export, raw = morph
-    channel = int(marker.rsplit('_', 1)[1])
+    channel = {M1: 2, M2: 3, M3: 4}.get(marker, 2)
     name = f'Nuclear_Intensity_{stamp}' if legacy else f'Nuclear_Intensity_{marker}_{stamp}'
     output = run.parent / name
     output.mkdir()
@@ -77,13 +81,16 @@ def create_intensity(morph, marker='Foci_1_Channel_2', stamp='20260924_100000',
     summary = {**identifiers, 'Status': 'complete', 'Error': '', **intensity.summarize(rows),
                **{key: export.images[0][key] for key in collector.COUNTS},
                'Nuclei_measured_count': len(rows), 'Failed_nuclei_count': 0}
-    metadata = {'Schema_version': 1 if legacy else 2, 'Status': state,
+    metadata = {'Schema_version': 1 if legacy else 4, 'Status': state,
                 'Nuclei_run': str(run), 'Intensity_run': str(output),
                 'Particle_size_px2': export.particle_size, 'Marker_channel': channel}
     if not legacy:
-        metadata.update(Marker_folder=marker, Marker_folder_path=identifiers['Marker_folder_path'])
+        metadata.update(Analysis_method='Nuclear intensity', Marker_folder=marker, Marker_folder_path=identifiers['Marker_folder_path'],
+                        Marker_name={M1: 'Marker 1', M2: 'Marker 2', M3: 'Marker 3'}.get(marker),
+                        Channels_by_well={'A02': channel, 'A03': channel})
     if fingerprints is not None:
         metadata['Source_fingerprints'] = fingerprints
+    plate_design.save_snapshot(output, plate_design.load_design(raw.parent))
     intensity.save_tables(output, rows, [summary], metadata)
     (output / 'intensity_run.json').write_text(json.dumps(metadata))
     return output
@@ -108,18 +115,18 @@ def collect(morph, markers):
 def test_complete_collection_has_spreadsheets_exclusions_and_exact_source_copies(tmp_path):
     morph = create_morphology(tmp_path / 'experiment, A')
     first = create_intensity(morph)
-    second = create_intensity(morph, 'Foci_2_Channel_3')
+    second = create_intensity(morph, 'NuclearIntensity_Marker_2_0696330b24ce')
     before = {path: path.read_bytes() for path in morph[0].parent.rglob('*') if path.is_file()}
-    ok, output = collect(morph, ['Foci_1_Channel_2', 'Foci_2_Channel_3'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9', 'NuclearIntensity_Marker_2_0696330b24ce'])
     assert ok and output.parent == morph[0].parent and output.name.startswith(collector.OUTPUT_PREFIX)
-    assert len(list(output.iterdir())) == 17
-    assert all(path.is_file() and (path.suffix in ('.csv', '.xlsx') or path.name == 'excluded_images.json')
+    assert len(list(output.iterdir())) == 19
+    assert all(path.is_file() and (path.suffix in ('.csv', '.xlsx') or path.name in ('excluded_images.json', 'plate_design.json'))
                for path in output.iterdir())
     for filename in ('Nuclei_Morphology.xlsx', 'Nuclei_Morphology.csv', 'Nuclei_Images.csv', 'Nuclei_Run_Info.csv'):
         assert (output / filename).read_bytes() == before[morph[0] / filename]
-    for marker, source in [('Foci_1_Channel_2', first), ('Foci_2_Channel_3', second)]:
+    for marker, source in [('NuclearIntensity_Marker_1_783c3a1993a9', first), ('NuclearIntensity_Marker_2_0696330b24ce', second)]:
         for path in source.iterdir():
-            if path.suffix in ('.csv', '.xlsx') and path.name != 'Processing_Exclusions.csv':
+            if path.suffix in ('.csv', '.xlsx') and path.name not in ('Processing_Exclusions.csv', 'plate_design.xlsx'):
                 assert (output / collector.copy_name(path, marker)).read_bytes() == before[path]
     nuclei = sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')
     images = sheet_rows(output / collector.COMBINED_NAME, 'Images')
@@ -127,8 +134,8 @@ def test_complete_collection_has_spreadsheets_exclusions_and_exact_source_copies
     assert [row['Area_px2'] for row in nuclei] == [12, 20]
     assert nuclei[0]['Image_name'] == morph[2].name
     assert nuclei[0]['Morphology_Image_name'] == morph[1].nuclei[0]['Image_name']
-    assert nuclei[0]['Foci_1_Channel_2_Marker_Mean'] == 20
-    assert nuclei[0]['Foci_2_Channel_3_Marker_Mean'] == 30
+    assert nuclei[0]['NuclearIntensity_Marker_1_783c3a1993a9_Marker_Mean'] == 20
+    assert nuclei[0]['NuclearIntensity_Marker_2_0696330b24ce_Marker_Mean'] == 30
     assert images[0]['Nuclei_count_total'] == 3 and images[0]['Non_border_nuclei_count'] == 2
     assert 'Condition' not in nuclei[0] and 'Biological_replicate' not in nuclei[0]
     with (output / 'FIA_Marker_Intensity_Nuclei.csv').open(encoding='utf-8-sig', newline='') as handle:
@@ -140,9 +147,9 @@ def test_complete_collection_has_spreadsheets_exclusions_and_exact_source_copies
 def test_repeat_collection_keeps_previous_output(tmp_path):
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
-    _, first = collect(morph, ['Foci_1_Channel_2'])
+    _, first = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     saved = {p.name: p.read_bytes() for p in first.iterdir()}
-    _, second = collect(morph, ['Foci_1_Channel_2'])
+    _, second = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert second != first
     assert {p.name: p.read_bytes() for p in first.iterdir()} == saved
 
@@ -150,25 +157,25 @@ def test_repeat_collection_keeps_previous_output(tmp_path):
 def test_missing_marker_has_blank_values_and_explicit_status(tmp_path):
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
-    ok, output = collect(morph, ['Foci_1_Channel_2', 'Foci_2_Channel_3'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9', 'NuclearIntensity_Marker_2_0696330b24ce'])
     assert ok
     rows = sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')
-    assert rows[0]['Foci_2_Channel_3_Marker_Mean'] is None
-    assert rows[0]['Foci_2_Channel_3_Availability'] == 'MISSING'
+    assert rows[0]['NuclearIntensity_Marker_2_0696330b24ce_Marker_Mean'] is None
+    assert rows[0]['NuclearIntensity_Marker_2_0696330b24ce_Availability'] == 'MISSING'
     info = sheet_rows(output / collector.COMBINED_NAME, 'Collection_Info')
     assert any(row['Status'] == 'SUCCESS_WITH_MISSING_INTENSITY' for row in info)
-    assert not list(output.glob('Nuclear_Intensity*Foci_2_Channel_3*'))
+    assert not list(output.glob('Nuclear_Intensity*NuclearIntensity_Marker_2_0696330b24ce*'))
 
 
 def test_zero_nuclei_is_a_valid_result(tmp_path):
     morph = create_morphology(tmp_path / 'empty', empty=True)
     create_intensity(morph)
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert ok
     assert sheet_rows(output / collector.COMBINED_NAME, 'Nuclei') == []
     row = sheet_rows(output / collector.COMBINED_NAME, 'Images')[0]
     assert row['Non_border_nuclei_count'] == 0
-    assert row['Foci_1_Channel_2_Marker_Mean_Mean'] is None
+    assert row['NuclearIntensity_Marker_1_783c3a1993a9_Marker_Mean_Mean'] is None
 
 
 def test_long_run_metadata_preserves_full_csv_despite_excel_cell_limit(tmp_path):
@@ -177,10 +184,10 @@ def test_long_run_metadata_preserves_full_csv_despite_excel_cell_limit(tmp_path)
     source = create_intensity(morph, fingerprints=fingerprints)
     original = (source / 'Nuclear_Intensity_Run_Info.csv').read_bytes()
     assert len(original) > 131072
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert ok
-    assert (output / 'Nuclear_Intensity_Run_Info_Foci_1_Channel_2.csv').read_bytes() == original
-    assert (output / 'Nuclear_Intensity_Foci_1_Channel_2.xlsx').read_bytes() == (source / 'Nuclear_Intensity.xlsx').read_bytes()
+    assert (output / 'Nuclear_Intensity_Run_Info_NuclearIntensity_Marker_1_783c3a1993a9.csv').read_bytes() == original
+    assert (output / 'Nuclear_Intensity_NuclearIntensity_Marker_1_783c3a1993a9.xlsx').read_bytes() == (source / 'Nuclear_Intensity.xlsx').read_bytes()
     value = next(row['Value'] for row in sheet_rows(source / 'Nuclear_Intensity.xlsx', 'Run_Info')
                  if row['Parameter'] == 'Source_fingerprints')
     assert len(value) == 32767
@@ -191,7 +198,7 @@ def test_latest_cross_analysis_conflict_never_falls_back_to_older_matching_data(
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
     create_intensity(morph, stamp='20260924_110000', **change)
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert not ok
     assert [path.name for path in output.iterdir()] == ['Collection_Report.xlsx']
     info = sheet_rows(output / 'Collection_Report.xlsx', 'Collection_Info')
@@ -202,10 +209,10 @@ def test_incomplete_latest_run_can_use_older_complete_run(tmp_path):
     morph = create_morphology(tmp_path / 'experiment')
     complete = create_intensity(morph)
     create_intensity(morph, stamp='20260924_110000', state='running')
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert ok
     row = sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')[0]
-    assert row['Foci_1_Channel_2_Intensity_run_ID'] == complete.name
+    assert row['NuclearIntensity_Marker_1_783c3a1993a9_Intensity_run_ID'] == complete.name
 
 
 def test_wrong_nucleus_run_is_never_selected(tmp_path):
@@ -213,11 +220,11 @@ def test_wrong_nucleus_run_is_never_selected(tmp_path):
     new = create_morphology(old[2].parent, stamp='20260924_120000', particle_size=3)
     create_intensity(old, stamp='20260924_140000')
     expected = create_intensity(new, stamp='20260924_130000')
-    ok, output = collect(new, ['Foci_1_Channel_2'])
+    ok, output = collect(new, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert ok
     row = sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')[0]
     assert row['Nuclei_run_ID'] == new[0].name
-    assert row['Foci_1_Channel_2_Intensity_run_ID'] == expected.name
+    assert row['NuclearIntensity_Marker_1_783c3a1993a9_Intensity_run_ID'] == expected.name
 
 
 def test_stale_workbook_and_duplicate_nucleus_are_rejected(tmp_path):
@@ -242,27 +249,26 @@ def test_source_changes_before_publication_only_produce_diagnostic_workbook(tmp_
             source = morph[0] / 'Nuclei_Images.csv'
             source.write_bytes(source.read_bytes() + b'\n')
     monkeypatch.setattr(collector, 'write_workbook', change_source)
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert not ok
     assert [p.name for p in output.iterdir()] == ['Collection_Report.xlsx']
     info = sheet_rows(output / 'Collection_Report.xlsx', 'Collection_Info')
     assert not any(row['Status'] in ('SUCCESS', 'SUCCESS_WITH_MISSING_INTENSITY', 'COPIED') for row in info)
 
 
-def test_legacy_intensity_uses_explicit_channel_label(tmp_path):
+def test_legacy_channel_only_run_is_not_an_assigned_marker(tmp_path):
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph, legacy=True)
-    ok, output = collect(morph, ['Channel_2'])
-    assert ok
-    assert (output / 'Nuclear_Intensity_Channel_2.xlsx').exists()
-    assert sheet_rows(output / collector.COMBINED_NAME, 'Nuclei')[0]['Channel_2_Marker_Mean'] == 20
+    context = collector.scan_source(morph[2].parent)
+    assert context['intensity'] == []
+    assert 'Channel_2' not in context['markers']
 
 
 def test_hidden_and_foci_results_are_not_collected(tmp_path):
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
-    for name in ('.Final_Nuclei_Mask_20260924_180000', '._Nuclear_Intensity_Foci_1_Channel_2_20260924_190000',
-                 'Foci_Masks', 'Foci_1_Channel_2_20260924_200000'):
+    for name in ('.Final_Nuclei_Mask_20260924_180000', '._Nuclear_Intensity_NuclearIntensity_Marker_1_783c3a1993a9_20260924_190000',
+                 'Foci_Masks', 'NuclearIntensity_Marker_1_783c3a1993a9_20260924_200000'):
         folder = morph[0].parent / name
         folder.mkdir()
         (folder / 'bad.csv').write_bytes(b'not a result')
@@ -362,12 +368,12 @@ def test_collection_ignores_sidecars_created_during_export(tmp_path, appledouble
     morph = create_morphology(tmp_path / 'experiment')
     create_intensity(morph)
     appledouble_filesystem['moves'].clear()
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert ok
     events = appledouble_filesystem
-    assert all(not name.startswith('.') or name == '.excluded_images.json.tmp' for name in events['moves'])
+    assert all(not name.startswith('.') or name in ('.excluded_images.json.tmp', '.plate_design.json.tmp') for name in events['moves'])
     assert events['moves'][-1] == collector.COMBINED_NAME
-    assert len(events['moves']) == 14
+    assert len(events['moves']) == 17
     assert not (output / 'unrelated.csv').exists()
     assert not (output / '.DS_Store').exists()
     assert (output / 'Nuclei_Images.csv').read_bytes() == (morph[0] / 'Nuclei_Images.csv').read_bytes()
@@ -390,7 +396,7 @@ def test_failed_transfer_cleans_disappearing_sidecars_and_reports_original_error
         return paired_replace(path, target)
 
     monkeypatch.setattr(Path, 'replace', fail_real_spreadsheet)
-    ok, output = collect(morph, ['Foci_1_Channel_2'])
+    ok, output = collect(morph, ['NuclearIntensity_Marker_1_783c3a1993a9'])
     assert not ok
     assert '._Nuclei_Morphology.csv' in appledouble_filesystem['missing_unlinks']
     assert [path.name for path in output.iterdir() if not path.name.startswith('.')] == ['Collection_Report.xlsx']

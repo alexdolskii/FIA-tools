@@ -9,9 +9,9 @@ import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import nuclear_intensity as app
 import numpy as np
 import pytest
-import nuclear_intensity as app
 from intensity_run_log import IntensityJournal
 from terminal_progress import CompactProgress
 from test_nuclear_intensity import make_experiment
@@ -37,7 +37,7 @@ def setup_batch(tmp_path, monkeypatch):
         manifest.write_text(json.dumps({'paths_to_files': [str(root) for root in roots]}))
         engine = MagicMock(version='mock', bioformats_version='mock')
         engine.inspect.return_value = {'Width_px': labels.shape[1], 'Height_px': labels.shape[0],
-                                       'Z_planes': 3, 'Pixel_type': 'uint16'}
+                                       'Z_planes': 3, 'Pixel_type': 'uint16', 'Channels': 2}
         engine.labels.return_value = np.zeros_like(labels)
         engine.populations.return_value = ([], [], [])
         engine.measure.return_value = ([], {key: 0 for key in app.COUNTS})
@@ -80,7 +80,7 @@ def test_two_json_folders_one_marker_nd2_need_only_mask_choices(
         assert text.count('RUN_STARTED |') == text.count('RUN_FINISHED |') == 1
         assert 'status=COMPLETE' in text.split('RUN_FINISHED |')[1]
         assert 'INPUT_TYPE | nd2 | selection=automatic' in text
-        assert 'original_channel=2' in text and "'Pixel_type': 'uint16'" in text
+        assert 'channel=2' in text and "'Pixel_type': 'uint16'" in text
         assert 'TABLES_SAVED' in text and 'elapsed=' in text
         assert not list((root / 'fia_assay').glob('Nuclear_Intensity_*/intensity.log'))
     assert str(roots[1]) not in journal(roots[0]).read_text()
@@ -178,26 +178,22 @@ def test_initialization_failure_is_logged_for_all_inputs(setup_batch, monkeypatc
         assert 'JVM unavailable' in text and 'Traceback' in text and 'status=FAILED' in text
 
 
-def test_missing_selected_marker_makes_batch_incomplete_without_substitution(setup_batch):
+def test_prepared_marker_files_are_not_measurement_inputs(setup_batch):
     manifest, roots, _, _, engine, _ = setup_batch(multiple=False)
-    next((roots[1] / 'fia_assay' / 'markers' / 'Foci_1_Channel_2').glob('*.tif')).unlink()
-    assert app.main(manifest) == 1
-    assert engine.measure.call_count == 1
-    assert 'status=COMPLETE' in journal(roots[0]).read_text().split('RUN_FINISHED |')[1]
-    text = journal(roots[1]).read_text()
-    assert 'Selected marker folder is missing' in text and 'status=INCOMPLETE' in text
+    import shutil
+    shutil.rmtree(roots[1] / 'fia_assay' / 'markers')
+    assert app.main(manifest) == 0
+    assert engine.measure.call_count == 2
 
 
-def test_missing_json_folder_is_recorded_and_prevents_overall_success(setup_batch, tmp_path):
-    manifest, roots, _, _, _, _ = setup_batch(count=1, multiple=False)
+def test_missing_json_folder_stops_whole_batch_before_engine(setup_batch, tmp_path):
+    manifest, roots, _, _, _engine, factory = setup_batch(count=1, multiple=False)
     missing = tmp_path / 'unavailable'
     manifest.write_text(json.dumps({'paths_to_files': [str(roots[0]), str(missing)]}))
     assert app.main(manifest) == 1
+    factory.assert_not_called()
     assert not missing.exists()
-    output = next((roots[0] / 'fia_assay').glob('Nuclear_Intensity_*'))
-    metadata = json.loads((output / 'batch.json').read_text())
-    assert metadata['status'] == 'incomplete' and len(metadata['skipped_experiments']) == 1
-    assert 'SKIPPED_EXPERIMENT' in journal(roots[0]).read_text()
+    assert not list((roots[0] / 'fia_assay').glob('Nuclear_Intensity_*'))
 
 
 def test_tiff_and_mixed_formats_keep_explicit_type_question(monkeypatch):

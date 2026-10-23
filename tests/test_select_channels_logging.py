@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 import tifffile
 from channel_run_log import ChannelRunLog
+from plate_helpers import design
 from terminal_progress import CompactProgress
 
 mod = sys.modules["select_channels"]
@@ -43,11 +44,12 @@ def runtime(monkeypatch):
     return ij
 
 
-def source_folder(parent, name="images", filenames=("good.tif",)):
+def source_folder(parent, name="images", filenames=("good_WellA02.tif",)):
     folder = parent / name
     folder.mkdir()
     for filename in filenames:
         (folder / filename).touch()
+    design(folder, channels=['Nuclei: DAPI', 'Foci: Marker 1', 'Ignore'])
     return folder
 
 
@@ -95,14 +97,14 @@ def test_settings_cancellation_preserves_images_and_remaining_folder(
 
 
 def test_channel_journal_omits_block_percentages_but_keeps_phases_and_diagnostics(tmp_path):
-    folder = source_folder(tmp_path, filenames=("image.nd2",))
+    folder = source_folder(tmp_path, filenames=("image_WellA02.nd2",))
     (folder / "fia_assay").mkdir()
     stream = io.StringIO()
     with CompactProgress(1, stream) as progress:
         with ChannelRunLog(folder, None, "test", "digest", progress) as audit:
             audit.inventory()
             progress.logger = audit.logger
-            audit.start_image("image.nd2")
+            audit.start_image("image_WellA02.nd2")
             progress.phase("Opening source")
             progress.bioformats_event("ND2Reader initializing image.nd2")
             for percent in range(100):
@@ -116,21 +118,21 @@ def test_channel_journal_omits_block_percentages_but_keeps_phases_and_diagnostic
 
     log = journal(folder)
     assert "INFO - Bio-Formats: Parsing block" not in log
-    assert log.count("PHASE | file=image.nd2 | ND2 structure") == 1
-    assert "PHASE | file=image.nd2 | Opening source" in log
-    assert "PHASE | file=image.nd2 | Creating nuclei MAX projection" in log
+    assert log.count("PHASE | file=image_WellA02.nd2 | ND2 structure") == 1
+    assert "PHASE | file=image_WellA02.nd2 | Opening source" in log
+    assert "PHASE | file=image_WellA02.nd2 | Creating nuclei MAX projection" in log
     assert "ND2Reader initializing image.nd2" in log
     for level, message in (("WARNING", "warning"), ("ERROR", "error")):
         assert f"{level} - Bio-Formats: Parsing block 'ImageDataSeq' 42%: {message}" in log
         assert stream.getvalue().count(f"42%: {message}") == 1
-    assert "IMAGE_COMPLETED | file=image.nd2 | elapsed_s=" in log
+    assert "IMAGE_COMPLETED | file=image_WellA02.nd2 | elapsed_s=" in log
     assert "STARTED | run_id=test" in log and "FINISHED | status=SUCCESS" in log
 
 
 @pytest.mark.parametrize("file_type,filename,processing", [
-    ("1", "good.nd2", "nuclei_projection=MAX | marker_projection=SD"),
-    ("2", "good.tiff", "nuclei_projection=MAX | marker_projection=SD"),
-    ("3", "good.tif", "projection=none (2D channel extraction)"),
+    ("1", "good_WellA02.nd2", "nuclei_projection=MAX | marker_projection=per method"),
+    ("2", "good_WellA02.tiff", "nuclei_projection=MAX | marker_projection=per method"),
+    ("3", "good_WellA02.tif", "projection=none (2D channel extraction)"),
 ])
 def test_success_logs_settings_outputs_and_preserves_calibration(
         tmp_path, monkeypatch, runtime, file_type, filename, processing):
@@ -138,12 +140,12 @@ def test_success_logs_settings_outputs_and_preserves_calibration(
     (folder / "directory.tif").mkdir()
     root_handlers = list(logging.getLogger().handlers)
     manifest = tmp_path / "input.json"
-    assert run(monkeypatch, [folder], (file_type, "1", "1", "2"), manifest) == ["SUCCESS"]
+    assert run(monkeypatch, [folder], (file_type if file_type != "1" else "2",), manifest) == ["SUCCESS"]
     log = journal(folder)
     assert "FINISHED | status=SUCCESS | input_images=1 | attempted=1 | completed=1 | failed=0" in log
     assert "output_files=2" in log
-    assert "ignored_hidden_files=2 | ignored_unsupported_files=1" in log
-    assert "nuclei_channel=1 | marker_channels=[2]" in log
+    assert "ignored_hidden_files=2 | ignored_unsupported_files=2" in log
+    assert 'nuclei_C=1' in log and "'channel': 2" in log
     assert "pixel_X_um=0.2 | pixel_Y_um=0.3" in log
     assert str(manifest) in log
     assert "W=17 | H=10 | C=3 | Z=4 | T=1" in log
@@ -161,13 +163,13 @@ def test_success_logs_settings_outputs_and_preserves_calibration(
 
 
 def test_partial_and_failed_folders_have_independent_logs(tmp_path, monkeypatch, runtime):
-    first = source_folder(tmp_path, "first", ("good.tif", "bad.tif"))
-    second = source_folder(tmp_path, "second", ("another_bad.tif",))
+    first = source_folder(tmp_path, "first", ("good_WellA02.tif", "bad_WellA02.tif"))
+    second = source_folder(tmp_path, "second", ("another_bad_WellA02.tif",))
     image = runtime.openImage.return_value
-    runtime.openImage.side_effect = lambda path: image if Path(path).name == "good.tif" else None
+    runtime.openImage.side_effect = lambda path: image if Path(path).name == "good_WellA02.tif" else None
     assert run(monkeypatch, [first, second]) == ["PARTIAL", "FAILED"]
     assert "completed=1 | failed=1" in journal(first)
-    assert "another_bad.tif" not in journal(first)
+    assert "another_bad_WellA02.tif" not in journal(first)
     assert "file=good.tif" not in journal(second)
     assert "completed=0 | failed=1" in journal(second)
 
@@ -214,7 +216,8 @@ def test_initialization_failure_is_logged(tmp_path, monkeypatch, runtime):
 @pytest.mark.parametrize("file_type", ["2", "3"])
 def test_missing_channel_is_not_reported_as_success(tmp_path, monkeypatch, runtime, file_type):
     folder = source_folder(tmp_path)
-    assert run(monkeypatch, [folder], (file_type, "1", "1", "4")) == ["FAILED"]
+    design(folder, channels=['Nuclei: DAPI', 'Ignore', 'Ignore', 'Foci: Marker 1'])
+    assert run(monkeypatch, [folder], (file_type,)) == ["FAILED"]
     assert "completed=0 | failed=1" in journal(folder)
     assert "output_files=0" in journal(folder)
 
@@ -301,7 +304,7 @@ def test_all_overwrite_confirmations_precede_initialization_and_writes(tmp_path,
             target = first if str(first) in prompt else second
             events.append(str(target / "fia_assay"))
             return "yes"
-        assert events[-1] == "ImageJ"
+        assert "ImageJ" not in events
         return next(choices)
 
     # Both confirmations must occur before the first ImageJ call or log rotation.
@@ -343,9 +346,9 @@ def test_invalid_confirmation_does_not_allow_overwrite(tmp_path, monkeypatch, ru
 @pytest.mark.parametrize("choices,selected_index", [(("no", "yes"), 1), (("yes", "n"), 0)])
 def test_independent_folder_choices_preserve_skips_and_count_selected_images(
         tmp_path, monkeypatch, runtime, capsys, choices, selected_index):
-    first = source_folder(tmp_path, "first", ("first.tif", "extra.tif", "._first.tif"))
-    second = source_folder(tmp_path, "second", ("second.tif", ".hidden.tif"))
-    fresh = source_folder(tmp_path, "fresh", ("new.tif",))
+    first = source_folder(tmp_path, "first", ("first_WellA02.tif", "extra_WellA02.tif", "._first.tif"))
+    second = source_folder(tmp_path, "second", ("second_WellA02.tif", ".hidden.tif"))
+    fresh = source_folder(tmp_path, "fresh", ("new_WellA02.tif",))
     previous = {**existing_results(first), **existing_results(second)}
     folders = [first, second, fresh]
     skipped = folders[1 - selected_index]
@@ -363,7 +366,7 @@ def test_independent_folder_choices_preserve_skips_and_count_selected_images(
         return next(answers)
 
     def start_imagej():
-        assert len(prompts) == 2
+        assert len(prompts) == 3
         assert str(first) in prompts[0] and str(second) in prompts[1]
         assert all(path.read_bytes() == content for path, content in previous.items() if skipped in path.parents)
         return initialize()

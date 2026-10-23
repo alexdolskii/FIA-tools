@@ -18,7 +18,7 @@ from matplotlib.figure import Figure
 from PIL import Image
 from table_workflow import TableProgress
 
-MARKER = 'Foci_1_Channel_2'
+MARKER = 'NuclearIntensity_Marker_1_783c3a1993a9'
 
 
 def four_blocks(unit, contexts=None):
@@ -279,7 +279,11 @@ def test_descriptive_template_retains_direct_colors_without_requiring_controls(t
     path = plate(tmp_path / 'plate.xlsx')
     book = load_workbook(path)
     book.active['C2'].font = Font()
+    book.active['B15'].font = Font()
     book.active['D2'].fill = PatternFill('solid', fgColor='ABC123')
+    book.active['C15'] = None
+    book.active['B16'] = book.active['D2'].value
+    book.active['B16'].fill = PatternFill('solid', fgColor='ABC123')
     book.save(path)
     _, design = inputs.read_template(path, {}, statistics=False)
     assert len({row['Color'] for row in design}) == 2

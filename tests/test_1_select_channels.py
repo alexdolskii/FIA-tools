@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from plate_helpers import design
 
 # The module was loaded and registered by conftest.py.
 mod = sys.modules["select_channels"]
@@ -141,7 +142,8 @@ class TestProcessImage:
         """Helper: create a temp folder structure with one stub .tif file."""
         img_dir = tmp_path / "raw"
         img_dir.mkdir()
-        (img_dir / "image1.tif").touch()
+        (img_dir / "image1_WellA02.tif").touch()
+        design(img_dir)
         return img_dir
 
     def test_creates_output_folders_and_metadata_file(self, tmp_path):
@@ -191,4 +193,4 @@ class TestProcessImage:
 
     def test_invalid_file_type_selection_repeats_the_question(self):
         with patch("builtins.input", side_effect=["0", "abc", "3", "1", "1", "2"]):
-            assert mod.select_settings() == (3, 1, [2])
+            assert mod.select_settings() == 3

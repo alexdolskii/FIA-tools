@@ -8,7 +8,7 @@ from marker_report_data import COUNT, metric_value, report_specs
 from scipy.stats import ttest_ind
 
 STAT_COLUMNS = [
-    'Block', 'Category', 'Marker', 'Metric', 'Unit', 'Control', 'Treatment',
+    'Block', 'Category', 'Marker', 'Marker_name', 'Metric', 'Unit', 'Control', 'Treatment',
     'Requested_unit', 'Effective_unit', 'Method', 'N_control', 'N_treatment',
     'Control_images', 'Treatment_images', 'Control_wells', 'Treatment_wells',
     'Control_nuclei', 'Treatment_nuclei', 'Mean_control', 'Mean_treatment',
@@ -93,19 +93,37 @@ def calculate_statistics(data):
         data['statistics'] = []
         return data
     specs, rows = report_specs(data), []
+    families = {}
+    for spec in specs:
+        families.setdefault(spec[1], []).append(spec)
     for color, groups in data['blocks'].items():
         control = next(group for group, is_control in groups.items() if is_control)
         treatments = [group for group in groups if group != control]
-        family_size = len(specs) * len(treatments)
-        family = [comparison(data, color, spec, control, treatment, family_size)
-                  for spec in specs for treatment in treatments]
-        tested = [row for row in family if row['P_raw'] is not None]
-        adjusted = holm_adjust([row['P_raw'] for row in tested], family_size)
-        for row, p_value in zip(tested, adjusted):
-            row['P_Holm'] = p_value
-            row['Significant_Holm_0_05'] = p_value < 0.05
-        for row in family:
-            row['Family_tests_available'] = len(tested)
-        rows.extend(family)
+        for marker, marker_specs in families.items():
+            eligible = data.get('eligible_wells', {}).get(marker)
+            conditions = ({row['Group'] for row in data['design'] if row['Well'] in eligible}
+                          if eligible is not None else set(groups))
+            planned = [(spec, treatment) for spec in marker_specs for treatment in treatments
+                       if control in conditions and treatment in conditions]
+            family_size = len(planned)
+            family = [comparison(data, color, spec, control, treatment, family_size)
+                      for spec, treatment in planned]
+            for spec in marker_specs:
+                for treatment in treatments:
+                    if control in conditions and treatment in conditions:
+                        continue
+                    row = comparison(data, color, spec, control, treatment, family_size)
+                    row.update(Status='NOT_APPLICABLE', Reason='Marker is not assigned to both conditions in the plate scheme.',
+                               P_raw=None, P_Holm=None, Significant_Holm_0_05=None)
+                    family.append(row)
+            tested = [row for row in family if row['P_raw'] is not None]
+            adjusted = holm_adjust([row['P_raw'] for row in tested], family_size)
+            for row, p_value in zip(tested, adjusted):
+                row['P_Holm'] = p_value
+                row['Significant_Holm_0_05'] = p_value < 0.05
+            for row in family:
+                row['Family_tests_available'] = len(tested)
+                row['Marker_name'] = data.get('marker_labels', {}).get(marker, marker)
+            rows.extend(family)
     data['statistics'] = rows
     return data

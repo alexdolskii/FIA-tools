@@ -5,6 +5,7 @@ if __name__ == '__main__':
     raise SystemExit(launch_direct('quantify_foci'))
 
 import itertools
+import json
 import logging
 import os
 import re
@@ -13,14 +14,18 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import collect_marker_intensity_results as collect
 import image_exclusions as exclusions
 import numpy as np
 import pandas as pd
+import plate_design as plate
 import spatial_calibration as spatial
 from assay_layout import ASSAY_DIR
-from interactive_input import Cancelled, ask_yes_no, cancelable
+from interactive_input import CANCELLATION_EXCEPTIONS
 from PIL import Image, ImageDraw
+from run_resources import utc_now, write_json
 from skimage import io, measure
+from table_workflow import TableJournal, TableProgress
 from validate_folders import validate_input_file
 
 
@@ -66,7 +71,7 @@ def extract_metadata(metadata_path: str) -> dict:
     return spatial.read_text_metadata(metadata_path)
 
 
-def get_nuclei_mask_folder(fia_assay_folder: str) -> str:
+def get_nuclei_mask_folder(fia_assay_folder: str, design=None) -> str:
     """
     Finds the newest folder containing
     nuclei masks (e.g., Final_Nuclei_Mask_YYYYMMDD_HHMMSS).
@@ -89,16 +94,49 @@ def get_nuclei_mask_folder(fia_assay_folder: str) -> str:
                          f"folders in {fia_assay_folder}.")
 
     folder_timestamps.sort(key=lambda x: x[1], reverse=True)
-    latest_folder = folder_timestamps[0][0]
-    return os.path.join(fia_assay_folder, latest_folder)
+    if design is not None:
+        for folder, _ in folder_timestamps:
+            path = Path(fia_assay_folder) / folder
+            try:
+                plate.validate_snapshot(path, design)
+                collect.load_morphology(path)
+                return str(path)
+            except (OSError, ValueError, KeyError) as error:
+                logging.warning('Skipping incompatible nuclei run %s: %s', path, error)
+        raise ValueError('No completed compatible nuclei run; run generate_nuclei_mask first.')
+    return os.path.join(fia_assay_folder, folder_timestamps[0][0])
 
 
-def get_latest_foci_folders(fia_assay_folder: str) -> dict:
+def get_latest_foci_folders(fia_assay_folder: str, design=None) -> dict:
     """
     Finds the newest folders with foci masks for
     each channel (e.g., Foci_1_Channel_1_YYYYMMDD_HHMMSS).
     Returns a dict {channel_name: folder_path}.
     """
+    if design is not None:
+        result = {}
+        base = Path(fia_assay_folder) / 'Foci_Masks'
+        for folder in sorted(base.iterdir(), reverse=True) if base.exists() else []:
+            if not folder.is_dir() or folder.name.startswith('.'):
+                continue
+            try:
+                meta = json.loads((folder / 'foci_run.json').read_text(encoding='utf-8'))
+                marker = meta['Marker_ID']
+                if marker in result or meta['Status'] != 'COMPLETE':
+                    continue
+                plate.validate_snapshot(folder, design, 'Foci', marker)
+                prepared = Path(fia_assay_folder) / 'markers' / marker
+                plate.preparation_files(prepared)
+                for name, checksum in meta['Inputs'].items():
+                    if plate.file_digest(prepared / name) != checksum:
+                        raise ValueError('Prepared marker changed after masking')
+                for name, checksum in meta['Masks'].items():
+                    if plate.file_digest(folder / name) != checksum:
+                        raise ValueError('Foci mask changed after analysis')
+                result[marker] = str(folder)
+            except (OSError, ValueError, KeyError) as error:
+                logging.warning('Skipping incompatible foci run %s: %s', folder, error)
+        return result
     foci_masks_folder = os.path.join(fia_assay_folder,
                                      "Foci_Masks")
     if not os.path.exists(foci_masks_folder):
@@ -305,7 +343,7 @@ def process_nuclei_image(nuc_file_path: str,
                          results_folder: str,
                          perform_colocalization: bool,
                          min_subset_size=2,
-                         max_subset_size=None) -> list:
+                         max_subset_size=None, requested_intersections=None) -> list:
     """
     Processes ONE nucleus mask + all corresponding foci channels.
 
@@ -365,10 +403,14 @@ def process_nuclei_image(nuc_file_path: str,
             continue
 
         if not os.path.exists(path_ch):
+            if requested_intersections is not None:
+                raise ValueError(f'Required Foci mask is missing: {path_ch}')
             logging.warning(f"Foci file not found: {path_ch}")
             continue
         foci_mask = io.imread(path_ch)
         if foci_mask.shape != nuclei_mask.shape:
+            if requested_intersections is not None:
+                raise ValueError(f'Required Foci mask dimensions differ from nuclei: {path_ch}')
             logging.warning(f"Foci shape {foci_mask.shape} "
                             f"!= Nuclei shape {nuclei_mask.shape}. "
                             f"Skipping {path_ch}")
@@ -406,6 +448,7 @@ def process_nuclei_image(nuc_file_path: str,
     for df_next in all_dfs[1:]:
         # we allow duplicates of "Nucleus Area (pixels)"
         # but they are the same => no conflict yet
+        df_next = df_next.drop(columns=['Nucleus Area (pixels)', 'Nucleus Area (micron²)'])
         df_single = df_single.merge(df_next,
                                     on=["Image Key", "Nucleus"],
                                     how="outer")
@@ -427,66 +470,69 @@ def process_nuclei_image(nuc_file_path: str,
     ch_name_list.sort()
 
     df_intersections = []
-    for r in range(min_subset_size, max_subset_size + 1):
-        for subset in itertools.combinations(ch_name_list, r):
-            subset_str = "+".join(subset)
-            # Build labeled intersection
-            masks_to_intersect = [channel_masks[ch] for ch in subset]
-            intersection_mask = build_intersection_mask(*masks_to_intersect)
+    subsets = (requested_intersections if requested_intersections is not None else
+               [subset for r in range(min_subset_size, max_subset_size + 1)
+                for subset in itertools.combinations(ch_name_list, r)])
+    for subset in subsets:
+        if any(ch not in channel_masks for ch in subset):
+            raise ValueError(f'Requested intersection lacks a valid mask: {subset}')
+        subset_str = "+".join(subset)
+        # Build labeled intersection
+        masks_to_intersect = [channel_masks[ch] for ch in subset]
+        intersection_mask = build_intersection_mask(*masks_to_intersect)
 
-            # Convert to black-objects, white-background:
-            #   objects = 0, background = 255
-            # This is a binary representation, losing distinct labels
-            # but satisfying the user's request
-            # for black object / white background
-            inverted_mask = (np.where(intersection_mask > 0, 0, 255)
-                             .astype(np.uint8))
+        # Convert to black-objects, white-background:
+        #   objects = 0, background = 255
+        # This is a binary representation, losing distinct labels
+        # but satisfying the user's request
+        # for black object / white background
+        inverted_mask = (np.where(intersection_mask > 0, 0, 255)
+                         .astype(np.uint8))
 
-            # Save new mask
-            intersection_name = (f"intersection_"
-                                 f"{nuc_key}_{subset_str}.tif")
-            save_path = os.path.join(results_folder,
-                                     intersection_name)
-            io.imsave(save_path, inverted_mask)
-            logging.info(f"Saved intersection mask "
-                         f"(black objects/white bg): {save_path}")
+        # Save new mask
+        intersection_name = f"intersection_{plate.digest([nuc_key, sorted(subset)])[:24]}.tif"
+        save_path = os.path.join(results_folder,
+                                 intersection_name)
+        io.imsave(save_path, inverted_mask)
+        logging.info(f"Saved intersection mask "
+                     f"(black objects/white bg): {save_path}")
 
-            # We still measure the labeled intersection (for stats),
-            # so let's measure intersection_mask as is
-            inter_res = count_foci_in_nuclei(nuclei_labels,
-                                             intersection_mask,
-                                             pixel_area_micron,
-                                             nuc_key)
-            df_temp = pd.DataFrame(inter_res)
+        # We still measure the labeled intersection (for stats),
+        # so let's measure intersection_mask as is
+        inter_res = count_foci_in_nuclei(nuclei_labels,
+                                         intersection_mask,
+                                         pixel_area_micron,
+                                         nuc_key)
+        df_temp = pd.DataFrame(inter_res)
 
-            # For intersection-based results,
-            # we don't want repeated nucleus-area columns
-            # because merges cause duplicates.
-            # So let's drop them before renaming:
-            # 'Nucleus Area (pixels)' and 'Nucleus Area (micron²)'
-            # are redundant
-            # we only keep them from the single-ch data
-            if "Nucleus Area (pixels)" in df_temp.columns:
-                df_temp.drop(columns=["Nucleus Area (pixels)"],
-                             inplace=True,
-                             errors="ignore")
-            if "Nucleus Area (micron²)" in df_temp.columns:
-                df_temp.drop(columns=["Nucleus Area (micron²)"],
-                             inplace=True,
-                             errors="ignore")
+        # For intersection-based results,
+        # we don't want repeated nucleus-area columns
+        # because merges cause duplicates.
+        # So let's drop them before renaming:
+        # 'Nucleus Area (pixels)' and 'Nucleus Area (micron²)'
+        # are redundant
+        # we only keep them from the single-ch data
+        if "Nucleus Area (pixels)" in df_temp.columns:
+            df_temp.drop(columns=["Nucleus Area (pixels)"],
+                         inplace=True,
+                         errors="ignore")
+        if "Nucleus Area (micron²)" in df_temp.columns:
+            df_temp.drop(columns=["Nucleus Area (micron²)"],
+                         inplace=True,
+                         errors="ignore")
 
-            # rename foci columns
-            df_temp.rename(columns={
-                "Foci Count":
-                    f"Foci Count ({subset_str})",
-                "Total Foci Area (pixels)":
-                    f"Total Foci Area (pixels) ({subset_str})",
-                "Total Foci Area (micron²)":
-                    f"Total Foci Area (micron²) ({subset_str})",
-                "Relative Foci Area (%)":
-                    f"Relative Foci Area (%) ({subset_str})"
-            }, inplace=True)
-            df_intersections.append(df_temp)
+        # rename foci columns
+        df_temp.rename(columns={
+            "Foci Count":
+                f"Foci Count ({subset_str})",
+            "Total Foci Area (pixels)":
+                f"Total Foci Area (pixels) ({subset_str})",
+            "Total Foci Area (micron²)":
+                f"Total Foci Area (micron²) ({subset_str})",
+            "Relative Foci Area (%)":
+                f"Relative Foci Area (%) ({subset_str})"
+        }, inplace=True)
+        df_intersections.append(df_temp)
 
     if df_intersections:
         df_inter_merged = df_intersections[0]
@@ -509,7 +555,7 @@ def process_nuclei_image(nuc_file_path: str,
 
 
 # Gathering folders
-def gather_paths_and_channels(base_folder: str):
+def gather_paths_and_channels(base_folder: str, design=None):
     """
     1) Finds the newest nuclei folder,
     2) Collects all *.tif files (nuclei),
@@ -518,23 +564,33 @@ def gather_paths_and_channels(base_folder: str):
     """
     fia_assay_folder = os.path.join(base_folder,
                                      ASSAY_DIR)
-    nuclei_mask_folder = get_nuclei_mask_folder(fia_assay_folder)
+    nuclei_mask_folder = get_nuclei_mask_folder(fia_assay_folder, design)
+    if design:
+        plate.validate_snapshot(nuclei_mask_folder, design)
     excluded = exclusions.load_exclusions(nuclei_mask_folder)
+    excluded.update(exclusions.load_exclusions(fia_assay_folder))
 
     nuclei_files = []
     for f in os.listdir(nuclei_mask_folder):
-        if not f.startswith('.') and f.endswith(".tif") and exclusions.image_key(f) not in excluded:
+        if (not f.startswith('.') and f.endswith(".tif") and exclusions.image_key(f) not in excluded
+                and (design is None or design.assigned(plate.well_from_name(f), 'Foci'))):
             nuclei_files.append(os.path.join(nuclei_mask_folder, f))
 
-    latest_foci = get_latest_foci_folders(fia_assay_folder)
+    latest_foci = get_latest_foci_folders(fia_assay_folder, design)
     channels_dict = {}
 
     for channel_name, foci_folder_path in latest_foci.items():
+        declared = (set(json.loads((Path(foci_folder_path) / 'foci_run.json').read_text())['Masks'])
+                    if design else None)
         foci_files = [fn for fn in
                       os.listdir(foci_folder_path)
                       if not fn.startswith('.') and fn.endswith(".tif")]
         for tif_file in foci_files:
+            if declared is not None and tif_file not in declared:
+                continue
             if exclusions.image_key(tif_file) in excluded:
+                continue
+            if design and not design.assigned(plate.well_from_name(tif_file), 'Foci', channel_name):
                 continue
             foci_key = extract_image_key(tif_file)
             if foci_key not in channels_dict:
@@ -551,7 +607,7 @@ def parallel_processing(nuclei_files: list,
                         metadata: dict,
                         results_folder: str,
                         perform_colocalization: bool,
-                        max_workers: int) -> pd.DataFrame:
+                        max_workers: int, design=None, progress=None, logger=None) -> pd.DataFrame:
     """gi
     Runs parallel processing of the given list of nuclei_files.
     Gathers all results into a single DataFrame.
@@ -565,36 +621,43 @@ def parallel_processing(nuclei_files: list,
     logging.info(f"Total tasks (nuclei files): {total_tasks}. "
                  f"Starting pool with max_workers={max_workers}.")
 
+    tasks = []
+    for nuc_file_path in nuclei_files:
+        nuc_filename = os.path.basename(nuc_file_path)
+        nuc_key = extract_image_key(nuc_filename)
+
+        if nuc_key not in channels_dict:
+            if design:
+                raise ValueError(f"Missing required Foci masks for {nuc_key}")
+            logging.warning(f"No foci channels found for {nuc_key}")
+            continue
+
+        foci_channels_info = channels_dict[nuc_key]
+        intersections = None
+        if design:
+            well = plate.well_from_name(nuc_filename)
+            item = design.wells[well]
+            expected = {row['id'] for row in item['channels'] if row and row['method'] == 'Foci'}
+            if set(foci_channels_info) != expected:
+                raise ValueError(f'{well}: required Foci masks missing; rerun generate_foci_mask for each assigned marker')
+            intersections = [tuple(sorted(item['channels'][c-1]['id'] for c in combo))
+                             for combo in item['intersections']]
+        tasks.append((nuc_file_path, foci_channels_info, intersections))
+
+    if progress:
+        progress.phase('Measuring Foci and requested intersections', len(tasks))
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        for nuc_file_path in nuclei_files:
-            nuc_filename = os.path.basename(nuc_file_path)
-            nuc_key = extract_image_key(nuc_filename)
-
-            if nuc_key not in channels_dict:
-                logging.warning(f"No foci channels found for {nuc_key}")
-                continue
-
-            foci_channels_info = channels_dict[nuc_key]
-            # ES
-            print(len(nuc_file_path))
-            print(len(foci_channels_info))
-            print(len(metadata))
-            print(len(results_folder))
-            print(len([perform_colocalization]))
-            fut = executor.submit(
-                process_nuclei_image,
-                nuc_file_path,
-                foci_channels_info,
-                metadata,
-                results_folder,
-                perform_colocalization
-            )
-            futures.append(fut)
+        futures = {executor.submit(process_nuclei_image, path, channels, metadata, results_folder,
+                                   perform_colocalization, requested_intersections=combinations): path
+                   for path, channels, combinations in tasks}
 
         for i, fut in enumerate(as_completed(futures), start=1):
             partial_res = fut.result()  # list of dict
             all_results.extend(partial_res)
+            if progress:
+                progress.advance(futures[fut])
+            if logger:
+                logger.info('IMAGE_COMPLETE | %s | rows=%s', futures[fut], len(partial_res))
 
             elapsed = time.time() - start_time
             avg_time_per_task = elapsed / i
@@ -614,78 +677,94 @@ def parallel_processing(nuclei_files: list,
     return df
 
 
-@cancelable
 def main_summarize_res(input_json_path: str, njobs=4):
-    """
-    Main function:
-      1) Reads JSON with folder paths,
-      2) Asks user if we should start any processing,
-      3) Asks user if we should perform colocalization or skip it,
-      4) For each folder, gathers nuclei/foci,
-      loads metadata, runs parallel analysis, saves results.
-    """
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - '
-                                                   '%(levelname)s - '
-                                                   '%(message)s')
-    folder_dicts = validate_folders(input_json_path)
-    if not folder_dicts:
-        raise ValueError("No valid folders found in JSON.")
-
-    if not ask_yes_no("Start processing? (yes/no; q = cancel): "):
-        raise Cancelled()
-
-    perform_colocalization = ask_yes_no(
-        "Do you want to perform colocalization analysis? (yes/no; q = cancel): ")
-
-    for base_folder, info in folder_dicts.items():
-        fia_assay_folder = info["fia_assay_folder"]
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_folder = os.path.join(base_folder, "foci_analysis",
-                                      f"Results_{now_str}")
-        Path(results_folder).mkdir(parents=True, exist_ok=True)
-
-        fh = logging.FileHandler(os.path.join(results_folder,
-                                              "4_log.log"), mode='w')
-        fh.setLevel(logging.INFO)
-        logging.getLogger('').addHandler(fh)
-
-        metadata_path = os.path.join(fia_assay_folder,
-                                     "image_metadata.txt")
-        metadata = extract_metadata(metadata_path)
-
-        try:
-            (nuclei_files,
-             channels_dict) = gather_paths_and_channels(base_folder)
-        except Exception as e:
-            logging.error(f"Error gathering paths: {e}")
-            continue
-
-        if not nuclei_files:
-            logging.warning(f"No nuclei files in {base_folder}")
-            continue
-
-        excluded = exclusions.load_exclusions(Path(nuclei_files[0]).parent)
-        excluded.update(exclusions.load_exclusions(fia_assay_folder))
-        exclusions.write_snapshot(results_folder, excluded)
-        logging.info('PROCESSING_EXCLUSIONS | count=%s | table=%s', len(excluded), exclusions.TABLE)
-
-        df_results = parallel_processing(
-            nuclei_files=nuclei_files,
-            channels_dict=channels_dict,
-            metadata=metadata,
-            results_folder=results_folder,
-            perform_colocalization=perform_colocalization,
-            max_workers=njobs
-        )
-
-        if df_results.empty:
-            logging.warning("No data after processing. Skipping CSV save.")
-            continue
-
-        df_results = df_results.sort_values(by=["Image Key", "Nucleus"])
-        output_csv = os.path.join(results_folder,
-                                  "all_results_with_coloc_universal.csv")
-        df_results.to_csv(output_csv, index=False)
-        logging.info(f"Saved result: {output_csv}")
-
-    logging.info("All processing completed.")
+    """Quantify assigned markers and explicitly requested intersections."""
+    audit = TableJournal('4_foci_quantification.log', input_json_path)
+    failures = 0
+    try:
+        if njobs < 1:
+            raise ValueError('Worker count must be positive')
+        designs = plate.preflight(input_json_path, command='quantify_foci')
+        selected = [(root, design) for root, design in designs.items() if design.markers('Foci')]
+        if not selected:
+            print('No Foci assignments; nothing to quantify.')
+        for root, _ in selected:
+            audit.register(root)
+        with TableProgress() as progress:
+            for root, design in selected:
+                output = None
+                state = {'Schema_version': 1, 'Status': 'RUNNING', 'Started_UTC': utc_now()}
+                try:
+                    with audit.stage(root, 'Foci quantification', progress) as logger:
+                        progress.group(f'Foci | {root.name}')
+                        nuclei_files, channels = gather_paths_and_channels(str(root), design)
+                        if not nuclei_files:
+                            logger.info('NO_IMAGES | No eligible Foci images')
+                            continue
+                        base = root / ASSAY_DIR / 'foci_analysis'
+                        stamp = datetime.now()
+                        output = base / f'Results_{stamp:%Y%m%d_%H%M%S}'
+                        while output.exists():
+                            stamp += timedelta(seconds=1)
+                            output = base / f'Results_{stamp:%Y%m%d_%H%M%S}'
+                        output.mkdir(parents=True)
+                        plate.save_snapshot(output, design)
+                        nucleus_run = Path(nuclei_files[0]).parent
+                        state.update(Nuclei_run=str(nucleus_run), Markers=design.markers('Foci'),
+                                     Input_masks={str(path): plate.file_digest(path) for path in nuclei_files},
+                                     Foci_masks={path: plate.file_digest(path) for rows in channels.values() for path in rows.values()})
+                        write_json(output / 'foci_quantification_run.json', state)
+                        excluded = exclusions.load_exclusions(nucleus_run)
+                        excluded.update(exclusions.load_exclusions(root / ASSAY_DIR))
+                        exclusions.write_snapshot(output, excluded)
+                        metadata = extract_metadata(str(root / ASSAY_DIR / 'image_metadata.txt'))
+                        df = parallel_processing(nuclei_files, channels, metadata, str(output), True,
+                                                 njobs, design, progress, logger)
+                        if df.empty:
+                            raise ValueError('No Foci measurements returned for the planned images')
+                        df['Well'] = df['Image Key'].map(plate.well_from_name)
+                        for marker in design.markers('Foci'):
+                            mid = marker['id']
+                            df[mid + '_Availability'] = np.where(
+                                df['Well'].isin(marker['channels']), 'AVAILABLE', 'NOT_APPLICABLE')
+                            df[mid + '_Source_channel'] = df['Well'].map(marker['channels'])
+                        df.sort_values(['Image Key', 'Nucleus']).to_csv(output / 'all_results_with_coloc_universal.csv', index=False)
+                        pd.DataFrame([{'Marker_ID': m['id'], 'Marker_name': m['name'], 'Well': w, 'Original_channel': c}
+                                      for m in design.markers('Foci') for w, c in m['channels'].items()]).to_csv(
+                                          output / 'Marker_Assignments.csv', index=False)
+                        intersections = []
+                        for path in nuclei_files:
+                            key = extract_image_key(Path(path).name)
+                            well = plate.well_from_name(path)
+                            for combo in design.wells[well]['intersections']:
+                                mids = sorted(design.wells[well]['channels'][c-1]['id'] for c in combo)
+                                intersections.append({'Image_key': key, 'Well': well,
+                                    'Original_channels': '+'.join('C'+str(c) for c in combo), 'Marker_IDs': '+'.join(mids),
+                                    'Mask': f"intersection_{plate.digest([key, mids])[:24]}.tif"})
+                        pd.DataFrame(intersections, columns=['Image_key', 'Well', 'Original_channels', 'Marker_IDs', 'Mask']).to_csv(
+                            output / 'Requested_Intersections.csv', index=False)
+                        state.update(Status='SUCCESS', Images=len(nuclei_files), Rows=len(df))
+                        audit.result(root, output, 'SUCCESS', output)
+                        progress.message(f'SUCCESS: {output}')
+                except CANCELLATION_EXCEPTIONS:
+                    state.update(Status='CANCELLED')
+                    raise
+                except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
+                    failures += 1
+                    state.update(Status='FAILED', Error=str(error))
+                    audit.incomplete(root, str(error))
+                finally:
+                    if output is not None:
+                        state['Ended_UTC'] = utc_now()
+                        write_json(output / 'foci_quantification_run.json', state)
+        audit.status = 'INCOMPLETE' if failures else 'COMPLETE'
+        return 1 if failures else 0
+    except CANCELLATION_EXCEPTIONS:
+        audit.status = 'CANCELLED'
+        return 130
+    except Exception as error:  # noqa: BLE001 - persist batch failure and continue safely
+        audit.status = 'FAILED'
+        print(f'Foci quantification failed: {error}')
+        return 1
+    finally:
+        audit.finish()
